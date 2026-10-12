@@ -1,22 +1,13 @@
-//! 页面切换 + 切换动画示例。
-//!
-//! 运行：cargo run -p pages
-//!
-//! 核心思路：
-//!   * 切换 = 改「页面栈」信号，children 是响应式的，节点树自己跟着变；
-//!   * 动画 = 自己按帧推进一个 progress 信号，页面容器上的 opacity / transform
-//!     都是响应式 Prop，会跟着变；这两个属性会沿子树继承（相乘），
-//!     所以只需要写在页面容器上。
-//!   * 过渡期间旧页面仍然留在页面栈里，结束时再移除，于是节点被 dispose。
+//! 页面切换示例。运行：cargo run -p pages
+//! 过渡暂时在示例内实现，由主循环推进信号，使用布局位移移动整个页面。
 
 use std::rc::Rc;
 
 use macroquad::prelude::*;
-use mue_core::{prelude::*, prop::PropValue};
+use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     layout::use_layout,
-    math::{Matrix, Vector},
     node::*,
     paint::use_paint,
     style::{Style, Styleable, StyleableExt},
@@ -53,101 +44,121 @@ impl Page {
     }
 }
 
-/// macroquad 的 Color 没有实现 PropValue（孤儿规则，这里也补不了），
-/// 用一个本地 newtype 包一层，才能作为 Prop 的值。
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct Fill(Color);
+struct PageTransition {
+    stack: Signal<Rc<[Page]>>,
+    offsets: Signal<[f32; 3]>,
+    target: Page,
+    from: [f32; 3],
+    to: [f32; 3],
+    elapsed: f32,
+}
 
-impl PropValue for Fill {}
+impl PageTransition {
+    fn new(page: Page) -> Self {
+        let mut offsets = [1.0; 3];
+        offsets[page as usize] = 0.0;
+        Self {
+            stack: signal(Rc::from([page])),
+            offsets: signal(offsets),
+            target: page,
+            from: offsets,
+            to: offsets,
+            elapsed: TRANSITION,
+        }
+    }
 
-/// 会填充背景色的容器节点：布局交给 taffy，绘制走 use_paint。
-/// paint 会自动继承祖先的 transform / opacity，所以动画写在页面上就够了。
+    fn advance(&mut self, target: Page, dt: f32) {
+        batch(|| {
+            if target != self.target {
+                self.from = self.offsets.get_untracked();
+                let mut stack = self.stack.get_clone_untracked().to_vec();
+                if !stack.contains(&target) {
+                    self.from[target as usize] = if (target as usize) > (self.target as usize) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    stack.push(target);
+                }
+                let destination = self.from[target as usize];
+                for page in Page::ALL {
+                    let i = page as usize;
+                    self.to[i] = if page == target {
+                        0.0
+                    } else if self.from[i] < destination {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                }
+                self.target = target;
+                self.elapsed = 0.0;
+                self.stack.set(stack.into());
+            }
+            if self.elapsed >= TRANSITION {
+                return;
+            }
+            self.elapsed = (self.elapsed + dt.max(0.0)).min(TRANSITION);
+            let t = self.elapsed / TRANSITION;
+            let eased = t * t * (3.0 - 2.0 * t);
+            self.offsets.set(std::array::from_fn(|i| {
+                self.from[i] + (self.to[i] - self.from[i]) * eased
+            }));
+            if self.elapsed >= TRANSITION {
+                self.stack.set(Rc::from([self.target]));
+            }
+        });
+    }
+}
+
 #[mue_macros::node]
-fn panel(style: &mut Style, color: Fill) {
+fn panel(style: &mut Style, color: Color) {
     let rect = use_layout(style).rect;
     let paint = use_paint(style);
-    let shapes = paint.build(move |p| {
-        let r = rect.get();
-        p.fill_rect(r, color.get().0);
-    });
+    let shapes = paint.build(move |p| p.fill_rect(rect.get(), color.get()));
     style.on_render.append(move |_| shapes.get_clone().draw());
 }
 
-/// 切换页面：记录旧页面、重置进度。进度没走完就忽略新的点击。
-fn navigate(
-    current: Signal<Page>,
-    previous: Signal<Option<Page>>,
-    progress: Signal<f32>,
-    target: Page,
-) {
-    if current.get_untracked() == target || progress.get_untracked() < 1.0 {
-        return;
-    }
-    previous.set(Some(current.get_untracked()));
-    current.set(target);
-    progress.set(0.0);
-}
-
-/// 单个页面：整页绝对定位铺满容器，根据自己在过场中的角色计算透明度和位移。
-fn page_node(
-    page: Page,
-    current: Signal<Page>,
-    previous: Signal<Option<Page>>,
-    progress: Signal<f32>,
-) -> Node {
-    // 正在离场时淡出，正在进场时淡入，其余情况完全不透明。
-    let alpha = computed(move |_| {
-        let t = progress.get();
-        if previous.get() == Some(page) {
-            1.0 - t
-        } else if current.get() == page {
-            t
-        } else {
-            1.0
-        }
-    });
-
-    // 旧页向左滑出、新页从右边滑入（transform 只影响绘制，不影响命中区域）。
-    let offset = computed(move |_| {
-        let t = progress.get();
-        let dx = if previous.get() == Some(page) {
-            -screen_width() * t
-        } else if current.get() == page {
-            screen_width() * (1.0 - t)
-        } else {
-            0.0
-        };
-        Matrix::from_translation(Vector::new(dx, 0.0))
-    });
-
-    let buttons = Page::ALL.map(|target| {
-        let active = target == page;
-        panel(Fill(if active {
-            LIGHTGRAY
-        } else {
-            Color::from_rgba(0, 0, 0, 60)
+fn page_node(page: Page, target: Signal<Page>, offsets: ReadSignal<[f32; 3]>) -> Node {
+    let buttons = Page::ALL.map(|destination| {
+        let hovered = signal(false);
+        let pressed = signal(false);
+        panel(computed(move |_| {
+            if pressed.get() {
+                return Color::from_rgba(15, 20, 30, 255);
+            }
+            match (destination == page, hovered.get()) {
+                (true, true) => Color::from_rgba(100, 135, 180, 255),
+                (true, false) => Color::from_rgba(70, 95, 130, 255),
+                (false, true) => Color::from_rgba(55, 65, 85, 255),
+                (false, false) => Color::from_rgba(25, 30, 40, 255),
+            }
         }))
         .padding((LengthPercentage::length(12.),))
         .margin((LengthPercentageAuto::length(8.),))
-        .on_tap(move |_| navigate(current, previous, progress, target))
-        .children(text(target.title()).font_size(22.))
+        .use_hovered(hovered)
+        .use_pressed(pressed)
+        .on_tap(move |_| target.set(destination))
+        .children(text(destination.title()).font_size(22.))
         .into_node()
     });
 
-    panel(Fill(page.color()))
+    panel(mue_core::prop::Prop::Static(page.color()))
         .absolute()
-        .inset((LengthPercentageAuto::length(0.),))
+        .inset_top(LengthPercentageAuto::length(0.))
+        .inset_left(computed(move |_| {
+            LengthPercentageAuto::percent(offsets.get()[page as usize])
+        }))
         .size_full()
         .flex_column()
         .items_center()
         .justify_center()
-        .opacity(alpha)
-        .transform(offset)
         .children((
             text(page.title()).font_size(56.),
             text("tap a button to switch").font_size(18.),
             flexbox()
                 .flex_row()
+                .justify_center()
                 .margin((LengthPercentageAuto::length(24.),))
                 .children(buttons),
         ))
@@ -155,54 +166,17 @@ fn page_node(
 }
 
 #[mue_macros::component]
-// #[model] 参数写成「值类型」，宏会把它变成 Signal<T>；
-// 这里由外面创建信号后传进来，所以页面的过场状态在帧循环里也能读。
 fn pages(
-    #[model] current: Page,
-    #[model] previous: Option<Page>,
-    #[model] progress: f32,
+    #[model] target: Page,
+    #[model] stack: Rc<[Page]>,
+    #[model] offsets: [f32; 3],
 ) -> impl Component {
-    // 过渡期间把旧页面也留在「页面栈」里，于是它还能参与布局和绘制；
-    // 过渡结束后移除 -> 节点被 dispose，下次进入是全新状态。
-    // 新页面排在最后：库没有 z-index，children 顺序就是绘制层级。
-    let stack = computed(move |_| {
-        let current = current.get();
-        match previous.get() {
-            Some(prev) if prev != current => Rc::<[Page]>::from([prev, current]),
-            _ => Rc::<[Page]>::from([current]),
-        }
-    });
-
-    // map_keyed 按 key 复用节点，列表顺序变化时复用而不是重建。
-    let stack = map_keyed(
-        stack,
+    let children = map_keyed(
+        *stack,
         |page| *page,
-        move |page| page_node(*page, current, previous, progress),
+        move |page| page_node(*page, target, *offsets),
     );
-
-    flexbox().size_full().children(stack)
-}
-
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    Color::new(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a + (b.a - a.a) * t,
-    )
-}
-
-/// 背景色也跟着过场：旧页颜色淡出、新页颜色淡入。
-fn background(
-    current: Signal<Page>,
-    previous: Signal<Option<Page>>,
-    progress: Signal<f32>,
-) -> Color {
-    let t = progress.get_untracked();
-    match previous.get_untracked() {
-        Some(prev) => lerp_color(prev.color(), current.get_untracked().color(), t),
-        None => current.get_untracked().color(),
-    }
+    flexbox().size_full().children(children)
 }
 
 fn main() {
@@ -220,24 +194,13 @@ fn main() {
 }
 
 async fn the_main() {
-    let current = signal(Page::Home);
-    let previous = signal(None::<Page>);
-    let progress = signal(1.0f32);
-
-    let mut app = App::new(pages(current, previous, progress));
+    let target = signal(Page::Home);
+    let mut transition = PageTransition::new(Page::Home);
+    let mut app = App::new(pages(target, transition.stack, transition.offsets));
 
     loop {
-        clear_background(background(current, previous, progress));
-
-        // 库没有内置 transition：每帧手动推进进度，信号会带动页面上的 Prop。
-        if progress.get_untracked() < 1.0 {
-            progress.update(|p| (*p + get_frame_time() / TRANSITION).min(1.0));
-            if progress.get_untracked() >= 1.0 {
-                // 收尾：把旧页面从页面栈里移除
-                previous.set(None);
-            }
-        }
-
+        clear_background(BLACK);
+        transition.advance(target.get_untracked(), get_frame_time());
         app.frame();
         next_frame().await;
     }

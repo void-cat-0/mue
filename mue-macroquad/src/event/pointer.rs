@@ -332,6 +332,9 @@ impl PointerManager {
         self.root_node = root_node;
         for track in self.tracks.values_mut() {
             track.flush_updates();
+            if track.event.is_hover {
+                Self::update_hover_nodes(track, hit_test(root_node, track.event.position()));
+            }
         }
         repeat_all_miniquad_input(self, self.subscriber_id);
     }
@@ -398,8 +401,7 @@ impl PointerManager {
             let mut event = PointerEvent::new(id, pointer_type, pos);
             event.is_hover = true;
             let mut track = PointerTrack::new(IndexSet::new(), event);
-            track.nodes = hit_test(self.root_node, pos);
-            track.dispatch();
+            Self::update_hover_nodes(&mut track, hit_test(self.root_node, pos));
             self.tracks.insert(id, track);
         }
     }

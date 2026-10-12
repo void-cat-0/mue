@@ -173,13 +173,21 @@ impl Runtime {
             effect.callback = effect_callback;
         }
         if let Some(mut tracker) = self.tracker.replace(prev_tracker) {
+            // The callback may dispose children while the old dependencies are
+            // temporarily held by this tracker instead of EffectInner.
+            let mut signals = self.signals.borrow_mut();
             for signal_id in tracker.dependencies.drain(tracker.index..) {
-                self.signal_mut(signal_id).subscribers.remove(&effect_id);
+                if let Some(signal) = signals.get_mut(signal_id) {
+                    signal.subscribers.remove(&effect_id);
+                }
             }
+            tracker.dependencies.retain(|id| signals.contains_key(*id));
             tracker.dependencies.reserve(tracker.new_dependencies.len());
             for signal_id in tracker.new_dependencies {
-                self.signal_mut(signal_id).subscribers.insert(effect_id);
-                tracker.dependencies.push(signal_id);
+                if let Some(signal) = signals.get_mut(signal_id) {
+                    signal.subscribers.insert(effect_id);
+                    tracker.dependencies.push(signal_id);
+                }
             }
             effect.dependencies = Dependencies::Dynamic(tracker.dependencies);
         }
@@ -193,7 +201,7 @@ impl Runtime {
     }
 
     pub fn update_effect_if_necessary(&self, effect_id: EffectId) {
-        if effect_id.is_null() {
+        if effect_id.is_null() || !self.effects.borrow().contains_key(effect_id) {
             return;
         }
 

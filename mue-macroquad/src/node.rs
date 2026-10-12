@@ -124,7 +124,7 @@ impl Disposable for NodeRef {
                 rt.taffy.borrow_mut().remove(layout_id).unwrap();
             }
             if !node.children.is_null() {
-                for child in node.children.get_clone().iter() {
+                for child in node.children.get_clone_untracked().iter() {
                     child.dispose();
                 }
                 node.children.dispose();

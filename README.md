@@ -20,7 +20,8 @@
 | `mue-macroquad` | 渲染与运行时：节点、样式、布局、事件、手势、字体、shader。核心导出 `App`。 |
 | `examples/basics` | 响应式样式、图片、字体（Space Mono 400/700）示例。 |
 | `examples/events` | 点击 / 长按 / hover / 滚轮与 `set_timeout` 示例。 |
-| `examples/pages` | 页面切换与切换动画：响应式 children + opacity / transform。 |
+| `examples/pages` | 页面切换与切换动画。 |
+| `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
 
 ## 快速开始
 
@@ -30,6 +31,7 @@
 cargo run -p basics
 cargo run -p events
 cargo run -p pages
+cargo run -p tab
 ```
 
 在 `macroquad` 的窗口回调里构建并驱动一棵节点树：
