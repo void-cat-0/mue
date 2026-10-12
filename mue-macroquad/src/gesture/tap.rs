@@ -50,7 +50,9 @@ impl Gesture for TapGesture {
                     claim_token.dismiss();
                 }
                 PointerAction::Up => {
-                    if claim_token.claim() {
+                    if (event.start_position() - event.position()).length() <= self.threshold
+                        && claim_token.claim()
+                    {
                         self.on_tap.invoke(&());
                     }
                     self.active = None;

@@ -11,11 +11,11 @@ use indexmap::IndexSet;
 use macroquad::input::utils::{register_input_subscriber, repeat_all_miniquad_input};
 use miniquad::{EventHandler, MouseButton};
 
-use slotmap::Key;
+use slotmap::{Key, SlotMap};
 
 use crate::{
     event::hit_test::hit_test,
-    gesture::GestureId,
+    gesture::{Gesture, GestureId},
     math::Vector,
     node::NodeRef,
     runtime::{Runtime, get_time},
@@ -255,29 +255,35 @@ impl PointerTrack {
     }
 
     fn flush_updates(&mut self) {
-        let claimed_by = *self.state.claimed_by.borrow();
-        if !claimed_by.is_null() && self.state.gestures.borrow().len() > 1 {
-            Runtime::with(|rt| {
-                let mut gesture_map = rt.gestures.borrow_mut();
-                self.state.gestures.borrow_mut().retain(|&id| {
-                    if id == claimed_by {
-                        true
-                    } else {
-                        gesture_map[id].on_rejected(self.event.pointer_id());
-                        false
-                    }
-                });
-            })
-        }
+        Runtime::with(|rt| self.flush_gestures(&mut rt.gestures.borrow_mut()));
+    }
 
-        let mut dismissed = self.state.dismissed.borrow_mut();
-        if !dismissed.is_empty() {
+    fn flush_gestures(&mut self, gestures: &mut SlotMap<GestureId, Box<dyn Gesture>>) {
+        let claimed_by = *self.state.claimed_by.borrow();
+        let rejected: Vec<_> = if claimed_by.is_null() {
+            Vec::new()
+        } else {
             self.state
                 .gestures
-                .borrow_mut()
-                .retain(|id| !dismissed.contains(id));
-            dismissed.clear();
+                .borrow()
+                .iter()
+                .copied()
+                .filter(|id| *id != claimed_by)
+                .collect()
+        };
+        // Rejection may dismiss another contact (or this one), so release state
+        // borrows before invoking recognizers.
+        for id in rejected {
+            self.state.gestures.borrow_mut().shift_remove(&id);
+            if let Some(gesture) = gestures.get_mut(id) {
+                gesture.on_rejected(self.event.pointer_id());
+            }
         }
+        let dismissed = std::mem::take(&mut *self.state.dismissed.borrow_mut());
+        self.state
+            .gestures
+            .borrow_mut()
+            .retain(|id| !dismissed.contains(id));
     }
 
     fn dispatch(&mut self) {
@@ -291,14 +297,27 @@ impl PointerTrack {
                     rt.invoke_hook(node.id, |hooks| &mut hooks.pointer_event, &self.event);
                 }
 
-                let mut gesture_map = rt.gestures.borrow_mut();
-                for gesture_id in self.state.gestures.borrow().iter() {
-                    let gesture = &mut gesture_map[*gesture_id];
-                    self.claim_token.gesture_id = *gesture_id;
-                    gesture.on_event(&self.event, &self.claim_token);
-                }
+                self.dispatch_gestures(&mut rt.gestures.borrow_mut());
             }
         });
+    }
+
+    fn dispatch_gestures(&mut self, gestures: &mut SlotMap<GestureId, Box<dyn Gesture>>) {
+        self.flush_gestures(gestures);
+        for gesture_id in self.state.gestures.borrow().iter() {
+            let claimed_by = *self.state.claimed_by.borrow();
+            if (!claimed_by.is_null() && claimed_by != *gesture_id)
+                || self.state.dismissed.borrow().contains(gesture_id)
+            {
+                continue;
+            }
+            let Some(gesture) = gestures.get_mut(*gesture_id) else {
+                continue;
+            };
+            self.claim_token.gesture_id = *gesture_id;
+            gesture.on_event(&self.event, &self.claim_token);
+        }
+        self.flush_gestures(gestures);
     }
 
     pub fn update(&mut self, action: PointerAction, pos: Vector) {
@@ -342,6 +361,8 @@ impl PointerManager {
     fn on_track_down(track: &mut PointerTrack, root_node: NodeRef, pos: Vector) {
         assert!(track.event.is_hover);
         track.event.is_hover = false;
+        track.event.start_position = pos;
+        track.event.position = pos;
         track.set_nodes(hit_test(root_node, pos));
         track.update(PointerAction::Down, pos);
     }
@@ -406,15 +427,17 @@ impl PointerManager {
         }
     }
 
-    fn on_pointer_end(&mut self, id: PointerId) {
+    fn on_pointer_end(&mut self, id: PointerId, pos: Vector) {
         if let Some(mut track) = self.tracks.remove(&id) {
-            track.update(PointerAction::Up, track.event.position());
+            track.update(PointerAction::Up, pos);
+            track.state.reset();
         }
     }
 
     fn on_pointer_cancel(&mut self, id: PointerId) {
         if let Some(mut track) = self.tracks.remove(&id) {
             track.update(PointerAction::Cancel, track.event.position());
+            track.state.reset();
         }
     }
 
@@ -427,7 +450,11 @@ impl PointerManager {
     ) {
         if let Some(track) = self.tracks.get_mut(&id) {
             track.event.button_state.insert(button_state);
-            Self::on_track_down(track, self.root_node, pos);
+            if track.event.is_hover {
+                Self::on_track_down(track, self.root_node, pos);
+            } else {
+                Self::on_track_move(track, self.root_node, pos);
+            }
         } else {
             let mut event = PointerEvent::new(id, pointer_type, pos);
             event.button_state.insert(button_state);
@@ -480,7 +507,7 @@ impl EventHandler for PointerManager {
             miniquad::TouchPhase::Moved => {
                 self.on_pointer_move(pointer_id, PointerType::Touch, pos)
             }
-            miniquad::TouchPhase::Ended => self.on_pointer_end(pointer_id),
+            miniquad::TouchPhase::Ended => self.on_pointer_end(pointer_id, pos),
             miniquad::TouchPhase::Cancelled => self.on_pointer_cancel(pointer_id),
         }
     }

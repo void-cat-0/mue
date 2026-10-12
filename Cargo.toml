@@ -6,6 +6,8 @@ members = [
 
     "examples/basics",
     "examples/events",
+    "examples/gestures",
+    "examples/map",
     "examples/pages",
     "examples/tab",
 ]

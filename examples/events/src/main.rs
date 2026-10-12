@@ -23,13 +23,14 @@ fn main() {
 fn view() -> impl Component {
     let pressed = signal(false);
     let hovered = signal(false);
+    let wheel = signal(0.0_f32);
     let count = signal(0);
     let long_pressed = signal(false);
     let mut long_pressed_handle = None;
 
     text(computed(move |_| {
         format!(
-            "Clicked {} times\nPressed: {}{}{}",
+            "Clicked {} times\nPressed: {}{}{}\nScroll: {:.0}",
             count.get(),
             pressed.get(),
             if long_pressed.get() {
@@ -37,7 +38,8 @@ fn view() -> impl Component {
             } else {
                 ""
             },
-            if hovered.get() { "\nHovered" } else { "" }
+            if hovered.get() { "\nHovered" } else { "" },
+            wheel.get()
         )
         .into()
     }))
@@ -52,9 +54,7 @@ fn view() -> impl Component {
             old.cancel();
         }
     })
-    .on_wheel_event(|event| {
-        println!("{event:?}");
-    })
+    .on_wheel_event(move |event| wheel.update(|value| *value += event.delta.y))
 }
 
 async fn the_main() {

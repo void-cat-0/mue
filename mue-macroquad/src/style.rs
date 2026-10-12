@@ -18,6 +18,7 @@ use taffy::{
 
 use crate::{
     event::{pointer::PointerEvent, wheel::WheelEvent},
+    gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent},
     hook::{HookFn, NodeHooks},
     math::Matrix,
     node::{Children, IntoChildren},
@@ -313,6 +314,10 @@ define_style! {
 
         on_tap: HookFn<()>;
         on_long_press: HookFn<()>;
+        on_pan: HookFn<PanEvent>;
+        on_swipe: HookFn<SwipeEvent>;
+        on_pinch: HookFn<PinchEvent>;
+        on_rotate: HookFn<RotateEvent>;
     }
 }
 

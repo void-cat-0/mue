@@ -179,6 +179,29 @@ fn append_hooks(node: &mut NodeInner, style: &mut Style) {
             gesture.on_long_press = Rc::new(RefCell::new(style.take_on_long_press()));
             insert(gesture);
         }
+        if !style.on_pinch.is_empty() {
+            let mut gesture = Box::new(gesture::PinchGesture::default());
+            gesture.on_pinch = style.take_on_pinch();
+            insert(gesture);
+        }
+
+        if !style.on_rotate.is_empty() {
+            let mut gesture = Box::new(gesture::RotateGesture::default());
+            gesture.on_rotate = style.take_on_rotate();
+            insert(gesture);
+        }
+
+        if !style.on_pan.is_empty() {
+            let mut gesture = Box::new(gesture::PanGesture::default());
+            gesture.on_pan = style.take_on_pan();
+            insert(gesture);
+        }
+
+        if !style.on_swipe.is_empty() {
+            let mut gesture = Box::new(gesture::SwipeGesture::default());
+            gesture.on_swipe = style.take_on_swipe();
+            insert(gesture);
+        }
     })
 }
 
