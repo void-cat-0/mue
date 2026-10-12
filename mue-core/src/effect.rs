@@ -339,6 +339,23 @@ mod test {
         assert_eq!(doubled.get(), 10);
     }
 
+    /// 回归测试：batch 里读一条 computed 链时，处于 Check 状态的 effect
+    /// 会递归去更新依赖的处于 Dirty 状态的 computed，重入 Runtime::signal_mut，
+    /// 以前会 panic「RefCell already borrowed」。
+    #[test]
+    fn test_computed_chain_in_batch() {
+        let a = signal(1);
+        let b = computed(move |_| a.get() + 1);
+        let c = computed(move |_| b.get() + 1);
+
+        assert_eq!(c.get(), 3);
+
+        batch(|| {
+            a.set(2);
+            assert_eq!(c.get(), 4);
+        });
+    }
+
     #[test]
     fn test_effect_tracking() {
         let count = signal(0);

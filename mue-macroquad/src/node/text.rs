@@ -257,7 +257,7 @@ impl Atlas {
     }
 }
 
-/// Notes: Vairable fonts are not well suppported
+/// Notes: Vairable fonts are not well suppported, and the font should be loaded before using text()
 #[mue_macros::node]
 pub fn text(
     style: &mut Style,

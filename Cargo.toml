@@ -6,6 +6,7 @@ members = [
 
     "examples/basics",
     "examples/events",
+    "examples/pages",
 ]
 resolver = "2"
 
