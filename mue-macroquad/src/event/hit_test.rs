@@ -4,7 +4,11 @@ use indexmap::IndexSet;
 use mue_core::signal::Access;
 use slotmap::Key;
 
-use crate::{math::Vector, node::{NodeInner, NodeRef}, runtime::Runtime};
+use crate::{
+    math::Vector,
+    node::{NodeInner, NodeRef},
+    runtime::Runtime,
+};
 
 pub(crate) type HitTestFn = Rc<dyn Fn(NodeRef, Vector, &mut IndexSet<NodeRef>)>;
 

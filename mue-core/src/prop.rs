@@ -201,6 +201,26 @@ where
 #[cfg(feature = "impl-taffy")]
 impl<S> PropValue for taffy::GridTemplateComponent<S> where S: taffy::CheapCloneStr {}
 
+#[cfg(feature = "impl-cosmic-text")]
+impl PropValue for cosmic_text::FamilyOwned {}
+
+#[cfg(feature = "impl-cosmic-text")]
+impl From<&str> for Prop<cosmic_text::FamilyOwned> {
+    fn from(name: &str) -> Self {
+        Prop::Static(cosmic_text::FamilyOwned::Name(name.into()))
+    }
+}
+
+#[cfg(feature = "impl-cosmic-text")]
+impl From<String> for Prop<cosmic_text::FamilyOwned> {
+    fn from(name: String) -> Self {
+        Prop::Static(cosmic_text::FamilyOwned::Name(name.into()))
+    }
+}
+
+#[cfg(feature = "impl-cosmic-text")]
+impl PropValue for cosmic_text::Weight {}
+
 #[macro_export]
 macro_rules! default_props {
     (@extract_default ($ty:ty, $default:expr)) => {

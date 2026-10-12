@@ -37,11 +37,7 @@ fn view() -> impl Component {
             } else {
                 ""
             },
-            if hovered.get() {
-                "\nHovered"
-            } else {
-                ""
-            }
+            if hovered.get() { "\nHovered" } else { "" }
         )
         .into()
     }))

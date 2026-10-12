@@ -1,5 +1,6 @@
 mod app;
 pub mod event;
+pub mod font;
 pub mod gesture;
 pub mod hook;
 pub mod layout;

@@ -1,6 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Placement, Shaping, SwashCache};
+use cosmic_text::{
+    Attrs, Buffer, CacheKey, FamilyOwned, FontSystem, Metrics, Placement, Shaping, SwashCache,
+    Weight,
+};
 use guillotiere::{
     euclid::{Box2D, Size2D, UnknownUnit},
     point2, size2, AllocId, Allocation, AtlasAllocator,
@@ -25,6 +28,32 @@ pub struct FontState {
     font_system: FontSystem,
     swash_cache: SwashCache,
     font_atlas: Atlas,
+}
+
+impl FontState {
+    /// Register the faces contained in `data` with the shared font system.
+    ///
+    /// Returns the family name of every face that was added, de-duplicated and in file
+    /// order. The result is empty when the data contains no usable font.
+    pub(crate) fn load_font_data(&mut self, data: Vec<u8>) -> Vec<String> {
+        let existing: Vec<_> = self.font_system.db().faces().map(|face| face.id).collect();
+        // `db_mut` also clears cosmic-text's font match cache, so the new faces become
+        // visible to the next shaping pass.
+        self.font_system.db_mut().load_font_data(data);
+
+        let mut families = Vec::new();
+        for face in self.font_system.db().faces() {
+            if existing.contains(&face.id) {
+                continue;
+            }
+            if let Some((name, _)) = face.families.first() {
+                if !families.contains(name) {
+                    families.push(name.clone());
+                }
+            }
+        }
+        families
+    }
 }
 
 impl Default for FontState {
@@ -228,6 +257,8 @@ pub fn text(
     style: &mut Style,
     #[default(32.0)] font_size: f32,
     #[default(44.0)] line_height: f32,
+    #[default(FamilyOwned::SansSerif)] font_family: FamilyOwned,
+    #[default(Weight::NORMAL)] font_weight: Weight,
     text: Rc<str>,
 ) {
     let layout = use_layout(style);
@@ -299,13 +330,12 @@ pub fn text(
             let mut buffer = buffer.borrow_mut();
             Runtime::with_fonts_mut(|fonts| {
                 let rect = rect.get();
+                let family = font_family.get_clone();
+                let attrs = Attrs::new()
+                    .family(family.as_family())
+                    .weight(font_weight.get());
                 let mut buffer = buffer.borrow_with(&mut fonts.font_system);
-                buffer.set_text(
-                    &text.get_clone(),
-                    &Attrs::new(),
-                    Shaping::Advanced,
-                    align.get(),
-                );
+                buffer.set_text(&text.get_clone(), &attrs, Shaping::Advanced, align.get());
                 buffer.set_metrics_and_size(metrics.get(), Some(rect.w), Some(rect.h));
                 layout.mark_dirty();
             });

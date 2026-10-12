@@ -18,6 +18,7 @@ rust-version = "1.89.0"
 [workspace.dependencies]
 macroquad = { git = "https://github.com/Mivik/prpr-macroquad", rev = "d8036ff", default-features = false }
 miniquad = { git = "https://github.com/Mivik/prpr-miniquad", rev = "0694542" }
+cosmic-text = "0.18.2"
 slotmap = "1.1.1"
 smallvec = "1.13.2"
 taffy = "0.9.2"

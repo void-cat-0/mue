@@ -1,5 +1,10 @@
 use std::{
-    cell::{Ref, RefCell}, collections::BTreeMap, mem, rc::Rc, sync::atomic::{AtomicBool, Ordering}, thread::AccessError
+    cell::{Ref, RefCell},
+    collections::BTreeMap,
+    mem,
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+    thread::AccessError,
 };
 
 use ordered_float::NotNan;
@@ -10,7 +15,7 @@ use crate::{
     gesture::{Gesture, GestureId},
     hook::{HookFn, NodeHooks},
     layout::MeasureFn,
-    node::{NodeId, NodeInner, text::FontState},
+    node::{text::FontState, NodeId, NodeInner},
 };
 
 thread_local! {

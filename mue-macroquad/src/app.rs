@@ -42,7 +42,7 @@ impl App {
                     aborted: Rc::default(),
                 };
                 #[allow(clippy::mutable_key_type)]
-                let  due_timeouts = {
+                let due_timeouts = {
                     let mut timeouts = rt.timeouts.borrow_mut();
                     let mut due = timeouts.split_off(&key);
                     mem::swap(&mut *timeouts, &mut due);
