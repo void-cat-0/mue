@@ -1,11 +1,11 @@
 use std::{collections::HashMap, hash::Hash, mem, rc::Rc};
 
 use mue_core::{
+    Disposable, Owned,
     effect::computed,
     prelude::current_scope,
     prop::Prop,
-    signal::{signal, Access, ReadSignal},
-    Disposable, Owned,
+    signal::{Access, ReadSignal, signal},
 };
 
 use crate::node::{IntoNode, Node, NodeRef};

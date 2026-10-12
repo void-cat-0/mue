@@ -1,13 +1,13 @@
 use std::cell::RefCell;
 
-use slotmap::{new_key_type, Key, SlotMap};
+use slotmap::{Key, SlotMap, new_key_type};
 use type_map::TypeMap;
 
 use crate::{
+    Disposable,
     effect::{Effect, EffectId},
     runtime::Runtime,
     signal::{ReadSignal, SignalId},
-    Disposable,
 };
 
 new_key_type! {

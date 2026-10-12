@@ -2,7 +2,7 @@ use std::{any::Any, collections::HashSet, marker::PhantomData, ops::Deref};
 
 use slotmap::new_key_type;
 
-use crate::{effect::EffectId, runtime::Runtime, scope::CURRENT_SCOPE, Disposable};
+use crate::{Disposable, effect::EffectId, runtime::Runtime, scope::CURRENT_SCOPE};
 
 new_key_type! {
     pub(crate) struct SignalId;

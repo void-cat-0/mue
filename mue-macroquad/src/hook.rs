@@ -16,13 +16,16 @@ impl<T: 'static> HookFn<T> {
     }
 
     pub fn append(&mut self, mut callback: impl FnMut(&T) + 'static) {
-        if let Some(mut existing) = self.callback.take() {
-            self.callback = Some(Box::new(move |arg| {
-                existing(arg);
-                callback(arg);
-            }));
-        } else {
-            self.callback = Some(Box::new(callback));
+        match self.callback.take() {
+            Some(mut existing) => {
+                self.callback = Some(Box::new(move |arg| {
+                    existing(arg);
+                    callback(arg);
+                }));
+            }
+            _ => {
+                self.callback = Some(Box::new(callback));
+            }
         }
     }
 

@@ -4,16 +4,16 @@ use cosmic_text::Align;
 pub use ext::StyleableExt;
 
 use mue_core::{
+    Owned,
     effect::computed,
     prop::Prop,
     signal::{Access, ReadSignal},
-    Owned,
 };
 use paste::paste;
 use std::mem;
 use taffy::{
-    prelude::TaffyZero, BoxSizing, Dimension, Display, LengthPercentage, LengthPercentageAuto,
-    Overflow, Point, Position,
+    BoxSizing, Dimension, Display, LengthPercentage, LengthPercentageAuto, Overflow, Point,
+    Position, prelude::TaffyZero,
 };
 
 use crate::{

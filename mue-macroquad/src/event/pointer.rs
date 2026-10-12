@@ -18,7 +18,7 @@ use crate::{
     gesture::GestureId,
     math::Vector,
     node::NodeRef,
-    runtime::{get_time, Runtime},
+    runtime::{Runtime, get_time},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -12,8 +12,8 @@ resolver = "2"
 
 [workspace.package]
 license = "MIT"
-edition = "2021"
-repository = "https://github.com/Mivik/mue-core"
+edition = "2024"
+repository = "https://github.com/void-cat-0/mue-core"
 rust-version = "1.89.0"
 
 [workspace.dependencies]

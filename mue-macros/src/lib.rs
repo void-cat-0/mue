@@ -1,8 +1,8 @@
 use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
-use proc_macro_crate::{crate_name, FoundCrate};
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::quote;
-use syn::{parse_macro_input, parse_quote, FnArg, ItemFn, Meta, Pat, Type};
+use syn::{FnArg, ItemFn, Meta, Pat, Type, parse_macro_input, parse_quote};
 
 #[proc_macro_attribute]
 pub fn node(_attr: TokenStream, item: TokenStream) -> TokenStream {

@@ -1,14 +1,14 @@
 use std::{ops::Deref, slice};
 
-use slotmap::{new_key_type, Key};
+use slotmap::{Key, new_key_type};
 use smallvec::SmallVec;
 
 use crate::{
+    Disposable,
     prop::Prop,
     runtime::Runtime,
     scope::CURRENT_SCOPE,
     signal::{ReadSignal, SignalId, SignalInner, Value},
-    Disposable,
 };
 
 new_key_type! {

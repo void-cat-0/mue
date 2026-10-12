@@ -17,7 +17,7 @@ use mue_core::{
 use smallvec::SmallVec;
 
 use crate::{
-    math::{vec2, Matrix, Rect, Vector},
+    math::{Matrix, Rect, Vector, vec2},
     shader::{IntoShader, Shader, SharedTexture},
     style::Style,
 };

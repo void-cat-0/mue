@@ -4,7 +4,7 @@ use taffy::{AvailableSpace, Size};
 
 use crate::{
     layout::use_layout,
-    math::{vec2, Rect, Vector},
+    math::{Rect, Vector, vec2},
     paint::use_paint,
     shader::SharedTexture,
     style::Style,

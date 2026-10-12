@@ -4,7 +4,7 @@ use crate::{
     event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId},
     gesture::Gesture,
     hook::HookFn,
-    runtime::{set_timeout, TimeoutHandle},
+    runtime::{TimeoutHandle, set_timeout},
 };
 
 pub struct LongPressGesture {

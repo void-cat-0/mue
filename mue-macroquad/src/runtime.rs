@@ -15,7 +15,7 @@ use crate::{
     gesture::{Gesture, GestureId},
     hook::{HookFn, NodeHooks},
     layout::MeasureFn,
-    node::{text::FontState, NodeId, NodeInner},
+    node::{NodeId, NodeInner, text::FontState},
 };
 
 thread_local! {

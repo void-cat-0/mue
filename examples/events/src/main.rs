@@ -1,10 +1,10 @@
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
+    App,
     node::*,
     runtime::set_timeout,
     style::{Styleable, StyleableExt},
-    App,
 };
 
 fn main() {

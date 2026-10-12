@@ -3,7 +3,7 @@ use std::{ops::Deref, rc::Rc};
 use macroquad::prelude::*;
 use mue_core::prop::PropValue;
 
-use crate::math::{vec2, Matrix, Rect, Vector};
+use crate::math::{Matrix, Rect, Vector, vec2};
 
 fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     Color {
@@ -23,7 +23,7 @@ pub struct SharedTexture(Rc<Inner>);
 
 impl PartialEq for SharedTexture {
     fn eq(&self, other: &Self) -> bool {
-        self.0 .0.raw_miniquad_id() == other.0 .0.raw_miniquad_id()
+        self.0.0.raw_miniquad_id() == other.0.0.raw_miniquad_id()
     }
 }
 impl Eq for SharedTexture {}
@@ -32,7 +32,7 @@ impl Deref for SharedTexture {
     type Target = Texture2D;
 
     fn deref(&self) -> &Self::Target {
-        &self.0 .0
+        &self.0.0
     }
 }
 

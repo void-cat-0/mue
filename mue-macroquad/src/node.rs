@@ -4,16 +4,16 @@ mod geom;
 pub mod image;
 pub mod text;
 
-pub use children::{join_children, map_keyed, show_if, Children, IntoChildren};
-pub use container::{div, flexbox, FlexboxBuilder};
+pub use children::{Children, IntoChildren, join_children, map_keyed, show_if};
+pub use container::{FlexboxBuilder, div, flexbox};
 pub use geom::circle;
 pub use image::image;
 pub use text::text;
 
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
-use mue_core::{prop::Prop, scope::Scope, signal::Access, Disposable, Owned};
-use slotmap::{new_key_type, Key};
+use mue_core::{Disposable, Owned, prop::Prop, scope::Scope, signal::Access};
+use slotmap::{Key, new_key_type};
 
 use crate::{
     event::hit_test::HitTestFn,

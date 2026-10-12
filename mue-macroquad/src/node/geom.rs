@@ -4,8 +4,8 @@ use macroquad::color::WHITE;
 use mue_core::signal::Access;
 
 use crate::{
-    layout::{use_layout, Layout},
-    paint::{use_paint, Shapes},
+    layout::{Layout, use_layout},
+    paint::{Shapes, use_paint},
     style::Style,
 };
 

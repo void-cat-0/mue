@@ -14,12 +14,12 @@ use std::rc::Rc;
 use macroquad::prelude::*;
 use mue_core::{prelude::*, prop::PropValue};
 use mue_macroquad::{
+    App,
     layout::use_layout,
     math::{Matrix, Vector},
     node::*,
     paint::use_paint,
     style::{Style, Styleable, StyleableExt},
-    App,
 };
 use taffy::{LengthPercentage, LengthPercentageAuto};
 
@@ -122,12 +122,16 @@ fn page_node(
 
     let buttons = Page::ALL.map(|target| {
         let active = target == page;
-        panel(Fill(if active { LIGHTGRAY } else { Color::from_rgba(0, 0, 0, 60) }))
-            .padding((LengthPercentage::length(12.),))
-            .margin((LengthPercentageAuto::length(8.),))
-            .on_tap(move |_| navigate(current, previous, progress, target))
-            .children(text(target.title()).font_size(22.))
-            .into_node()
+        panel(Fill(if active {
+            LIGHTGRAY
+        } else {
+            Color::from_rgba(0, 0, 0, 60)
+        }))
+        .padding((LengthPercentage::length(12.),))
+        .margin((LengthPercentageAuto::length(8.),))
+        .on_tap(move |_| navigate(current, previous, progress, target))
+        .children(text(target.title()).font_size(22.))
+        .into_node()
     });
 
     panel(Fill(page.color()))
@@ -170,9 +174,11 @@ fn pages(
     });
 
     // map_keyed 按 key 复用节点，列表顺序变化时复用而不是重建。
-    let stack = map_keyed(stack, |page| *page, move |page| {
-        page_node(*page, current, previous, progress)
-    });
+    let stack = map_keyed(
+        stack,
+        |page| *page,
+        move |page| page_node(*page, current, previous, progress),
+    );
 
     flexbox().size_full().children(stack)
 }

@@ -3,12 +3,12 @@ use std::path::Path;
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    font::{load_font_file, FamilyOwned, Weight},
+    App,
+    font::{FamilyOwned, Weight, load_font_file},
     math::{Matrix, Vector},
     node::*,
     shader::SharedTexture,
     style::{Styleable, StyleableExt},
-    App,
 };
 use taffy::{Dimension, LengthPercentageAuto};
 

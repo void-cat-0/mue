@@ -5,8 +5,9 @@ use cosmic_text::{
     Weight,
 };
 use guillotiere::{
+    AllocId, Allocation, AtlasAllocator,
     euclid::{Box2D, Size2D, UnknownUnit},
-    point2, size2, AllocId, Allocation, AtlasAllocator,
+    point2, size2,
 };
 use lru::LruCache;
 use macroquad::{
