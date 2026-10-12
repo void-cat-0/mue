@@ -142,9 +142,14 @@ impl Atlas {
         }
         let length = length.min(max_length as i32);
         let size: Size2D<i32, UnknownUnit> = size2(length, length);
-        let length = length as u32;
+        // let length = length as u32;
         // println!("Creating a new atlas with size: {}x{}", length, length);
-        let texture = Texture2D::new_empty(length, length);
+        // let texture = Texture2D::new_empty(length, length);
+        let texture = Texture2D::from_image(&Image {
+            bytes: vec![0; length as usize * length as usize * 4],
+            width: length as u16,
+            height: length as u16,
+        });
         Self {
             allocator: AtlasAllocator::new(size),
             texture: texture.into(),
@@ -252,6 +257,7 @@ impl Atlas {
     }
 }
 
+/// Notes: Vairable fonts are not well suppported
 #[mue_macros::node]
 pub fn text(
     style: &mut Style,

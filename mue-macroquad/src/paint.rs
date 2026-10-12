@@ -152,16 +152,24 @@ impl Shapes {
     }
 }
 
-#[derive(Default)]
 struct Shape {
     buffers: VertexBuffers<Vertex, u16>,
     texture: Option<SharedTexture>,
 }
 
+impl Default for Shape {
+    fn default() -> Self {
+        Self {
+            buffers: VertexBuffers::new(),
+            texture: None,
+        }
+    }
+}
+
 impl Shape {
     fn draw(&self) {
         let gl = unsafe { get_internal_gl() }.quad_gl;
-        gl.texture(self.texture.as_deref().copied());
+        gl.texture(self.texture.as_deref());
         gl.draw_mode(DrawMode::Triangles);
         gl.geometry(&self.buffers.vertices, &self.buffers.indices);
     }

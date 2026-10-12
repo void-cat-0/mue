@@ -448,47 +448,27 @@ impl PointerManager {
 }
 
 impl EventHandler for PointerManager {
-    fn update(&mut self, _ctx: &mut miniquad::Context) {}
-    fn draw(&mut self, _ctx: &mut miniquad::Context) {}
+    fn update(&mut self) {}
+    fn draw(&mut self) {}
 
-    fn mouse_motion_event(&mut self, _ctx: &mut miniquad::Context, x: f32, y: f32) {
+    fn mouse_motion_event(&mut self, x: f32, y: f32) {
         let pos = Vector::new(x, y);
         self.on_pointer_move(PointerId::MOUSE, PointerType::Mouse, pos);
     }
 
-    fn mouse_button_down_event(
-        &mut self,
-        _ctx: &mut miniquad::Context,
-        button: MouseButton,
-        x: f32,
-        y: f32,
-    ) {
+    fn mouse_button_down_event(&mut self, button: MouseButton, x: f32, y: f32) {
         let button_state = ButtonState::from_mouse_button(button);
         let pos = Vector::new(x, y);
         self.on_pointer_button_down(PointerId::MOUSE, PointerType::Mouse, button_state, pos);
     }
 
-    fn mouse_button_up_event(
-        &mut self,
-        _ctx: &mut miniquad::Context,
-        button: MouseButton,
-        x: f32,
-        y: f32,
-    ) {
+    fn mouse_button_up_event(&mut self, button: MouseButton, x: f32, y: f32) {
         let button_state = ButtonState::from_mouse_button(button);
         let pos = Vector::new(x, y);
         self.on_pointer_button_up(PointerId::MOUSE, button_state, pos);
     }
 
-    fn touch_event(
-        &mut self,
-        _ctx: &mut miniquad::Context,
-        phase: miniquad::TouchPhase,
-        id: u64,
-        x: f32,
-        y: f32,
-        _time: f64,
-    ) {
+    fn touch_event(&mut self, phase: miniquad::TouchPhase, id: u64, x: f32, y: f32, _time: f64) {
         let pointer_id = PointerId::from_touch_id(id);
         let pos = Vector::new(x, y);
         match phase {

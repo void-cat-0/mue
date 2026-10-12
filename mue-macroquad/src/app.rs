@@ -78,7 +78,5 @@ impl App {
             self.pointer_manager.process(root_node);
             crate::event::wheel::check_wheel(root_node);
         });
-
-        crate::shader::consume_delete_queue();
     }
 }
