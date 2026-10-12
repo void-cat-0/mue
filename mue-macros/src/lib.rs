@@ -71,12 +71,13 @@ fn make_fn(input: TokenStream, node: bool) -> TokenStream {
                             return false;
                         }
                     }
-                    if let Meta::List(list) = &attr.meta {
-                        if list.path.is_ident("default") {
-                            default = Some(list.tokens.clone());
-                            return false;
-                        }
+                    if let Meta::List(list) = &attr.meta
+                        && list.path.is_ident("default")
+                    {
+                        default = Some(list.tokens.clone());
+                        return false;
                     }
+
                     true
                 });
 

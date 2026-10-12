@@ -31,12 +31,15 @@ fn do_hit_test(node: NodeRef, pos: Vector, result: &mut IndexSet<NodeRef>) {
 fn default_hit_test(node: NodeRef, pos: Vector, result: &mut IndexSet<NodeRef>) {
     let (layout_rect, children) = Runtime::with(|rt| {
         let n = rt.node(node.id);
+        let rect = n.layout.rect;
         let children = if n.children.is_null() {
             Default::default()
         } else {
-            n.children.get_clone_untracked()
+            let children = *n.children;
+            drop(n);
+            children.get_clone_untracked()
         };
-        (n.layout.rect, children)
+        (rect, children)
     });
 
     if !layout_rect.is_null() && !layout_rect.get().contains(&pos) {

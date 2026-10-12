@@ -204,7 +204,8 @@ impl Runtime {
             drop(effect);
 
             for dependency_signal_id in &*dependencies {
-                if let Some(parent_effect_id) = self.signal_mut(*dependency_signal_id).effect {
+                let effect =  self.signal_mut(*dependency_signal_id).effect;
+                if let Some(parent_effect_id) = effect {
                     self.update_effect_if_necessary(parent_effect_id);
                 }
 

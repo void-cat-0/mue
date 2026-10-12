@@ -224,7 +224,7 @@ impl<T: 'static> Signal<T> {
 
     pub fn set_with_untracked(self, f: impl FnOnce(&T) -> T) -> bool {
         Runtime::with(|rt| {
-            let updated = self.with_inner_mut(rt, |inner| {
+            self.with_inner_mut(rt, |inner| {
                 let new_value = f(inner.value.as_ref().unwrap().downcast_ref::<T>().unwrap());
                 if inner
                     .comparator
@@ -235,8 +235,7 @@ impl<T: 'static> Signal<T> {
                 } else {
                     false
                 }
-            });
-            updated
+            })
         })
     }
 

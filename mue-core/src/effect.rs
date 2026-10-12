@@ -220,10 +220,10 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
 /// ```
 pub fn on_cleanup(f: impl FnOnce() + 'static) {
     Runtime::with(|rt| {
-        if let Some(effect_id) = *rt.current_effect.borrow() {
-            if let Some(effect) = rt.effects.borrow_mut().get_mut(effect_id) {
-                effect.cleanups.push(Box::new(f));
-            }
+        if let Some(effect_id) = *rt.current_effect.borrow()
+            && let Some(effect) = rt.effects.borrow_mut().get_mut(effect_id)
+        {
+            effect.cleanups.push(Box::new(f));
         }
     });
 }

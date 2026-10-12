@@ -47,10 +47,11 @@ impl FontState {
             if existing.contains(&face.id) {
                 continue;
             }
-            if let Some((name, _)) = face.families.first() {
-                if !families.contains(name) {
-                    families.push(name.clone());
-                }
+
+            if let Some((name, _)) = face.families.first()
+                && !families.contains(name)
+            {
+                families.push(name.clone());
             }
         }
         families
