@@ -30,6 +30,10 @@
 | `examples/theme` | 练习计数、按钮变体、嵌套主题与明暗主题切换。 |
 | `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
 | `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
+| `examples/navigation` | 导航栈、自适应双栏、返回、深链接与页面状态保留。 |
+| `examples/nodes` | 布局、排版、动态列表、嵌套滚动与链接卡片。 |
+| `examples/color` | 纯色、渐变、图片与移动半调线条 shader。 |
+| `examples/playground` | 多页节点与属性练习、分页、独立动画开关。 |
 
 ## 快速开始
 
@@ -45,6 +49,10 @@ cargo run -p tab
 cargo run -p theme
 cargo run -p document
 cargo run -p animation
+cargo run -p navigation
+cargo run -p nodes
+cargo run -p color
+cargo run -p playground
 ```
 
 `Factory` 复用组件定义；主题只覆盖选中的样式字段。`theme!` 克隆分支里的 Factory 句柄，原句柄仍可用来创建实例：
@@ -120,11 +128,35 @@ let label = text("Hello")
 
 `with_animation` 让状态修改引起的可插值样式变化使用指定曲线，包括 computed 链、batch 内的事件与 Factory 主题。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`with_animation(None, ...)` 立即切换。节点的 `.animation(Animation::spring(0.8, 0.3))` 为该节点的可插值属性提供默认动画，显式事务优先。
 
-支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位尺寸/边距/内距/位置、透明度、圆角、字号、行高、变换矩阵、纯色及结构一致的渐变。`auto`、不同单位及不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。此版本不含关键帧、匹配几何或自动挂载/卸载过渡。
+支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位尺寸/边距/内距/位置、透明度、圆角、字号、行高、变换矩阵、纯色及结构一致的渐变。`auto`、不同单位及不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
 
 自定义动画数据可实现 `Animatable`。`animated(*signal)` 返回 `Animated { value, running }`，也可用 `animated_with(*signal, curve)` 指定默认曲线。`value` 可用于 computed 或 Prop，`running` 可用于完成后的响应式逻辑。资源跟随创建它的 scope 释放。`App::frame` 自动在布局前调用 `mue_macroquad::animation::advance(dt)`。动画曲线、插值和帧驱动位于 mue-macroquad，core 仅负责传播通用更新上下文。
 
-`pages` 与 `tab` 保留三个页面，用同一个状态事务移动页面；不再维护示例内的计时器。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
+`pages` 与 `tab` 使用导航节点切换页面，分别把控件放在顶部与底部；根页面保留局部状态，替换目标页面会重建该页面。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
+
+## 导航
+
+`navigation_stack` 用 `Signal<Vec<Route>>` 描述根页面之上的路径；`.split_view(280., 720.)` 在容器宽度达到 720 像素时并排显示根页面与当前目标页面，窄屏自动折叠为栈。可用 `.split_view(280., 720.)` 调整侧栏宽度和断点。空路径显示完整的根页面。
+
+```rust
+use mue_core::prelude::*;
+use mue_macroquad::node::{navigation_stack, text};
+
+let path = signal(Vec::<String>::new());
+let view = navigation_stack(
+    path,
+    || text("Library"),
+    |route: &String| text(route.clone()),
+).split_view(280., 720.);
+path.update(|routes| routes.push("Details".into())); // push
+path.update(|routes| { routes.pop(); });             // back
+path.set(vec!["Details".into(), "Notes".into()]);   // deep link
+path.set(Vec::new());                               // pop to root
+```
+
+根页面与目标页面通过闭包创建，可在其中创建局部 signal。路径不变的前缀保留页面和局部状态；移除或替换路径项会释放对应页面。相同值在不同深度有独立状态，同一深度的相同值视为同一页面。隐藏页面不参与布局、绘制或命中测试，切换单双栏不会重建页面。返回按钮、标题和其他导航控件由页面自行组合。
+
+运行 `cargo run -p navigation` 查看双栏示例，调整窗口宽度查看折叠；`cargo run -p navigation -- --stack` 使用普通导航栈。页面计数器展示 push / back 后的状态保留，Escape 返回上一层。
 
 ## 手势
 
@@ -153,7 +185,7 @@ text("Rotate").on_rotate(move |event| rotation.set(event.rotation));
 
 ## 调试示例
 
-`gestures` 和 `map` 使用深色背景、清晰的边框和高对比度状态颜色。青色表示交互，黄色表示待识别，绿色表示识别成功，红色表示取消。反馈显示在窗口内，不输出控制台日志。
+`gestures` 和 `map` 的交互读数显示在窗口内，不输出控制台日志。
 
 ### Events
 
@@ -169,14 +201,14 @@ cargo run -p gestures
 
 | 面板 | 操作与反馈 |
 | --- | --- |
-| Click | 点击后累计计数，按下时圆形填充。 |
-| Long press | 按住 0.5 秒，圆环显示黄色等待状态；触发后变绿并计数。提前释放、取消或识别前移动超过 15 像素时显示红色取消标记。成功状态保留到下一次按下。 |
-| Hover | 鼠标进入时填充圆形，并显示 Inside；离开后显示 Outside。 |
-| Scroll | 滚轮移动线条与滑块，显示累计垂直滚动量。 |
-| Pan | 拖动圆形，显示总位移。 |
-| Swipe | 绘制滑动线段，识别成功后变绿并显示方向与速度。 |
-| Pinch | 双指圆形跟随触点，显示相对缩放比例。 |
-| Rotate | 双指圆形跟随触点，显示累计角度。 |
+| Tap | 点击后累计计数。 |
+| Long press | 按住 0.5 秒后累计计数。 |
+| Hover | 显示鼠标是否位于面板内。 |
+| Wheel | 显示累计垂直滚轮量。 |
+| Pan | 显示拖动阶段与总位移。 |
+| Swipe | 显示识别到的滑动方向。 |
+| Pinch | 显示双指相对缩放比例。 |
+| Rotate | 显示双指累计旋转角度。 |
 
 Pinch 与 Rotate 需要多点触控输入；鼠标可以测试其余面板。长按使用当前默认识别阈值（0.5 秒、15 像素）。
 
@@ -223,3 +255,95 @@ MIT，见 [LICENSE](LICENSE)。
 `expanded.select(480., 180.)` 根据布尔状态选择值，可直接传给 `.width(...)`。响应式像素值不需要手动构造 Taffy 尺寸。`text(open.select("Open", "Closed"))` 和 `text(count.map(|n| format!("{n}")))` 自动转换文本类型。
 
 `state.toggle()` 切换布尔状态，`.toggle_on_tap(state)` 绑定点击切换。`.on_activate(move || ...)` 接受没有事件参数的点击回调。`document` / `markdown` 及其内容类型位于 `mue_macroquad::node`。
+
+
+## 布局与排版节点
+
+节点按 `node::layout`、`node::typography`、`node::graphics` 分组，原来的
+`node::*`、`node::text`、`node::document` 和 `node::image` 导入仍然有效。
+每个文件放一种节点，相关子类型和构建器留在同一文件。
+
+| 分组 | 节点 |
+| --- | --- |
+| 布局 | `navigation_stack`、children 工具、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
+| 排版 | `blockquote`、`code`、`code_block`、`em`、`heading`、`link`、`link_overlay`、`list` / `list_item`、`text`、`document` / `markdown` |
+| 图形 | `circle`、`shape`、`image` |
+
+`stack()` 默认纵向排列，`wrap()` 自动换行，两者默认间距为 8 像素。
+`.gap(...)` 同时设置行列间距，也可以分别设置 `.row_gap(...)` 和 `.column_gap(...)`。
+`container()` 默认最大宽度 1280 像素、水平居中、左右内边距 24 像素。
+`aspect_ratio().ratio(16. / 9.)` 在一个尺寸为自动值时约束宽高比；
+`float().placement(FloatPlacement::TopEnd)` 将子节点中心锚定在父节点右上角。
+所有默认样式都可以通过现有样式 API 覆盖。
+
+`heading` 使用 `HeadingLevel`；`list().marker(ListMarker::Ordered(1))` 给任意子节点添加编号。
+`code_block` 默认保留长行，可以放入横向滚动区域，或用 `.text_wrap(true)` 开启换行。
+`link` 和 `link_overlay` 通过 `.on_activate(...)` 绑定应用自己的导航操作，
+不会自动打开浏览器；卡片内的子链接优先响应点击。
+这些是画布节点，不提供浏览器 DOM 的键盘焦点和无障碍语义。
+
+`Document::blocks(...)` 组合段落；`Document::heading`、`Document::em`、
+`Document::code`、`Document::blockquote` 和 `Document::list` 复用相同的排版约定。
+文档仍由现有 cosmic-text 富文本实现渲染，支持同一段落内的多种样式。
+Markdown 保持只读：链接显示标签，代码不做语法高亮，引用不绘制独立节点的边线。
+
+```rust
+use mue_core::prelude::*;
+use mue_macroquad::{math::Vector, node::*, style::{Style, Styleable, StyleableExt}};
+
+let offset = signal(Vector::ZERO);
+let view = scroll_area()
+    .height(420.)
+    .offset(offset)
+    .options(ScrollOptions {
+        mouse_drag: true,
+        ..Default::default()
+    })
+    .content_style(Style::new().gap(16.).padding((20.,)))
+    .children((
+        heading("Notes").level(HeadingLevel::H2),
+        text("Content keeps its existing styles."),
+        code_block("let view = stack().gap(16.);"),
+    ));
+```
+
+滚动区域需要有限高度；横向滚动还需要有限宽度。默认纵向滚动、启用触摸和滚轮、
+显示可拖动滚动条，不启用鼠标拖动内容。`.axis(ScrollAxis::Horizontal)` 和
+`ScrollAxis::Both` 切换方向。`ScrollOptions` 提供触摸/鼠标/滚轮开关、拖动阈值、
+方向锁定、惯性、摩擦系数、速度上限、滚轮倍率、滚动条与边界传递选项。
+超过拖动阈值才争夺手势，取消和第二触点会停止滚动。已获得手势的拖动保持所有权直到释放；
+嵌套触摸区域在开始拖动时若已到边界，可以交给祖先。滚轮会把未消费的距离传给祖先。
+边界使用硬停止，不做弹性回弹。滚轮沿用系统惯性，不额外模拟；Macroquad 未区分滚轮和触控板单位，
+可通过 `wheel_speed` 调整。裁剪采用轴对齐矩形，不随绘制 transform 旋转。
+外部写入 `.offset(...)` 的信号可跳转位置，内容变化后会重新限制范围并停止旧惯性。
+
+运行 `cargo run -p nodes` 查看布局、排版、动态列表、嵌套滚动和链接卡片示例。
+组件职责参考 [Chakra UI](https://github.com/chakra-ui/chakra-ui)，
+滚动输入选项参考 [egui ScrollArea](https://github.com/emilk/egui/blob/main/crates/egui/src/containers/scroll_area.rs)；
+实现复用 Mue 现有 Taffy 布局、cosmic-text 和手势系统。
+
+
+## 示例与交互练习
+
+`cargo run -p playground` 打开按页分组的交互练习：布局、排版、图形、动画、滚动、输入与主题。
+属性可单独切换，数值属性使用弹簧动画；底部可以前进、后退、切换过渡方向与分栏。
+滚动页提供分页和 `ScrollOptions` 的各项输入/物理参数。配置选项切换会重建相应视口，
+共享 offset 保留并重新限制滚动位置。其他示例只保留各自主题需要的代码。
+
+排版增加 `.text_wrap_mode(TextWrap::Word / Glyph / WordOrGlyph)`、
+`.text_overflow(TextOverflow::Visible / Clip / EllipsisStart / EllipsisMiddle / EllipsisEnd)`、
+`.text_max_lines(Some(n))`、`.text_vertical_align(TextVerticalAlign::Top / Center / Bottom)`、
+`.letter_spacing(px)`、`.paragraph_spacing(px)`、`.tab_width(n)` 与 `.text_strikethrough(bool)`。
+`.text_wrap(false)` 仍可关闭换行。段落间距按换行分隔的段落计算；行限制裁剪超出的内容，
+默认 Visible 保持原有溢出显示；Clip 在内容边界裁剪。省略号通过 cosmic-text 排版，未设置行限制时默认使用一行。
+这些样式也适用于 document、markdown、heading、code 等共享文本渲染的节点。
+行列间距、段落间距、字距与宽高比现已加入样式动画绑定。不同枚举值仍然立即切换。
+
+导航默认使用弹簧横向滑动；`.transition(NavigationTransition::SlideVertical)` 纵向切换，
+`NavigationTransition::None` 立即切换。`.transition_animation(Animation::spring(0.5, 0.2))`
+设置动画曲线。退出页面在过渡结束后释放，已保留页面的局部状态不变；过渡中的旧页面不接收输入。
+导航内部驱动过渡，示例不再逐帧维护独立的 offset。
+
+`cargo run -p color` 包含渐变、图片和移动半调线条 GPU 材质。
+图片来自 Picsum / Unsplash，作者与来源见 `examples/color/assets/README.md`，资源已保存在本地，运行无需联网。
+材质示例位于 `examples/shared/halftone.rs`；`Shapes::build` 可创建供 `shape` 节点复用的局部坐标几何。

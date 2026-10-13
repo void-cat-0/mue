@@ -1,0 +1,12 @@
+[package]
+name = "playground"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+macroquad.workspace = true
+mue-core.workspace = true
+mue-macroquad.workspace = true
+taffy.workspace = true
+cosmic-text.workspace = true

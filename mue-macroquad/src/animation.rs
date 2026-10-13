@@ -44,7 +44,7 @@ impl Animation {
         Self::Spring { duration, bounce }
     }
 
-    fn duration(self) -> f32 {
+    pub(crate) fn duration(self) -> f32 {
         match self {
             Self::Linear { duration }
             | Self::EaseInOut { duration }
@@ -52,7 +52,7 @@ impl Animation {
         }
     }
 
-    fn sample(self, progress: f32) -> f32 {
+    pub(crate) fn sample(self, progress: f32) -> f32 {
         let t = progress.clamp(0., 1.);
         if t >= 1. {
             return 1.;
@@ -99,6 +99,15 @@ impl Animatable for f64 {
 impl<T: Animatable, const N: usize> Animatable for [T; N] {
     fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
         std::array::from_fn(|i| T::interpolate(&from[i], &to[i], progress))
+    }
+}
+
+impl<T: Animatable> Animatable for Option<T> {
+    fn interpolate(a: &Self, b: &Self, t: f32) -> Self {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(T::interpolate(a, b, t)),
+            _ => b.clone(),
+        }
     }
 }
 
@@ -306,6 +315,11 @@ pub(crate) fn bind_style(style: &mut Style) {
         radius,
         font_size,
         line_height,
+        letter_spacing,
+        paragraph_spacing,
+        column_gap,
+        row_gap,
+        aspect_ratio,
         background,
         color,
         margin_left,

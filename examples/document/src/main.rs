@@ -56,51 +56,47 @@ async fn run() {
     let alternate = signal(false);
     let source = alternate.select(NEXT_ENTRY, ENTRY);
     let mut app = App::new(
-        flexbox()
+        stack()
             .size_full()
             .background(PAPER)
             .padding((32.,))
-            .flex_column()
             .children((
-                flexbox()
-                    .flex_row()
-                    .items_center()
-                    .margin_bottom(24.)
-                    .children((
-                        text("Field journal").font_size(20.).color(BLUE).flex_1(),
-                        flexbox()
-                            .padding((12., 8.))
-                            .background(BLUE)
-                            .toggle_on_tap(large)
-                            .children(
-                                text(large.select("Smaller type", "Larger type")).font_size(16.),
-                            ),
-                        flexbox()
-                            .margin_left(12.)
-                            .padding((12., 8.))
-                            .background(BLUE)
-                            .toggle_on_tap(alternate)
-                            .children(
-                                text(alternate.select("Previous entry", "Next entry"))
-                                    .font_size(16.),
-                            ),
+                hstack().margin_bottom(24.).children((
+                    heading("Field journal").font_size(20.).color(BLUE).flex_1(),
+                    flexbox()
+                        .padding((12., 8.))
+                        .background(BLUE)
+                        .toggle_on_tap(large)
+                        .children(text(large.select("Smaller type", "Larger type")).font_size(16.)),
+                    flexbox()
+                        .margin_left(12.)
+                        .padding((12., 8.))
+                        .background(BLUE)
+                        .toggle_on_tap(alternate)
+                        .children(
+                            text(alternate.select("Previous entry", "Next entry")).font_size(16.),
+                        ),
+                )),
+                scroll_area().flex_1().w_full().children(
+                    stack().children((
+                        markdown(source)
+                            .w_full()
+                            .max_width(760.)
+                            .font_size(large.select(22., 18.))
+                            .line_height(large.select(31., 26.))
+                            .color(INK)
+                            .flex_none(),
+                        document(Document::rich([
+                            Span::new("Mara Ellis").bold(),
+                            Span::new("\nOctober 13, 2026").italic(),
+                        ]))
+                        .margin_top(24.)
+                        .font_size(16.)
+                        .line_height(23.)
+                        .color(BLUE)
+                        .flex_none(),
                     )),
-                markdown(source)
-                    .w_full()
-                    .max_width(760.)
-                    .font_size(large.select(22., 18.))
-                    .line_height(large.select(31., 26.))
-                    .color(INK)
-                    .flex_none(),
-                document(Document::rich([
-                    Span::new("Mara Ellis").bold(),
-                    Span::new("\nOctober 13, 2026").italic(),
-                ]))
-                .margin_top(24.)
-                .font_size(16.)
-                .line_height(23.)
-                .color(BLUE)
-                .flex_none(),
+                ),
             )),
     );
     loop {

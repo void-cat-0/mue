@@ -35,14 +35,13 @@ async fn run() {
     let spring = signal(true);
     let hovered = signal(false);
     let mut app = App::new(
-        flexbox()
+        stack()
             .size_full()
-            .flex_column()
             .padding((40.,))
             .background(CANVAS)
             .children((
-                flexbox().flex_row().items_center().children((
-                    text("Motion study").font_size(32.).flex_1(),
+                hstack().children((
+                    heading("Motion study").font_size(32.).flex_1(),
                     flexbox()
                         .background(SURFACE)
                         .padding((16., 10.))
@@ -59,9 +58,7 @@ async fn run() {
                         .justify_center()
                         .children(text(expanded.select("Open", "Closed")).font_size(28.)),
                 ),
-                flexbox()
-                    .items_center()
-                    .justify_center()
+                center()
                     .height(56.)
                     .background(hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE)))
                     .animation(Animation::ease_in_out(0.18))

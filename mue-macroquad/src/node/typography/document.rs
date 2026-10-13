@@ -1,9 +1,10 @@
 //! Read-only rich text and a CommonMark adapter for cosmic-text.
+// Preserve the original public document module's Markdown entry points.
+pub use super::markdown::{MarkdownBuilder, markdown};
 use crate::style::Style;
 use cosmic_text::{Attrs, FamilyOwned, Metrics, Style as FontStyle, Weight};
 use mue_core::prop::{Prop, PropValue};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
-use std::rc::Rc;
 
 /// Optional span attributes inherit the document node's defaults.
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +81,12 @@ impl Span {
         self.style.color = Some(color);
         self
     }
+    /// Apply the same heading proportions as the standalone heading node.
+    pub fn heading(mut self, level: super::heading::HeadingLevel) -> Self {
+        self.style.weight = Some(Weight::BOLD);
+        self.style.scale = level.scale();
+        self
+    }
 }
 
 /// Newlines delimit paragraphs. Blank lines add paragraph spacing.
@@ -127,6 +134,57 @@ impl IntoDocumentProp for mue_core::signal::Signal<Document> {
 }
 
 impl Document {
+    /// Join document blocks with a blank line, retaining each run's style.
+    pub fn blocks(blocks: impl IntoIterator<Item = Document>) -> Self {
+        let mut spans = Vec::new();
+        for block in blocks {
+            if block.spans.is_empty() {
+                continue;
+            }
+            if !spans.is_empty() {
+                spans.push(Span::new("\n\n"));
+            }
+            spans.extend(block.spans);
+        }
+        Self { spans }
+    }
+
+    pub fn heading(text: impl Into<String>, level: super::heading::HeadingLevel) -> Self {
+        Self::rich([Span::new(text).heading(level)])
+    }
+
+    pub fn code(text: impl Into<String>) -> Self {
+        Self::rich([Span::new(text).monospace()])
+    }
+
+    pub fn em(text: impl Into<String>) -> Self {
+        Self::rich([Span::new(text).italic()])
+    }
+
+    /// A rich-text quotation. Use the standalone node for a painted rule.
+    pub fn blockquote(text: impl Into<String>) -> Self {
+        Self::em(text)
+    }
+
+    /// A text list using the same marker labels as the standalone list node.
+    pub fn list(
+        items: impl IntoIterator<Item = Document>,
+        marker: super::list::ListMarker,
+    ) -> Self {
+        let mut spans = Vec::new();
+        for (index, item) in items.into_iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::new("\n"));
+            }
+            let label = marker.label(index);
+            if !label.is_empty() {
+                spans.push(Span::new(format!("{label} ")));
+            }
+            spans.extend(item.spans);
+        }
+        Self { spans }
+    }
+
     /// Create unstyled text using the document node's font defaults.
     pub fn plain(text: impl Into<String>) -> Self {
         Self::rich([Span::new(text)])
@@ -157,11 +215,16 @@ impl Document {
                         Tag::Emphasis => style.italic = true,
                         Tag::Heading { level, .. } => {
                             style.weight = Some(Weight::BOLD);
+                            use super::heading::HeadingLevel;
                             style.scale = match level as u8 {
-                                1 => 1.8,
-                                2 => 1.45,
-                                _ => 1.2,
-                            };
+                                1 => HeadingLevel::H1,
+                                2 => HeadingLevel::H2,
+                                3 => HeadingLevel::H3,
+                                4 => HeadingLevel::H4,
+                                5 => HeadingLevel::H5,
+                                _ => HeadingLevel::H6,
+                            }
+                            .scale();
                         }
                         Tag::CodeBlock(_) => style.family = Some(FamilyOwned::Monospace),
                         Tag::BlockQuote(_) => style.italic = true,
@@ -169,11 +232,14 @@ impl Document {
                         Tag::Item => {
                             text = Some(match lists.last_mut() {
                                 Some(Some(n)) => {
-                                    let label = format!("{n}. ");
-                                    *n += 1;
+                                    let label = format!(
+                                        "{} ",
+                                        super::list::ListMarker::Ordered(*n).label(0)
+                                    );
+                                    *n = n.saturating_add(1);
                                     label
                                 }
-                                _ => "• ".into(),
+                                _ => format!("{} ", super::list::ListMarker::Bullet.label(0)),
                             });
                         }
                         _ => {}
@@ -240,12 +306,6 @@ pub fn document(content: impl IntoDocumentProp) -> DocumentViewBuilder {
 #[mue_macros::node]
 fn document_view(style: &mut Style, content: Document) {
     super::text::render_text(style, content);
-}
-
-/// Display CommonMark as read-only rich text with reactive content and styles.
-#[mue_macros::node]
-pub fn markdown(style: &mut Style, source: Rc<str>) {
-    super::text::render_text(style, source.map(|source| Document::markdown(&source)));
 }
 
 #[cfg(test)]

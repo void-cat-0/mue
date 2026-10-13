@@ -1,104 +1,87 @@
-//! The same Brush types work for background fills and foreground color.
-//! Run with `cargo run -p color`.
-
-use macroquad::prelude::{Conf, clear_background, next_frame};
+//! Shared brushes, image fitting, and an animated GPU material.
+#[path = "../../shared/halftone.rs"]
+mod halftone;
+use macroquad::prelude::{Conf, Texture2D, clear_background, next_frame};
+use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color as UiColor,
+    animation::{Animation, animated_with},
+    color::Color,
     math::vec2,
-    node::{IntoNode, Node, flexbox, text},
-    shader::{Brush, ColorStop, LinearGradient, RadialGradient},
-    style::{Styleable, StyleableExt},
+    node::*,
+    shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
+    style::{Style, Styleable, StyleableExt},
 };
 
-const BLUE: UiColor = UiColor::from_rgba(37, 58, 94, 255);
-const CANVAS: UiColor = UiColor::BLACK;
-const GREEN: UiColor = UiColor::from_rgba(46, 82, 63, 255);
-const HIGHLIGHT: UiColor = UiColor::from_rgba(100, 135, 180, 255);
-const INK: UiColor = UiColor::WHITE;
-const PLUM: UiColor = UiColor::from_rgba(88, 52, 84, 255);
-const SURFACE: UiColor = UiColor::from_rgba(25, 30, 40, 255);
-
-fn swatch(title: &'static str, fill: impl Into<Brush>) -> Node {
-    flexbox()
-        .flex_column()
-        .flex_1()
-        .margin((8.,))
+fn swatch(label: &str, brush: impl Into<Brush>) -> Node {
+    stack()
+        .width(220.)
+        .gap(8.)
         .children((
-            flexbox()
-                .height(140.)
-                .background(fill.into())
-                .margin_bottom(12.),
-            text(title).font_size(18.).line_height(26.).color(INK),
+            center().height(100.).background(brush.into()).radius(12.),
+            text(label).font_size(16.).line_height(24.),
         ))
         .into_node()
 }
-
 fn main() {
     macroquad::Window::from_config(
         Conf {
             window_title: "mue - color".into(),
-            window_width: 880,
-            window_height: 660,
+            window_width: 920,
+            window_height: 760,
             ..Default::default()
         },
         run(),
     );
 }
-
 async fn run() {
+    let blue = Color::from_rgba(64, 99, 181, 255);
+    let coral = Color::from_rgba(249, 168, 107, 255);
     let linear = LinearGradient::new(
         vec2(0., 0.),
-        vec2(1., 0.),
-        vec![
-            ColorStop::new(0., BLUE),
-            ColorStop::new(0.5, HIGHLIGHT),
-            ColorStop::new(1., PLUM),
-        ],
-    );
-    let diagonal = LinearGradient::new(
-        vec2(0., 0.),
         vec2(1., 1.),
-        vec![ColorStop::new(0., GREEN), ColorStop::new(1., HIGHLIGHT)],
+        vec![ColorStop::new(0., blue), ColorStop::new(1., coral)],
     );
     let radial = RadialGradient::new(
         vec2(0.5, 0.5),
-        0.65,
-        vec![
-            ColorStop::new(0., HIGHLIGHT),
-            ColorStop::new(0.5, BLUE),
-            ColorStop::new(1., SURFACE),
-        ],
+        0.7,
+        vec![ColorStop::new(0., coral), ColorStop::new(1., blue)],
     );
+    // Downloaded once; the example works offline. Source credit is beside the asset.
+    let photo: SharedTexture =
+        Texture2D::from_file_with_format(include_bytes!("../assets/photo.png"), None).into();
+    let moving = signal(true);
+    let dense = signal(false);
+    let density = animated_with(dense.select(0.3, 0.1), Animation::spring(0.6, 0.1)).value;
     let mut app = App::new(
-        flexbox()
-            .size_full()
-            .flex_column()
-            .padding((24.,))
-            .children((
-                text("Fills and gradients")
-                    .font_size(34.)
-                    .line_height(44.)
-                    .margin((8.,)),
-                flexbox().flex_row().children((
-                    swatch("Blue", BLUE),
-                    swatch("Green", GREEN),
-                    swatch("Plum", PLUM),
+        scroll_area().size_full().children(
+            container()
+                .max_width(850.)
+                .padding((24.,))
+                .gap(20.)
+                .children((
+                    heading("Color"),
+                    wrap().gap(20.).children((
+                        swatch("Solid", blue),
+                        swatch("Linear", linear.clone()),
+                        swatch("Radial", radial),
+                    )),
+                    heading("Shared foreground").font_size(32.).color(linear),
+                    image(photo).height(230.).w_full().object_cover(),
+                    hstack().children((
+                        link("Pause / play").font_size(18.).toggle_on_tap(moving),
+                        link("Density").font_size(18.).toggle_on_tap(dense),
+                    )),
+                    halftone::halftone(
+                        Style::new().height(180.).w_full().flex_none(),
+                        density,
+                        *moving,
+                    ),
                 )),
-                flexbox().flex_row().children((
-                    swatch("Linear · three stops", linear.clone()),
-                    swatch("Diagonal", diagonal),
-                    swatch("Radial", radial),
-                )),
-                text("Color is a fill, too.")
-                    .font_size(40.)
-                    .line_height(52.)
-                    .color(linear)
-                    .margin((8.,)),
-            )),
+        ),
     );
     loop {
-        clear_background(CANVAS.into());
+        clear_background(macroquad::color::BLACK);
         app.frame();
         next_frame().await;
     }

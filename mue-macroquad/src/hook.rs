@@ -45,6 +45,7 @@ impl<T: 'static> HookFn<T> {
 #[derive(Default)]
 pub(crate) struct NodeHooks {
     pub render: HookFn<()>,
+    pub after_children: HookFn<()>,
     pub pointer_event: HookFn<PointerEvent>,
     pub hover_event: HookFn<PointerEvent>,
     pub wheel_event: HookFn<WheelEvent>,

@@ -1,20 +1,19 @@
-mod children;
-mod container;
-pub mod document;
-mod geom;
-pub mod image;
-pub mod text;
+pub mod graphics;
+pub mod layout;
+pub mod typography;
 
-pub use children::{Children, IntoChildren, join_children, map_keyed, show_if};
-pub use container::{FlexboxBuilder, div, flexbox};
-pub use document::{Document, Span, SpanStyle, document, markdown};
-pub use geom::circle;
-pub use image::image;
-pub use text::text;
+pub use graphics::*;
+pub use layout::*;
+pub use typography::*;
 
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
-use mue_core::{Disposable, Owned, prop::Prop, scope::Scope, signal::Access};
+use mue_core::{
+    Disposable, Owned,
+    prop::Prop,
+    scope::Scope,
+    signal::{Access, ReadSignal},
+};
 use slotmap::{Key, new_key_type};
 
 use crate::{
@@ -22,7 +21,7 @@ use crate::{
     gesture::GestureId,
     hook::NodeHooks,
     layout::OwnedLayout,
-    math::{Rect, Vector},
+    math::{Matrix, Rect, Vector},
     runtime::Runtime,
     style::{Style, Styleable, StyleableExt},
 };
@@ -45,6 +44,10 @@ pub(crate) struct NodeInner {
     pub(crate) layout: OwnedLayout,
     pub(crate) hit_test: Option<HitTestFn>,
     pub(crate) gestures: Vec<GestureId>,
+    pub(crate) clip: Option<ReadSignal<Rect>>,
+    pub(crate) child_offset: Option<ReadSignal<Vector>>,
+    pub(crate) center_on_layout_origin: bool,
+    pub(crate) transform: Prop<Matrix>,
 
     pub(crate) children: Owned<Children>,
 }
@@ -60,6 +63,10 @@ impl NodeInner {
             layout: OwnedLayout::default(),
             hit_test: None,
             gestures: Vec::new(),
+            clip: None,
+            child_offset: None,
+            center_on_layout_origin: false,
+            transform: Prop::Static(Matrix::IDENTITY),
 
             children,
         }
@@ -98,22 +105,40 @@ impl NodeRef {
                 let size = layout.size;
                 origin.x += loc.x;
                 origin.y += loc.y;
+                if node.center_on_layout_origin {
+                    origin -= Vector::new(size.width, size.height) / 2.;
+                }
                 node.layout
                     .rect
                     .set(Rect::new(origin.x, origin.y, size.width, size.height));
             }
 
+            let transform = node.transform.get();
             drop(node);
-            rt.invoke_hook(self.id, |hooks| &mut hooks.render, &());
+            crate::paint::with_transform(transform, || {
+                rt.invoke_hook(self.id, |hooks| &mut hooks.render, &());
 
-            let node = rt.node(self.id);
-            if !node.children.is_null() {
+                let node = rt.node(self.id);
+                let clip = node.clip.map(|rect| rect.get());
+                if let Some(offset) = node.child_offset {
+                    origin -= offset.get();
+                }
                 let children = *node.children;
                 drop(node);
-                for child in children.get_clone().iter() {
-                    child.render(origin);
+                let draw = || {
+                    if !children.is_null() {
+                        for child in children.get_clone().iter() {
+                            child.render(origin);
+                        }
+                    }
+                    rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &());
+                };
+                if let Some(clip) = clip {
+                    crate::paint::with_clip(clip, draw);
+                } else {
+                    draw();
                 }
-            }
+            });
         });
     }
 }
@@ -161,10 +186,14 @@ impl Node {
         CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
         scope.run(|| {
             crate::animation::bind_style(&mut style);
+            // Apply once around the whole subtree, including custom draw hooks.
+            NodeInner::with_mut(|node| node.transform = style.take_transform());
             f(&mut style);
         });
         let mut node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
+        let after_children = std::mem::take(&mut node.hooks.after_children);
         node.hooks = style.build_hooks();
+        node.hooks.after_children = after_children;
         append_hooks(node.as_mut(), &mut style);
         Self(
             NodeRef {

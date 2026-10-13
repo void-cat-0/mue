@@ -62,25 +62,21 @@ fn view() -> impl Component {
 
 async fn run() {
     let mut app = App::new(
-        flexbox()
-            .size_full()
-            .flex_column()
-            .padding((28.,))
-            .children((
-                text("Pointer events")
-                    .font_size(32.)
-                    .line_height(42.)
-                    .margin_bottom(12.),
-                text("Click, hold, hover, or scroll over the panel below.")
-                    .font_size(18.)
-                    .line_height(28.)
-                    .margin_bottom(24.),
-                view()
-                    .padding((24.,))
-                    .width(440.)
-                    .height(240.)
-                    .background(BLUE),
-            )),
+        stack().size_full().padding((28.,)).children((
+            heading("Pointer events")
+                .font_size(32.)
+                .line_height(42.)
+                .margin_bottom(12.),
+            text("Click, hold, hover, or scroll over the panel below.")
+                .font_size(18.)
+                .line_height(28.)
+                .margin_bottom(24.),
+            view()
+                .padding((24.,))
+                .width(440.)
+                .height(240.)
+                .background(BLUE),
+        )),
     );
 
     loop {

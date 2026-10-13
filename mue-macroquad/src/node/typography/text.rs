@@ -23,6 +23,37 @@ use crate::{
     shader::SharedTexture, style::Style,
 };
 
+/// Preferred break opportunities. `text_wrap(false)` disables all wrapping.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextWrap {
+    Word,
+    Glyph,
+    #[default]
+    WordOrGlyph,
+}
+impl mue_core::prop::PropValue for TextWrap {}
+
+/// Overflow at the content bounds; `text_max_lines` limits visible lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextOverflow {
+    #[default]
+    Visible,
+    Clip,
+    EllipsisStart,
+    EllipsisMiddle,
+    EllipsisEnd,
+}
+impl mue_core::prop::PropValue for TextOverflow {}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextVerticalAlign {
+    #[default]
+    Top,
+    Center,
+    Bottom,
+}
+impl mue_core::prop::PropValue for TextVerticalAlign {}
+
 pub struct FontState {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -262,19 +293,13 @@ fn shape_buffer(buffer: &mut Buffer, fonts: &mut FontSystem, metrics: Metrics, w
     buffer.shape_until_scroll(fonts, false);
 }
 
-fn measured_size(buffer: &Buffer) -> Size<f32> {
-    Size {
-        // An intrinsic width must not wrap its last glyph on the draw pass.
-        width: buffer
-            .layout_runs()
-            .map(|run| run.line_w)
-            .fold(0., f32::max)
-            .ceil(),
-        height: buffer
-            .layout_runs()
-            .last()
-            .map_or(0., |run| run.line_top + run.line_height),
+fn measured_size(buffer: &Buffer, paragraph_spacing: f32, max_lines: Option<usize>) -> Size<f32> {
+    let mut size = Size::ZERO;
+    for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
+        size.width = size.width.max(run.line_w.ceil());
+        size.height = run.line_top + run.line_height + run.line_i as f32 * paragraph_spacing;
     }
+    size
 }
 
 pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
@@ -288,9 +313,21 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
     let line_height = style.take_line_height();
     let font_family = style.take_font_family();
     let font_weight = style.take_font_weight();
+    let font_italic = style.take_font_italic();
+    let text_wrap = style.take_text_wrap();
+    let wrap_mode = style.take_text_wrap_mode();
+    let overflow = style.take_text_overflow();
+    let max_lines = style.take_text_max_lines();
+    let spacing = style.take_paragraph_spacing();
+    let letter_spacing = style.take_letter_spacing();
+    let tab_width = style.take_tab_width();
+    let vertical_align = style.take_text_vertical_align();
+    let strike = style.take_text_strikethrough();
+    let text_underline = style.take_text_underline();
     let color = style.take_color();
 
-    let metrics = computed(move |_| Metrics::new(font_size.get(), line_height.get()));
+    let metrics =
+        computed(move |_| Metrics::new(font_size.get().max(1.), line_height.get().max(1.)));
 
     let buffer = Rc::new(RefCell::new(Runtime::with_fonts_mut(|fonts| {
         Buffer::new(&mut fonts.font_system, metrics.get())
@@ -324,7 +361,7 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                     width_constraint,
                 );
             });
-            let measured = measured_size(&buffer);
+            let measured = measured_size(&buffer, spacing.get().max(0.), max_lines.get());
 
             Size {
                 width: known_dimensions.width.unwrap_or(measured.width),
@@ -342,11 +379,34 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                 let family = font_family.get_clone();
                 let attrs = Attrs::new()
                     .family(family.as_family())
-                    .weight(font_weight.get());
+                    .weight(font_weight.get())
+                    .letter_spacing(letter_spacing.get())
+                    .style(if font_italic.get() {
+                        cosmic_text::Style::Italic
+                    } else {
+                        cosmic_text::Style::Normal
+                    });
                 let mut buffer = buffer.borrow_with(&mut fonts.font_system);
                 let content = content.get_clone();
                 let metrics = metrics.get();
-                buffer.set_wrap(Wrap::WordOrGlyph);
+                buffer.set_wrap(if text_wrap.get() {
+                    match wrap_mode.get() {
+                        TextWrap::Word => Wrap::Word,
+                        TextWrap::Glyph => Wrap::Glyph,
+                        TextWrap::WordOrGlyph => Wrap::WordOrGlyph,
+                    }
+                } else {
+                    Wrap::None
+                });
+                use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
+                let limit = EllipsizeHeightLimit::Lines(max_lines.get().unwrap_or(1).max(1));
+                buffer.set_ellipsize(match overflow.get() {
+                    TextOverflow::Visible | TextOverflow::Clip => Ellipsize::None,
+                    TextOverflow::EllipsisStart => Ellipsize::Start(limit),
+                    TextOverflow::EllipsisMiddle => Ellipsize::Middle(limit),
+                    TextOverflow::EllipsisEnd => Ellipsize::End(limit),
+                });
+                buffer.set_tab_width(tab_width.get().max(1));
                 buffer.set_rich_text(
                     content
                         .spans
@@ -357,6 +417,7 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                     align.get(),
                 );
                 buffer.set_metrics_and_size(metrics, None, None);
+                let _ = spacing.get();
                 layout.mark_dirty();
             });
         }
@@ -384,68 +445,120 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                 metrics.get_untracked(),
                 Some(bounds.w),
             );
-            paint.draw(|p| {
-                let origin = bounds.min();
-                for run in buffer.layout_runs() {
-                    for glyph in run.glyphs.iter() {
-                        let physical_glyph = glyph.physical((0., 0.), 1.0);
-                        if fonts
-                            .font_atlas
-                            .cache_glyph(
-                                &mut fonts.font_system,
-                                &mut fonts.swash_cache,
-                                physical_glyph.cache_key,
-                            )
-                            .is_none()
-                        {
-                            continue;
+            let height = measured_size(&buffer, spacing.get().max(0.), max_lines.get()).height;
+            let free = (bounds.h - height).max(0.);
+            let y = match vertical_align.get() {
+                TextVerticalAlign::Top => 0.,
+                TextVerticalAlign::Center => free / 2.,
+                TextVerticalAlign::Bottom => free,
+            };
+            let mut draw = || {
+                paint.draw(|p| {
+                    for run in buffer
+                        .layout_runs()
+                        .take(max_lines.get().unwrap_or(usize::MAX))
+                    {
+                        let origin = bounds.min()
+                            + crate::math::vec2(0., y + run.line_i as f32 * spacing.get().max(0.));
+                        if strike.get() {
+                            let left = run
+                                .glyphs
+                                .iter()
+                                .map(|g| g.x)
+                                .reduce(f32::min)
+                                .unwrap_or(0.);
+                            p.fill_rect(
+                                Rect::new(
+                                    origin.x + left,
+                                    origin.y + run.line_y - font_size.get() * 0.3,
+                                    run.line_w,
+                                    (font_size.get() / 16.).max(1.),
+                                ),
+                                color.get_clone().shader(bounds),
+                            );
                         }
-                        let rect = fonts
-                            .font_atlas
-                            .get_glyph(physical_glyph.cache_key)
-                            .unwrap();
-                        let placement = fonts
-                            .font_atlas
-                            .get_placement(physical_glyph.cache_key)
-                            .unwrap();
-                        let draw_rect = Rect::new(
-                            (physical_glyph.x + placement.left) as f32 + origin.x,
-                            ((physical_glyph.y - placement.top) as f32 + run.line_y) + origin.y,
-                            placement.width as f32,
-                            placement.height as f32,
-                        );
-                        let uv_rect = {
-                            let width = fonts.font_atlas.texture.width();
-                            let height = fonts.font_atlas.texture.height();
-                            Rect::new(
-                                rect.x / width,
-                                rect.y / height,
-                                rect.w / width,
-                                rect.h / height,
-                            )
-                        };
-                        p.draw_texture(
-                            draw_rect,
-                            fonts.font_atlas.texture.clone(),
-                            uv_rect,
-                            glyph
-                                .color_opt
-                                .map_or_else(
-                                    || color.get_clone(),
-                                    |color| {
-                                        crate::shader::Brush::Solid(crate::color::Color::from_rgba(
-                                            color.r(),
-                                            color.g(),
-                                            color.b(),
-                                            color.a(),
-                                        ))
-                                    },
+                        if text_underline.get() {
+                            let left = run
+                                .glyphs
+                                .iter()
+                                .map(|glyph| glyph.x)
+                                .reduce(f32::min)
+                                .unwrap_or(0.);
+                            let underline = Rect::new(
+                                origin.x + left,
+                                origin.y + run.line_y + 2.,
+                                run.line_w,
+                                (font_size.get() / 16.).max(1.),
+                            );
+                            p.fill_rect(underline, color.get_clone().shader(bounds));
+                        }
+                        for glyph in run.glyphs.iter() {
+                            let physical_glyph = glyph.physical((0., 0.), 1.0);
+                            if fonts
+                                .font_atlas
+                                .cache_glyph(
+                                    &mut fonts.font_system,
+                                    &mut fonts.swash_cache,
+                                    physical_glyph.cache_key,
                                 )
-                                .shader(bounds),
-                        );
+                                .is_none()
+                            {
+                                continue;
+                            }
+                            let rect = fonts
+                                .font_atlas
+                                .get_glyph(physical_glyph.cache_key)
+                                .unwrap();
+                            let placement = fonts
+                                .font_atlas
+                                .get_placement(physical_glyph.cache_key)
+                                .unwrap();
+                            let draw_rect = Rect::new(
+                                (physical_glyph.x + placement.left) as f32 + origin.x,
+                                ((physical_glyph.y - placement.top) as f32 + run.line_y) + origin.y,
+                                placement.width as f32,
+                                placement.height as f32,
+                            );
+                            let uv_rect = {
+                                let width = fonts.font_atlas.texture.width();
+                                let height = fonts.font_atlas.texture.height();
+                                Rect::new(
+                                    rect.x / width,
+                                    rect.y / height,
+                                    rect.w / width,
+                                    rect.h / height,
+                                )
+                            };
+                            p.draw_texture(
+                                draw_rect,
+                                fonts.font_atlas.texture.clone(),
+                                uv_rect,
+                                glyph
+                                    .color_opt
+                                    .map_or_else(
+                                        || color.get_clone(),
+                                        |color| {
+                                            crate::shader::Brush::Solid(
+                                                crate::color::Color::from_rgba(
+                                                    color.r(),
+                                                    color.g(),
+                                                    color.b(),
+                                                    color.a(),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                    .shader(bounds),
+                            );
+                        }
                     }
-                }
-            });
+                })
+            };
+            if max_lines.get().is_some() || overflow.get() != TextOverflow::Visible {
+                crate::paint::with_clip(bounds, draw);
+            } else {
+                draw();
+            }
         });
     });
 }

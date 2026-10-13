@@ -14,6 +14,9 @@ members = [
     "examples/color",
     "examples/document",
     "examples/animation",
+    "examples/navigation",
+    "examples/nodes",
+    "examples/playground",
 ]
 resolver = "2"
 

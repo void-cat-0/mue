@@ -54,6 +54,12 @@ macro_rules! impl_align_items {
 
 /// Shortcuts for common layout styles and pointer interactions.
 pub trait StyleableExt: Styleable {
+    /// Set equal row and column spacing.
+    fn gap(self, value: impl Into<mue_core::prop::Prop<taffy::LengthPercentage>>) -> Self {
+        let value = value.into();
+        self.column_gap(value).row_gap(value)
+    }
+
     /// Handle a tap without an unused event argument.
     fn on_activate(self, mut action: impl FnMut() + 'static) -> Self {
         self.on_tap(move |_| action())

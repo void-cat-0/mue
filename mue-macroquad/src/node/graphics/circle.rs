@@ -1,10 +1,8 @@
-use std::rc::Rc;
-
 use mue_core::signal::Access;
 
 use crate::{
     layout::{Layout, use_layout},
-    paint::{Shapes, use_paint},
+    paint::use_paint,
     style::Style,
 };
 
@@ -21,15 +19,6 @@ pub fn circle(style: &mut Style) {
         let r = rect.get();
         p.fill_circle(r.center(), r.w.min(r.h) / 2., color.get_clone().shader(r));
     });
-    style.on_render.append(move |_| {
-        shapes.get_clone().draw();
-    });
-}
-
-/// Draw prebuilt shapes within a node's layout and lifetime.
-#[mue_macros::node]
-pub fn shape(style: &mut Style, shapes: Rc<Shapes>) {
-    use_layout(style);
     style.on_render.append(move |_| {
         shapes.get_clone().draw();
     });

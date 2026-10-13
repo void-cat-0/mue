@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use lyon::{
     path::PathEvent,
@@ -30,6 +33,66 @@ struct Cache {
 
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::default();
+    static DRAW_TRANSFORM: Cell<Matrix> = const { Cell::new(Matrix::IDENTITY) };
+}
+
+/// Apply a transform to a subtree without changing its layout coordinates.
+pub(crate) fn with_transform<R>(transform: Matrix, draw: impl FnOnce() -> R) -> R {
+    if transform == Matrix::IDENTITY {
+        return draw();
+    }
+    let previous = DRAW_TRANSFORM.replace(DRAW_TRANSFORM.get() * transform);
+    let c = transform.to_cols_array();
+    let matrix = macroquad::math::Mat4::from_cols_array(&[
+        c[0], c[1], 0., 0., c[3], c[4], 0., 0., 0., 0., 1., 0., c[6], c[7], 0., 1.,
+    ]);
+    unsafe { get_internal_gl() }
+        .quad_gl
+        .push_model_matrix(matrix);
+    let result = draw();
+    unsafe { get_internal_gl() }.quad_gl.pop_model_matrix();
+    DRAW_TRANSFORM.set(previous);
+    result
+}
+
+/// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.
+pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
+    let transform = DRAW_TRANSFORM.get();
+    let corners = [
+        rect.min(),
+        rect.max(),
+        vec2(rect.right(), rect.y),
+        vec2(rect.x, rect.bottom()),
+    ]
+    .map(|point| transform.transform_point2(point));
+    let min = corners.into_iter().reduce(Vector::min).unwrap();
+    let max = corners.into_iter().reduce(Vector::max).unwrap();
+    let rect = Rect::new(min.x, min.y, max.x - min.x, max.y - min.y);
+    let gl = unsafe { macroquad::window::get_internal_gl() }.quad_gl;
+    let previous = gl.get_scissor();
+    let scale = macroquad::window::screen_dpi_scale();
+    let mut bounds = Rect::new(
+        rect.x * scale,
+        rect.y * scale,
+        rect.w * scale,
+        rect.h * scale,
+    );
+    if let Some((x, y, w, h)) = previous {
+        bounds = bounds
+            .intersect(&Rect::new(x as f32, y as f32, w as f32, h as f32))
+            .unwrap_or_default();
+    }
+    gl.scissor(Some((
+        bounds.x.floor() as i32,
+        bounds.y.floor() as i32,
+        (bounds.right().ceil() - bounds.x.floor()).max(0.) as i32,
+        (bounds.bottom().ceil() - bounds.y.floor()).max(0.) as i32,
+    )));
+    let result = draw();
+    unsafe { macroquad::window::get_internal_gl() }
+        .quad_gl
+        .scissor(previous);
+    result
 }
 
 #[derive(Clone)]
@@ -135,6 +198,21 @@ pub struct Shapes {
 }
 
 impl Shapes {
+    /// Build reusable geometry in local coordinates for a `shape` node.
+    pub fn build(f: impl FnOnce(&mut ShapesBuilder)) -> Rc<Self> {
+        let mut shapes = Self::default();
+        CACHE.with_borrow_mut(|cache| {
+            f(&mut ShapesBuilder::new(
+                cache,
+                Matrix::IDENTITY,
+                1.,
+                0.2,
+                &mut shapes,
+            ));
+        });
+        Rc::new(shapes)
+    }
+
     pub fn draw(&self) {
         for shape in &self.shapes {
             shape.draw();
@@ -280,12 +358,19 @@ impl ShapesBuilder<'_> {
         uv_rect: Rect,
         color: S,
     ) {
-        self.fill_quad(draw_rect, Some(texture), Some(uv_rect), color.into_shader());
+        self.fill_quad(
+            draw_rect,
+            0.,
+            Some(texture),
+            Some(uv_rect),
+            color.into_shader(),
+        );
     }
 
     fn fill_quad(
         &mut self,
         rect: Rect,
+        radius: f32,
         texture: Option<SharedTexture>,
         uv: Option<Rect>,
         shader: impl Shader,
@@ -305,10 +390,17 @@ impl ShapesBuilder<'_> {
         let shape = self.shapes.shape_for_texture(texture);
         let offset = shape.buffers.vertices.len() as u16;
         for y in 0..=rows {
+            let v = y as f32 / rows as f32;
+            let py = rect.h * v;
+            let dy = (radius - py.min(rect.h - py)).max(0.);
+            let inset = if radius > 0. {
+                radius - (radius * radius - dy * dy).max(0.).sqrt()
+            } else {
+                0.
+            };
             for x in 0..=columns {
                 let u = x as f32 / columns as f32;
-                let v = y as f32 / rows as f32;
-                let point = vec2(rect.x + rect.w * u, rect.y + rect.h * v);
+                let point = vec2(rect.x + inset + (rect.w - 2. * inset) * u, rect.y + py);
                 let vertex = if let Some(uv) = uv {
                     texture_vertex(
                         &shader,
@@ -354,13 +446,21 @@ impl ShapesBuilder<'_> {
         S: IntoShader,
     {
         let shader = shader.into_shader();
-        self.fill_quad(rect, shader.texture(), None, shader);
+        self.fill_quad(rect, 0., shader.texture(), None, shader);
     }
 
     pub fn fill_rounded_rect<S>(&mut self, rect: Rect, radius: f32, shader: S)
     where
         S: IntoShader,
     {
+        let shader = shader.into_shader();
+        let radius = radius.max(0.).min(rect.w.min(rect.h) / 2.);
+        // Boundary-only tessellation misses the center of a radial gradient.
+        // Sample the interior too, curving the grid's edges around the corners.
+        if shader.subdivisions(rect) != (1, 1) {
+            self.fill_quad(rect, radius, shader.texture(), None, shader);
+            return;
+        }
         let mut path = lyon::path::Path::builder();
         path.add_rounded_rectangle(
             &lyon::geom::Box2D::from_origin_and_size(
@@ -371,12 +471,11 @@ impl ShapesBuilder<'_> {
             lyon::path::Winding::Positive,
         );
         let path = path.build();
-        self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
-                cache
-                    .fill_tess
-                    .tessellate(path.iter(), &self.fill_options, builder)
-            });
+        self.inner.build(self.shapes, shader, |cache, builder| {
+            cache
+                .fill_tess
+                .tessellate(path.iter(), &self.fill_options, builder)
+        });
     }
 
     /// Fill a circle with the given shader.

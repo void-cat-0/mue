@@ -1,119 +1,38 @@
-//! 页面切换示例。运行：cargo run -p pages
-//! State-driven page transitions, advanced by App::frame.
-
-use macroquad::prelude::*;
+//! Replace a typed navigation destination; the root keeps its local state. Run with `cargo run -p pages`.
+use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    animation::{Animation, with_animation},
+    animation::Animation,
     color::Color,
     node::*,
-    shader::Brush,
     style::{Styleable, StyleableExt},
 };
-use taffy::LengthPercentageAuto;
 
-const TRANSITION: f32 = 0.28;
-
-const ACTIVE: Color = Color::from_rgba(70, 95, 130, 255);
-const BLUE: Color = Color::from_rgba(37, 58, 94, 255);
-const CANVAS: Color = Color::BLACK;
-const GREEN: Color = Color::from_rgba(46, 82, 63, 255);
-const HIGHLIGHT: Color = Color::from_rgba(100, 135, 180, 255);
-const HOVER: Color = Color::from_rgba(55, 65, 85, 255);
-const PLUM: Color = Color::from_rgba(88, 52, 84, 255);
-const PRESSED: Color = Color::from_rgba(15, 20, 30, 255);
-const SURFACE: Color = Color::from_rgba(25, 30, 40, 255);
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Page {
-    Home,
-    About,
-    Settings,
-}
-
-impl Page {
-    const ALL: [Page; 3] = [Page::Home, Page::About, Page::Settings];
-
-    fn title(self) -> &'static str {
-        match self {
-            Page::Home => "Home",
-            Page::About => "About",
-            Page::Settings => "Settings",
-        }
-    }
-
-    fn color(self) -> Color {
-        match self {
-            Page::Home => BLUE,
-            Page::About => GREEN,
-            Page::Settings => PLUM,
-        }
-    }
-}
-
-fn page_node(page: Page, target: Signal<Page>) -> Node {
-    let buttons = Page::ALL.map(|destination| {
-        let hovered = signal(false);
-        let pressed = signal(false);
-        flexbox()
-            .background(computed(move |_| {
-                Brush::Solid(if pressed.get() {
-                    PRESSED
-                } else {
-                    match (destination == page, hovered.get()) {
-                        (true, true) => HIGHLIGHT,
-                        (true, false) => ACTIVE,
-                        (false, true) => HOVER,
-                        (false, false) => SURFACE,
-                    }
-                })
-            }))
-            .padding((12.,))
-            .margin((8.,))
-            .use_hovered(hovered)
-            .use_pressed(pressed)
-            .on_activate(move || {
-                with_animation(Animation::ease_in_out(TRANSITION), || {
-                    target.set(destination)
-                })
-            })
-            .children(text(destination.title()).font_size(22.))
-            .into_node()
-    });
-
-    flexbox()
-        .background(page.color())
-        .absolute()
-        .inset_top(0.)
-        .inset_left(computed(move |_| {
-            LengthPercentageAuto::percent(page as usize as f32 - target.get() as usize as f32)
-        }))
+fn page(index: usize) -> Node {
+    let count = signal(0);
+    center()
         .size_full()
-        .flex_column()
-        .items_center()
-        .justify_center()
-        .children((
-            text(page.title()).font_size(56.),
-            flexbox()
-                .flex_row()
-                .justify_center()
-                .margin((24.,))
-                .children(buttons),
-        ))
+        .background(
+            [
+                Color::from_rgba(37, 58, 94, 255),
+                Color::from_rgba(46, 82, 63, 255),
+                Color::from_rgba(88, 52, 84, 255),
+            ][index],
+        )
+        .children(
+            stack().items_center().gap(20.).children((
+                heading(["Home", "Notes", "Settings"][index]),
+                link(count.map(|n| format!("Count: {n}")))
+                    .on_activate(move || count.update(|n| *n += 1)),
+            )),
+        )
         .into_node()
 }
-
-#[mue_macros::component]
-fn pages(#[model] target: Page) -> impl Component {
-    let children = Page::ALL.map(|page| page_node(page, target));
-    flexbox().size_full().children(children)
-}
-
 fn main() {
     macroquad::Window::from_config(
-        macroquad::window::Conf {
-            window_title: "mue - pages".to_string(),
+        Conf {
+            window_title: "mue - pages".into(),
             window_width: 800,
             window_height: 600,
             ..Default::default()
@@ -121,13 +40,33 @@ fn main() {
         run(),
     );
 }
-
 async fn run() {
-    let target = signal(Page::Home);
-    let mut app = App::new(pages(target));
-
+    let path = signal(Vec::<usize>::new());
+    let bar = hstack().padding((16.,)).justify_center().children(
+        ["Home", "Notes", "Settings"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, title)| {
+                link(title)
+                    .font_size(20.)
+                    .padding((12.,))
+                    .on_activate(move || path.set(if index == 0 { vec![] } else { vec![index] }))
+                    .into_node()
+            })
+            .collect::<Vec<_>>(),
+    );
+    let pages = navigation_stack(path, || page(0), |index| page(*index))
+        .transition_animation(Animation::spring(0.5, 0.15))
+        .flex_1()
+        .min_height(0.);
+    let mut app = App::new(
+        stack()
+            .size_full()
+            .gap(0.)
+            .children((bar, separator(), pages)),
+    );
     loop {
-        clear_background(CANVAS.into());
+        clear_background(macroquad::color::BLACK);
         app.frame();
         next_frame().await;
     }

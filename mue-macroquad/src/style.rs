@@ -359,6 +359,12 @@ define_style! {
     flex_direction: taffy::FlexDirection;
     flex_wrap: taffy::FlexWrap;
 
+    /// Horizontal space between columns and vertical space between rows.
+    column_gap: LengthPercentage = LengthPercentage::ZERO;
+    row_gap: LengthPercentage = LengthPercentage::ZERO;
+    /// Preferred width divided by height, when one dimension is automatic.
+    aspect_ratio: Option<f32>;
+
     flex_basis: Dimension = Dimension::auto();
     /// Set how much of the parent's remaining main-axis space this node takes.
     flex_grow: f32 = 0.0;
@@ -366,7 +372,7 @@ define_style! {
     flex_shrink: f32 = 1.0;
 
     // Paint
-    /// Transform painted geometry without changing its layout size.
+      /// Transform this node and its descendants without changing layout size.
     transform: Matrix = Matrix::IDENTITY;
     /// Multiply painted alpha; 0 is transparent and 1 is opaque.
     opacity: f32 = 1.0;
@@ -388,6 +394,22 @@ define_style! {
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
     font_weight: Weight = Weight::NORMAL;
+    /// Use italic font faces where available.
+    font_italic: bool = false;
+    /// Wrap long lines at words or glyphs. Disable for preformatted code.
+    text_wrap: bool = true;
+    /// Underline each shaped line with the foreground brush.
+    text_underline: bool = false;
+    text_strikethrough: bool = false;
+    text_wrap_mode: crate::node::TextWrap;
+    text_overflow: crate::node::TextOverflow;
+    /// Maximum visual lines. None displays the whole document.
+    text_max_lines: Option<usize>;
+    text_vertical_align: crate::node::TextVerticalAlign;
+    /// Extra space between newline-delimited paragraphs, in logical pixels.
+    paragraph_spacing: f32 = 0.;
+    letter_spacing: f32 = 0.;
+    tab_width: u16 = 4;
 
     @rects {
         margin: taffy::Rect<LengthPercentageAuto> = LengthPercentageAuto::ZERO;
@@ -419,6 +441,7 @@ impl Style {
     pub(crate) fn build_hooks(&mut self) -> NodeHooks {
         NodeHooks {
             render: self.take_on_render(),
+            after_children: HookFn::default(),
             pointer_event: self.take_on_pointer_event(),
             hover_event: self.take_on_hover_event(),
             wheel_event: self.take_on_wheel_event(),
@@ -445,6 +468,9 @@ impl Style {
         }
 
         let display = self.take_display();
+        let box_sizing = self.take_box_sizing();
+        let aspect_ratio = self.take_aspect_ratio();
+        let gap = to_size(self.take_column_gap(), self.take_row_gap());
 
         let size = to_size(self.take_width(), self.take_height());
         let min_size = to_size(self.take_min_width(), self.take_min_height());
@@ -485,6 +511,9 @@ impl Style {
 
         computed(move |_| taffy::Style {
             display: display.get(),
+            box_sizing: box_sizing.get(),
+            aspect_ratio: aspect_ratio.get(),
+            gap: gap.get(),
 
             size: size.get(),
             min_size: min_size.get(),
