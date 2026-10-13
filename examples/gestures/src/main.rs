@@ -1,3 +1,6 @@
+#[path = "../../palette.rs"]
+mod palette;
+
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -9,15 +12,60 @@ use mue_macroquad::{
 };
 use taffy::Dimension;
 
-const INK: Color = Color::from_rgba(230, 237, 243, 255);
-const BLUE: Color = Color::from_rgba(0, 210, 255, 255);
-const MUTED: Color = Color::from_rgba(145, 160, 178, 255);
-const BACKGROUND: Color = Color::from_rgba(13, 17, 23, 255);
-const SURFACE: Color = Color::from_rgba(22, 29, 39, 255);
-const BORDER: Color = Color::from_rgba(54, 68, 86, 255);
-const PENDING: Color = Color::from_rgba(255, 193, 7, 255);
-const SUCCESS: Color = Color::from_rgba(57, 230, 132, 255);
-const CANCELLED: Color = Color::from_rgba(255, 92, 112, 255);
+const INK: Color = Color::new(
+    palette::INK.r,
+    palette::INK.g,
+    palette::INK.b,
+    palette::INK.a,
+);
+const BLUE: Color = Color::new(
+    palette::HIGHLIGHT.r,
+    palette::HIGHLIGHT.g,
+    palette::HIGHLIGHT.b,
+    palette::HIGHLIGHT.a,
+);
+const MUTED: Color = Color::new(
+    palette::HIGHLIGHT.r,
+    palette::HIGHLIGHT.g,
+    palette::HIGHLIGHT.b,
+    palette::HIGHLIGHT.a,
+);
+const BACKGROUND: Color = Color::new(
+    palette::CANVAS.r,
+    palette::CANVAS.g,
+    palette::CANVAS.b,
+    palette::CANVAS.a,
+);
+const SURFACE: Color = Color::new(
+    palette::SURFACE.r,
+    palette::SURFACE.g,
+    palette::SURFACE.b,
+    palette::SURFACE.a,
+);
+const BORDER: Color = Color::new(
+    palette::HOVER.r,
+    palette::HOVER.g,
+    palette::HOVER.b,
+    palette::HOVER.a,
+);
+const PENDING: Color = Color::new(
+    palette::ACTIVE.r,
+    palette::ACTIVE.g,
+    palette::ACTIVE.b,
+    palette::ACTIVE.a,
+);
+const SUCCESS: Color = Color::new(
+    palette::GREEN.r,
+    palette::GREEN.g,
+    palette::GREEN.b,
+    palette::GREEN.a,
+);
+const CANCELLED: Color = Color::new(
+    palette::PLUM.r,
+    palette::PLUM.g,
+    palette::PLUM.b,
+    palette::PLUM.a,
+);
 
 #[derive(Clone, Copy)]
 enum Demo {
@@ -306,8 +354,8 @@ fn main() {
         },
         async {
             let root = flexbox()
-                .w_full()
-                .h_full()
+                .size_full()
+                .flex_row()
                 .flex_wrap(taffy::FlexWrap::Wrap)
                 .children((
                     panel(Demo::Click),

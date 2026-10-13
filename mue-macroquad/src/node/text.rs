@@ -1,19 +1,13 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cosmic_text::{
-    Attrs, Buffer, CacheKey, FamilyOwned, FontSystem, Metrics, Placement, Shaping, SwashCache,
-    Weight,
-};
+use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Placement, Shaping, SwashCache};
 use guillotiere::{
     AllocId, Allocation, AtlasAllocator,
     euclid::{Box2D, Size2D, UnknownUnit},
     point2, size2,
 };
 use lru::LruCache;
-use macroquad::{
-    color::WHITE,
-    texture::{Image, Texture2D},
-};
+use macroquad::texture::{Image, Texture2D};
 use mue_core::{
     effect::{computed, watch_effect},
     signal::Access,
@@ -21,8 +15,8 @@ use mue_core::{
 use taffy::{AvailableSpace, Size};
 
 use crate::{
-    layout::use_layout, math::Rect, paint::use_paint, runtime::Runtime, shader::SharedTexture,
-    style::Style,
+    layout::use_layout, math::Rect, paint::use_background, paint::use_paint, runtime::Runtime,
+    shader::SharedTexture, style::Style,
 };
 
 pub struct FontState {
@@ -261,18 +255,17 @@ impl Atlas {
 
 /// Notes: Vairable fonts are not well suppported, and the font should be loaded before using text()
 #[mue_macros::node]
-pub fn text(
-    style: &mut Style,
-    #[default(32.0)] font_size: f32,
-    #[default(44.0)] line_height: f32,
-    #[default(FamilyOwned::SansSerif)] font_family: FamilyOwned,
-    #[default(Weight::NORMAL)] font_weight: Weight,
-    text: Rc<str>,
-) {
+pub fn text(style: &mut Style, text: Rc<str>) {
     let layout = use_layout(style);
     let rect = layout.rect;
 
     let paint = use_paint(style);
+    use_background(style, rect);
+    let font_size = style.take_font_size();
+    let line_height = style.take_line_height();
+    let font_family = style.take_font_family();
+    let font_weight = style.take_font_weight();
+    let color = style.take_color();
 
     let metrics = computed(move |_| Metrics::new(font_size.get(), line_height.get()));
 
@@ -354,7 +347,8 @@ pub fn text(
         let buffer = buffer.borrow();
         Runtime::with_fonts_mut(|fonts| {
             paint.draw(|p| {
-                let origin = rect.get().min();
+                let bounds = rect.get();
+                let origin = bounds.min();
                 for run in buffer.layout_runs() {
                     for glyph in run.glyphs.iter() {
                         let physical_glyph = glyph.physical((0., 0.), 1.0);
@@ -388,7 +382,12 @@ pub fn text(
                                 rect.h / height,
                             )
                         };
-                        p.draw_texture(draw_rect, fonts.font_atlas.texture.clone(), uv_rect, WHITE);
+                        p.draw_texture(
+                            draw_rect,
+                            fonts.font_atlas.texture.clone(),
+                            uv_rect,
+                            color.get_clone().shader(bounds),
+                        );
                     }
                 }
             });

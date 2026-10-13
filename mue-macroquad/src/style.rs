@@ -1,11 +1,13 @@
 mod ext;
 
+use crate::{color::Color, shader::Brush};
 use cosmic_text::Align;
+use cosmic_text::{FamilyOwned, Weight};
 pub use ext::StyleableExt;
 
 use mue_core::{
     Owned,
-    effect::computed,
+    effect::{computed, computed_always},
     prop::Prop,
     signal::{Access, ReadSignal},
 };
@@ -78,6 +80,24 @@ where
 }
 
 macro_rules! define_style {
+    (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
+        let fallback = $defaults.$field.take();
+        $result.$field = Some(computed_always(move |_| {
+            let current = $theme.get_clone();
+            current.$field.as_ref().or(fallback.as_ref())
+                .map(|value| value.get_clone())
+                .unwrap_or_else(|| define_style!(@extract_default_raw ($ty, $($default)?)))
+        }).into());
+    };
+    // Rect properties already have separate fields: fill only the missing sides.
+    (@rect_defaults $target:ident, $source:ident, $rect:ident) => {
+        paste! {
+            define_style!(@defaults $target, $source, [<$rect _left>], [<$rect _right>], [<$rect _top>], [<$rect _bottom>]);
+        }
+    };
+    (@defaults $target:ident, $source:ident, $($field:ident),*) => {
+        $(if $target.$field.is_none() { $target.$field = $source.$field; })*
+    };
     (@extract_default_raw ($ty:ty, $default:expr)) => {
         $default
     };
@@ -182,9 +202,26 @@ macro_rules! define_style {
             }
 
             impl Style {
+                pub(crate) fn themed_defaults(theme: ReadSignal<std::rc::Rc<Style>>, mut default: Self) -> Self {
+                    let mut result = Self::new();
+                    $(
+                        define_style!(@themed_property result, theme, default, $name, $ty, $($default)?);
+                    )*
+                    $(
+                        define_style!(@themed_property result, theme, default, [<$rect_name _left>], $rect_ty, $($rect_default)?);
+                        define_style!(@themed_property result, theme, default, [<$rect_name _right>], $rect_ty, $($rect_default)?);
+                        define_style!(@themed_property result, theme, default, [<$rect_name _top>], $rect_ty, $($rect_default)?);
+                        define_style!(@themed_property result, theme, default, [<$rect_name _bottom>], $rect_ty, $($rect_default)?);
+                    )*
+                    result.provide_defaults(default);
+                    result
+                }
                 pub fn merge(mut self, other: Self) -> Self {
                     $(
                         self.$name = self.$name.or(other.$name);
+                    )*
+                    $(
+                        define_style!(@rect_defaults self, other, $rect_name);
                     )*
                     $(
                         self.$hook_name.extend(other.$hook_name);
@@ -200,12 +237,20 @@ macro_rules! define_style {
                         }
                     )*
                     $(
+                        define_style!(@rect_defaults self, default, $rect_name);
+                    )*
+                    $(
                         mem::swap(&mut self.$hook_name, &mut default.$hook_name);
                         self.$hook_name.extend(default.$hook_name);
                     )*
                     if self.children.is_none() {
                         self.children = default.children;
                     }
+                }
+
+                pub(crate) fn assert_visual_only(&self) {
+                    assert!(self.children.is_none() $( && self.$hook_name.is_empty() )*,
+                        "theme and factory style callbacks may only set visual properties");
                 }
 
                 $(
@@ -295,9 +340,16 @@ define_style! {
     // Paint
     transform: Matrix = Matrix::IDENTITY;
     opacity: f32 = 1.0;
+    background: Brush = Brush::default();
+    color: Brush = Brush::Solid(Color::WHITE);
+    radius: f32 = 0.0;
 
     // Text
     text_align: Option<Align>;
+    font_size: f32 = 32.0;
+    line_height: f32 = 44.0;
+    font_family: FamilyOwned = FamilyOwned::SansSerif;
+    font_weight: Weight = Weight::NORMAL;
 
     @rects {
         margin: taffy::Rect<LengthPercentageAuto> = LengthPercentageAuto::ZERO;

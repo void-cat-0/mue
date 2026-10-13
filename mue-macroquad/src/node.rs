@@ -36,6 +36,7 @@ thread_local! {
 
 pub(crate) struct NodeInner {
     pub scope: Scope,
+    pub(crate) retained_scopes: Vec<Scope>,
     pub hooks: NodeHooks,
 
     pub(crate) layout_id: Option<taffy::NodeId>,
@@ -50,6 +51,7 @@ impl NodeInner {
     pub fn new(children: Owned<Children>) -> Self {
         Self {
             scope: Scope::new(),
+            retained_scopes: Vec::new(),
             hooks: NodeHooks::default(),
 
             layout_id: None,
@@ -119,15 +121,15 @@ impl Disposable for NodeRef {
             let Some(node) = rt.nodes.borrow_mut().remove(self.id) else {
                 return;
             };
+            // The children signal owns the child Nodes through its callback.
+            // Disposing it drops those Nodes, including hidden children.
+            node.children.dispose();
             node.scope.dispose();
+            for scope in node.retained_scopes {
+                scope.dispose();
+            }
             if let Some(layout_id) = node.layout_id {
                 rt.taffy.borrow_mut().remove(layout_id).unwrap();
-            }
-            if !node.children.is_null() {
-                for child in node.children.get_clone_untracked().iter() {
-                    child.dispose();
-                }
-                node.children.dispose();
             }
             for gesture_id in node.gestures {
                 rt.gestures.borrow_mut().remove(gesture_id);
@@ -140,6 +142,9 @@ impl Disposable for NodeRef {
 pub struct Node(Owned<NodeRef>);
 
 impl Node {
+    pub(crate) fn retain_scope(&self, scope: Scope) {
+        Runtime::with(|rt| rt.nodes.borrow_mut()[self.id].retained_scopes.push(scope));
+    }
     pub fn build(f: impl FnOnce()) -> Self {
         Self::build_with_style(Style::default(), |_style| f())
     }

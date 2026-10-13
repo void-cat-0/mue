@@ -206,22 +206,34 @@ impl Runtime {
         }
 
         let mut effect = self.effect_mut(effect_id);
-
         if effect.state == EffectState::Check {
             let dependencies = mem::take(&mut effect.dependencies);
             drop(effect);
 
             for dependency_signal_id in &*dependencies {
-                let effect =  self.signal_mut(*dependency_signal_id).effect;
+                // Updating a parent can remove keyed children and their signals.
+                let effect = self
+                    .signals
+                    .borrow()
+                    .get(*dependency_signal_id)
+                    .and_then(|signal| signal.effect);
                 if let Some(parent_effect_id) = effect {
                     self.update_effect_if_necessary(parent_effect_id);
                 }
 
-                if self.effect_mut(effect_id).state == EffectState::Dirty {
+                if self
+                    .effects
+                    .borrow()
+                    .get(effect_id)
+                    .is_some_and(|it| it.state == EffectState::Dirty)
+                {
                     break;
                 }
             }
 
+            if !self.effects.borrow().contains_key(effect_id) {
+                return;
+            }
             effect = self.effect_mut(effect_id);
             effect.dependencies = dependencies;
         }
@@ -327,7 +339,9 @@ impl Runtime {
 
         // Remove this effect from all signals it depends on
         for signal_id in &*effect.dependencies {
-            self.signal_mut(*signal_id).subscribers.remove(&effect_id);
+            if let Some(signal) = self.signals.borrow_mut().get_mut(*signal_id) {
+                signal.subscribers.remove(&effect_id);
+            }
         }
 
         self.dispose_signal(effect.signal);

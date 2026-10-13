@@ -1,3 +1,6 @@
+#[path = "../../palette.rs"]
+mod palette;
+
 use std::{cell::RefCell, rc::Rc};
 
 use macroquad::prelude::*;
@@ -236,7 +239,7 @@ fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> Node {
                 ] {
                     let a = screen(a);
                     let b = screen(b);
-                    draw_line(a.x, a.y, b.x, b.y, 1., Color::from_rgba(54, 68, 86, 255));
+                    draw_line(a.x, a.y, b.x, b.y, 1., palette::HOVER.into());
                 }
             }
             let aspect = texture.width() / texture.height();
@@ -275,7 +278,7 @@ fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> Node {
                     contact.position.y,
                     22.,
                     2.,
-                    Color::from_rgba(0, 210, 255, 255),
+                    palette::HIGHLIGHT.into(),
                 );
             }
         });
@@ -302,16 +305,10 @@ fn main() {
                 if is_key_pressed(KeyCode::R) {
                     *state.borrow_mut() = MapState::default();
                 }
-                clear_background(Color::from_rgba(13, 17, 23, 255));
+                clear_background(palette::CANVAS.into());
                 app.frame();
-                draw_rectangle(16., 16., 156., 42., Color::from_rgba(22, 29, 39, 255));
-                draw_text(
-                    "Deer map",
-                    30.,
-                    44.,
-                    24.,
-                    Color::from_rgba(230, 237, 243, 255),
-                );
+                draw_rectangle(16., 16., 156., 42., palette::SURFACE.into());
+                draw_text("Deer map", 30., 44., 24., palette::INK.into());
                 {
                     let state = state.borrow();
                     let label = format!(
@@ -325,14 +322,14 @@ fn main() {
                         16.,
                         width + 28.,
                         42.,
-                        Color::from_rgba(22, 29, 39, 255),
+                        palette::SURFACE.into(),
                     );
                     draw_text(
                         label,
                         screen_width() - width - 30.,
                         43.,
                         20.,
-                        Color::from_rgba(230, 237, 243, 255),
+                        palette::INK.into(),
                     );
                 }
                 let mouse = Vec2::from(mouse_position());
@@ -344,16 +341,12 @@ fn main() {
                         r.w,
                         r.h,
                         if hovered {
-                            Color::from_rgba(0, 210, 255, 255)
+                            palette::HIGHLIGHT.into()
                         } else {
-                            Color::from_rgba(22, 29, 39, 255)
+                            palette::SURFACE.into()
                         },
                     );
-                    let color = if hovered {
-                        BLACK
-                    } else {
-                        Color::from_rgba(230, 237, 243, 255)
-                    };
+                    let color = if hovered { BLACK } else { palette::INK.into() };
                     let size = if label.len() > 1 { 18 } else { 28 };
                     let text = measure_text(label, None, size, 1.);
                     draw_text(

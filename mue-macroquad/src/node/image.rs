@@ -1,10 +1,10 @@
-use macroquad::prelude::*;
 use mue_core::{prelude::Access, prop::PropValue};
 use taffy::{AvailableSpace, Size};
 
 use crate::{
     layout::use_layout,
     math::{Rect, Vector, vec2},
+    paint::use_background,
     paint::use_paint,
     shader::SharedTexture,
     style::Style,
@@ -29,11 +29,12 @@ pub fn image(
     #[default] object_fit: ObjectFit,
     #[default(vec2(0.5, 0.5))] object_position: Vector,
     #[default] region: Option<Rect>,
-    #[default(WHITE)] color: Color,
 ) {
     let layout = use_layout(style);
     let rect = layout.rect;
     let paint = use_paint(style);
+    use_background(style, rect);
+    let color = style.take_color();
 
     layout.set_measure_fn({
         let texture = texture.clone();
@@ -84,7 +85,12 @@ pub fn image(
             uv_region,
         );
 
-        p.draw_texture(draw_rect, texture, adjusted_uv, color.get());
+        p.draw_texture(
+            draw_rect,
+            texture,
+            adjusted_uv,
+            color.get_clone().shader(rect.get()),
+        );
     });
 
     style.on_render.append(move |_| {

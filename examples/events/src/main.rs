@@ -1,3 +1,6 @@
+#[path = "../../palette.rs"]
+mod palette;
+
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -15,7 +18,7 @@ fn main() {
             window_height: 600,
             ..Default::default()
         },
-        async { the_main().await },
+        async { run().await },
     );
 }
 
@@ -57,13 +60,31 @@ fn view() -> impl Component {
     .on_wheel_event(move |event| wheel.update(|value| *value += event.delta.y))
 }
 
-async fn the_main() {
-    let root = view();
-
-    let mut app = App::new(root);
+async fn run() {
+    let mut app = App::new(
+        flexbox()
+            .size_full()
+            .flex_column()
+            .padding((28.,))
+            .children((
+                text("Pointer events")
+                    .font_size(32.)
+                    .line_height(42.)
+                    .margin_bottom(12.),
+                text("Click, hold, hover, or scroll over the panel below.")
+                    .font_size(18.)
+                    .line_height(28.)
+                    .margin_bottom(24.),
+                view()
+                    .padding((24.,))
+                    .width(440.)
+                    .height(240.)
+                    .background(palette::BLUE),
+            )),
+    );
 
     loop {
-        clear_background(BLACK);
+        clear_background(palette::CANVAS.into());
         app.frame();
         next_frame().await;
     }

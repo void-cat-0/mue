@@ -103,9 +103,17 @@ impl Runtime {
         hook_fn: impl Fn(&mut NodeHooks) -> &mut HookFn<T>,
         arg: &T,
     ) {
-        let mut hook = mem::take(hook_fn(&mut self.nodes.borrow_mut()[node_id].hooks));
+        let mut hook = {
+            let mut nodes = self.nodes.borrow_mut();
+            let Some(node) = nodes.get_mut(node_id) else {
+                return;
+            };
+            mem::take(hook_fn(&mut node.hooks))
+        };
         hook.invoke(arg);
-        *hook_fn(&mut self.nodes.borrow_mut()[node_id].hooks) = hook;
+        if let Some(node) = self.nodes.borrow_mut().get_mut(node_id) {
+            *hook_fn(&mut node.hooks) = hook;
+        }
     }
 
     pub fn node(&self, id: NodeId) -> Ref<'_, NodeInner> {

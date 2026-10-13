@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 
 use crate::{
     math::{Matrix, Rect, Vector, vec2},
-    shader::{IntoShader, Shader, SharedTexture},
+    shader::{Brush, IntoShader, Shader, SharedTexture},
     style::Style,
 };
 
@@ -197,6 +197,18 @@ impl<T: Shader> StrokeVertexConstructor<Vertex> for ShaderConstructor<T> {
     }
 }
 
+fn texture_vertex(
+    shader: &impl Shader,
+    transform: Matrix,
+    alpha: f32,
+    point: Vector,
+    uv: Vector,
+) -> Vertex {
+    let mut vertex = shader.new_vertex(&transform, &point, alpha);
+    vertex.uv = macroquad::math::vec2(uv.x, uv.y);
+    vertex
+}
+
 struct Inner<'a> {
     cache: &'a mut Cache,
 
@@ -259,29 +271,65 @@ impl<'a> ShapesBuilder<'a> {
 }
 
 impl ShapesBuilder<'_> {
-    pub fn draw_texture(
+    pub fn draw_texture<S: IntoShader>(
         &mut self,
         draw_rect: Rect,
         texture: SharedTexture,
         uv_rect: Rect,
-        color: Color,
+        color: S,
     ) {
-        let shape = self.shapes.shape_for_texture(Some(texture));
-        let dmin = draw_rect.min();
-        let umin = uv_rect.min();
-        let dmax = draw_rect.max();
-        let umax = uv_rect.max();
+        self.fill_quad(draw_rect, Some(texture), Some(uv_rect), color.into_shader());
+    }
+
+    fn fill_quad(
+        &mut self,
+        rect: Rect,
+        texture: Option<SharedTexture>,
+        uv: Option<Rect>,
+        shader: impl Shader,
+    ) {
+        let (columns, rows) = shader.subdivisions(rect);
+        let vertices = (columns + 1) * (rows + 1);
+        // Keep batches within macroquad's default geometry buffer limits.
+        if self.shapes.shapes.last().is_some_and(|shape| {
+            shape.buffers.vertices.len() + vertices > 10000
+                || shape.buffers.indices.len() + columns * rows * 6 > 10000
+        }) {
+            self.shapes.shapes.push(Shape {
+                texture: texture.clone(),
+                ..Default::default()
+            });
+        }
+        let shape = self.shapes.shape_for_texture(texture);
         let offset = shape.buffers.vertices.len() as u16;
-        shape.buffers.vertices.extend([
-            Vertex::new(dmin.x, dmin.y, 0., umin.x, umin.y, color),
-            Vertex::new(dmax.x, dmin.y, 0., umax.x, umin.y, color),
-            Vertex::new(dmax.x, dmax.y, 0., umax.x, umax.y, color),
-            Vertex::new(dmin.x, dmax.y, 0., umin.x, umax.y, color),
-        ]);
-        shape
-            .buffers
-            .indices
-            .extend([0, 1, 2, 0, 2, 3].map(|i| i + offset));
+        for y in 0..=rows {
+            for x in 0..=columns {
+                let u = x as f32 / columns as f32;
+                let v = y as f32 / rows as f32;
+                let point = vec2(rect.x + rect.w * u, rect.y + rect.h * v);
+                let vertex = if let Some(uv) = uv {
+                    texture_vertex(
+                        &shader,
+                        self.inner.transform,
+                        self.inner.alpha,
+                        point,
+                        vec2(uv.x + uv.w * u, uv.y + uv.h * v),
+                    )
+                } else {
+                    shader.new_vertex(&self.inner.transform, &point, self.inner.alpha)
+                };
+                shape.buffers.vertices.push(vertex);
+            }
+        }
+        for y in 0..rows {
+            for x in 0..columns {
+                let a = offset + (y * (columns + 1) + x) as u16;
+                let b = a + 1;
+                let c = b + (columns + 1) as u16;
+                let d = c - 1;
+                shape.buffers.indices.extend([a, b, c, a, c, d]);
+            }
+        }
     }
 
     /// Fill a path with the given shader.
@@ -303,16 +351,29 @@ impl ShapesBuilder<'_> {
     where
         S: IntoShader,
     {
+        let shader = shader.into_shader();
+        self.fill_quad(rect, shader.texture(), None, shader);
+    }
+
+    pub fn fill_rounded_rect<S>(&mut self, rect: Rect, radius: f32, shader: S)
+    where
+        S: IntoShader,
+    {
+        let mut path = lyon::path::Path::builder();
+        path.add_rounded_rectangle(
+            &lyon::geom::Box2D::from_origin_and_size(
+                lyon::geom::point(rect.x, rect.y),
+                lyon::geom::size(rect.w, rect.h),
+            ),
+            &lyon::path::builder::BorderRadii::new(radius),
+            lyon::path::Winding::Positive,
+        );
+        let path = path.build();
         self.inner
             .build(self.shapes, shader.into_shader(), |cache, builder| {
-                cache.fill_tess.tessellate_rectangle(
-                    &lyon::geom::Box2D::from_origin_and_size(
-                        lyon::geom::point(rect.x, rect.y),
-                        lyon::geom::size(rect.w, rect.h),
-                    ),
-                    &self.fill_options,
-                    builder,
-                )
+                cache
+                    .fill_tess
+                    .tessellate(path.iter(), &self.fill_options, builder)
             });
     }
 
@@ -381,4 +442,29 @@ impl ShapesBuilder<'_> {
                 )
             });
     }
+}
+
+/// Add the background before the node's content hooks.
+pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
+    let background = style.take_background();
+    let radius = style.take_radius();
+    let paint = use_paint(style);
+    style.on_render.append(move |_| {
+        let brush = background.get_clone();
+        if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
+            return;
+        }
+        let rect = rect.get();
+        if rect.w <= 0. || rect.h <= 0. {
+            return;
+        }
+        let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
+        paint.draw(|p| {
+            if radius > 0. {
+                p.fill_rounded_rect(rect, radius, brush.shader(rect));
+            } else {
+                p.fill_rect(rect, brush.shader(rect));
+            }
+        });
+    });
 }

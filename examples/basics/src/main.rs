@@ -1,3 +1,6 @@
+#[path = "../../palette.rs"]
+mod palette;
+
 use std::path::Path;
 
 use macroquad::prelude::*;
@@ -10,7 +13,7 @@ use mue_macroquad::{
     shader::SharedTexture,
     style::{Styleable, StyleableExt},
 };
-use taffy::{Dimension, LengthPercentageAuto};
+use taffy::Dimension;
 
 /// Vendored fonts (SIL OFL 1.1, see `assets/fonts/OFL-SpaceMono.txt`).
 const FONTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts");
@@ -18,13 +21,13 @@ const FONTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts");
 fn main() {
     macroquad::Window::from_config(
         macroquad::window::Conf {
-            window_title: "mue".to_string(),
+            window_title: "mue - basics".into(),
             window_width: 973,
             window_height: 608,
             ..Default::default()
         },
         async {
-            the_main().await;
+            run().await;
         },
     );
 }
@@ -41,12 +44,12 @@ fn view(texture: SharedTexture, time: f32, mono: FamilyOwned) -> impl Component 
             |&value| value,
             move |&i| {
                 image(texture.clone())
-                    .min_width(Dimension::length(0.))
+                    .min_width(0.)
                     .height(time.map(move |t: f32| {
                         Dimension::percent((t * (i + 1) as f32).sin() * 0.5 + 0.5)
                     }))
                     .flex_grow(1.)
-                    .margin((LengthPercentageAuto::length(5.),))
+                    .margin((5.,))
             },
         );
 
@@ -70,7 +73,7 @@ fn view(texture: SharedTexture, time: f32, mono: FamilyOwned) -> impl Component 
             text("hello 🐦🚀"),
             // 默认族是系统无衬线（SansSerif），这两行换成注册进来的 Space Mono
             mono_line("Space Mono · 400"),
-            // 同族的 Bold 字面在 the_main 里也注册了，所以这里能命中它
+            // 同族的 Bold 字面在 run 里也注册了，所以这里能命中它
             mono_line("Space Mono · 700").font_weight(Weight::BOLD),
             // 字重是响应式的
             mono_line("weight follows the clock").font_weight(computed(move |_| {
@@ -82,6 +85,7 @@ fn view(texture: SharedTexture, time: f32, mono: FamilyOwned) -> impl Component 
             })),
             row,
             circle()
+                .color(palette::BLUE)
                 .h_auto()
                 .flex_1()
                 .transform(time.map(|t| {
@@ -96,12 +100,15 @@ fn view(texture: SharedTexture, time: f32, mono: FamilyOwned) -> impl Component 
         .flex_column()
 }
 
-async fn the_main() {
+async fn run() {
     let time = signal(0.);
-    set_pc_assets_folder("assets");
-    let texture: SharedTexture = load_texture("ferris.png").await.unwrap().into();
+    let texture: SharedTexture = Texture2D::from_file_with_format(
+        include_bytes!("../assets/ferris.png"),
+        Some(ImageFormat::Png),
+    )
+    .into();
 
-    // 字体路径用 CARGO_MANIFEST_DIR 解析，所以和 assets/ferris.png 不同，不受工作目录影响。
+    // 字体路径用 CARGO_MANIFEST_DIR 解析，不受工作目录影响。
     let fonts = Path::new(FONTS);
     let mono = load_family(&fonts.join("SpaceMono-Regular.ttf"));
     // 这里返回的族名和上面一样（都是 "Space Mono"），只需要把 Bold 字面注册进去，
@@ -112,7 +119,7 @@ async fn the_main() {
     let mut app = App::new(root);
 
     loop {
-        clear_background(BLACK);
+        clear_background(palette::CANVAS.into());
 
         time.set(get_time() as f32);
 

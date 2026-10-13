@@ -1,18 +1,21 @@
 //! 页面切换示例。运行：cargo run -p pages
 //! 过渡暂时在示例内实现，由主循环推进信号，使用布局位移移动整个页面。
 
+#[path = "../../palette.rs"]
+mod palette;
+
 use std::rc::Rc;
 
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    layout::use_layout,
+    color::Color,
     node::*,
-    paint::use_paint,
-    style::{Style, Styleable, StyleableExt},
+    shader::Brush,
+    style::{Styleable, StyleableExt},
 };
-use taffy::{LengthPercentage, LengthPercentageAuto};
+use taffy::LengthPercentageAuto;
 
 /// 过场时长（秒）
 const TRANSITION: f32 = 0.28;
@@ -37,9 +40,9 @@ impl Page {
 
     fn color(self) -> Color {
         match self {
-            Page::Home => Color::from_rgba(37, 58, 94, 255),
-            Page::About => Color::from_rgba(46, 82, 63, 255),
-            Page::Settings => Color::from_rgba(88, 52, 84, 255),
+            Page::Home => palette::BLUE,
+            Page::About => palette::GREEN,
+            Page::Settings => palette::PLUM,
         }
     }
 }
@@ -111,41 +114,36 @@ impl PageTransition {
     }
 }
 
-#[mue_macros::node]
-fn panel(style: &mut Style, color: Color) {
-    let rect = use_layout(style).rect;
-    let paint = use_paint(style);
-    let shapes = paint.build(move |p| p.fill_rect(rect.get(), color.get()));
-    style.on_render.append(move |_| shapes.get_clone().draw());
-}
-
 fn page_node(page: Page, target: Signal<Page>, offsets: ReadSignal<[f32; 3]>) -> Node {
     let buttons = Page::ALL.map(|destination| {
         let hovered = signal(false);
         let pressed = signal(false);
-        panel(computed(move |_| {
-            if pressed.get() {
-                return Color::from_rgba(15, 20, 30, 255);
-            }
-            match (destination == page, hovered.get()) {
-                (true, true) => Color::from_rgba(100, 135, 180, 255),
-                (true, false) => Color::from_rgba(70, 95, 130, 255),
-                (false, true) => Color::from_rgba(55, 65, 85, 255),
-                (false, false) => Color::from_rgba(25, 30, 40, 255),
-            }
-        }))
-        .padding((LengthPercentage::length(12.),))
-        .margin((LengthPercentageAuto::length(8.),))
-        .use_hovered(hovered)
-        .use_pressed(pressed)
-        .on_tap(move |_| target.set(destination))
-        .children(text(destination.title()).font_size(22.))
-        .into_node()
+        flexbox()
+            .background(computed(move |_| {
+                Brush::Solid(if pressed.get() {
+                    palette::PRESSED
+                } else {
+                    match (destination == page, hovered.get()) {
+                        (true, true) => palette::HIGHLIGHT,
+                        (true, false) => palette::ACTIVE,
+                        (false, true) => palette::HOVER,
+                        (false, false) => palette::SURFACE,
+                    }
+                })
+            }))
+            .padding((12.,))
+            .margin((8.,))
+            .use_hovered(hovered)
+            .use_pressed(pressed)
+            .on_tap(move |_| target.set(destination))
+            .children(text(destination.title()).font_size(22.))
+            .into_node()
     });
 
-    panel(mue_core::prop::Prop::Static(page.color()))
+    flexbox()
+        .background(page.color())
         .absolute()
-        .inset_top(LengthPercentageAuto::length(0.))
+        .inset_top(0.)
         .inset_left(computed(move |_| {
             LengthPercentageAuto::percent(offsets.get()[page as usize])
         }))
@@ -155,11 +153,11 @@ fn page_node(page: Page, target: Signal<Page>, offsets: ReadSignal<[f32; 3]>) ->
         .justify_center()
         .children((
             text(page.title()).font_size(56.),
-            text("tap a button to switch").font_size(18.),
+            text("Tap a button to switch pages").font_size(18.),
             flexbox()
                 .flex_row()
                 .justify_center()
-                .margin((LengthPercentageAuto::length(24.),))
+                .margin((24.,))
                 .children(buttons),
         ))
         .into_node()
@@ -188,18 +186,18 @@ fn main() {
             ..Default::default()
         },
         async {
-            the_main().await;
+            run().await;
         },
     );
 }
 
-async fn the_main() {
+async fn run() {
     let target = signal(Page::Home);
     let mut transition = PageTransition::new(Page::Home);
     let mut app = App::new(pages(target, transition.stack, transition.offsets));
 
     loop {
-        clear_background(BLACK);
+        clear_background(palette::CANVAS.into());
         transition.advance(target.get_untracked(), get_frame_time());
         app.frame();
         next_frame().await;

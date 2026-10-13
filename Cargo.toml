@@ -10,6 +10,8 @@ members = [
     "examples/map",
     "examples/pages",
     "examples/tab",
+    "examples/theme",
+    "examples/color",
 ]
 resolver = "2"
 

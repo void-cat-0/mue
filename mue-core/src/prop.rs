@@ -166,60 +166,10 @@ impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6);
 impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6 T7);
 impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6 T7 T8);
 
-#[cfg(feature = "impl-taffy")]
-impl_prop_value!(
-    taffy::style::Dimension,
-    taffy::style::LengthPercentage,
-    taffy::style::LengthPercentageAuto,
-    taffy::style::AlignContent,
-    taffy::style::AlignItems,
-    taffy::style::AvailableSpace,
-    taffy::style::BoxGenerationMode,
-    taffy::style::BoxSizing,
-    taffy::style::Display,
-    taffy::style::FlexDirection,
-    taffy::style::FlexWrap,
-    taffy::style::GridAutoFlow,
-    taffy::style::GridPlacement,
-    taffy::style::Overflow,
-    taffy::style::Position,
-    taffy::style::RepetitionCount,
-    taffy::style::TextAlign,
-);
-
-#[cfg(feature = "impl-taffy")]
-impl<T> PropValue for taffy::Rect<T> {}
-
-#[cfg(feature = "impl-taffy")]
-impl<S, Repetition> PropValue for taffy::GenericGridTemplateComponent<S, Repetition>
-where
-    S: taffy::CheapCloneStr,
-    Repetition: taffy::GenericRepetition<CustomIdent = S>,
-{
-}
-
-#[cfg(feature = "impl-taffy")]
-impl<S> PropValue for taffy::GridTemplateComponent<S> where S: taffy::CheapCloneStr {}
-
 #[cfg(feature = "impl-cosmic-text")]
-impl PropValue for cosmic_text::FamilyOwned {}
-
-#[cfg(feature = "impl-cosmic-text")]
-impl From<&str> for Prop<cosmic_text::FamilyOwned> {
-    fn from(name: &str) -> Self {
-        Prop::Static(cosmic_text::FamilyOwned::Name(name.into()))
-    }
-}
-
-#[cfg(feature = "impl-cosmic-text")]
-impl From<String> for Prop<cosmic_text::FamilyOwned> {
-    fn from(name: String) -> Self {
-        Prop::Static(cosmic_text::FamilyOwned::Name(name.into()))
-    }
-}
-
-#[cfg(feature = "impl-cosmic-text")]
-impl PropValue for cosmic_text::Weight {}
+mod cosmic_text;
+#[cfg(feature = "impl-taffy")]
+mod taffy;
 
 #[macro_export]
 macro_rules! default_props {

@@ -10,6 +10,7 @@
 - **组件宏**：`#[mue_macros::component]` 把普通函数变成一个可组合的节点，参数自动支持字面量或 signal。
 - **事件与手势**：点击、hover、滚轮、长按、拖动、滑动、双指缩放与旋转，以及基于 taffy 布局的命中测试。
 - **自定义字体**：按字面（family / weight）注册 `ttf` / `otf`，字重本身也能是响应式的。
+- **Factory 与主题**：具名参数、实例级覆盖、按身份匹配的 `theme!` 分支、局部 Provider 和响应式换肤。
 
 ## 工作区结构
 
@@ -24,6 +25,7 @@
 | `examples/map` | 图片网格地图，支持拖动、惯性滑动、双指缩放与旋转。 |
 | `examples/pages` | 页面切换与切换动画。 |
 | `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
+| `examples/theme` | 嵌套 Factory、主题信号切换与动态 children。 |
 
 ## 快速开始
 
@@ -36,7 +38,23 @@ cargo run -p gestures
 cargo run -p map
 cargo run -p pages
 cargo run -p tab
+cargo run -p theme
 ```
+
+`Factory` 复用组件定义；主题只覆盖选中的样式字段。`theme!` 克隆分支里的 Factory 句柄，原句柄仍可用来创建实例：
+
+```rust
+use mue_macroquad::{App, color::Color, factory::factory, node::text, style::Styleable, theme::{provide_theme, theme}};
+
+let label = factory(|caption: String| text(caption));
+let appearance = theme!(|c, s| match c {
+    label => s.font_size(18.).color(Color::WHITE),
+    _ => s,
+});
+let app = App::new(provide_theme(appearance, move || label.create("Hello")));
+```
+
+`provide_theme` 也接受 `Signal<Theme>` / `ReadSignal<Theme>`；替换信号值会重算样式，未设置的字段继续从外层主题和 Factory 默认样式回退。参见 `cargo run -p theme`。
 
 在 `macroquad` 的窗口回调里构建并驱动一棵节点树：
 

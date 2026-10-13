@@ -5,7 +5,7 @@
 //! to `text(..).font_family(..)` to use it.
 //!
 //! ```no_run
-//! use mue_macroquad::{font::load_font_file, node::*};
+//! use mue_macroquad::{font::load_font_file, node::*, style::Styleable};
 //!
 //! let family = load_font_file("assets/Inter.ttf").unwrap().remove(0);
 //! let _label = text("hello").font_family(family);
@@ -16,7 +16,7 @@
 //! from mue-core's `impl-cosmic-text` feature.
 //!
 //! ```no_run
-//! use mue_macroquad::{font::FamilyOwned, node::*};
+//! use mue_macroquad::{font::FamilyOwned, node::*, style::Styleable};
 //!
 //! let _by_str = text("hello").font_family("Microsoft YaHei");
 //! let _by_name = text("hello").font_family(FamilyOwned::Name("Microsoft YaHei".into()));
@@ -27,7 +27,7 @@
 //!
 //! ```no_run
 //! use mue_core::prelude::*;
-//! use mue_macroquad::{font::FamilyOwned, node::*};
+//! use mue_macroquad::{font::FamilyOwned, node::*, style::Styleable};
 //!
 //! let family = signal(FamilyOwned::Monospace);
 //! let _reactive = text("hello").font_family(computed(move |_| family.get_clone()));
