@@ -142,6 +142,44 @@ pub enum Brush {
 
 impl PropValue for Brush {}
 
+impl crate::animation::Animatable for Brush {
+    fn interpolate(from: &Self, to: &Self, t: f32) -> Self {
+        let stops = |a: &[ColorStop], b: &[ColorStop]| {
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| {
+                    ColorStop::new(
+                        f32::interpolate(&a.offset, &b.offset, t),
+                        a.color.lerp(b.color, t),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        match (from, to) {
+            (Self::Solid(a), Self::Solid(b)) => Self::Solid(a.lerp(*b, t)),
+            (Self::LinearGradient(a), Self::LinearGradient(b))
+                if a.stops.len() == b.stops.len() =>
+            {
+                Self::LinearGradient(LinearGradient::new(
+                    a.start.lerp(b.start, t),
+                    a.end.lerp(b.end, t),
+                    stops(&a.stops, &b.stops),
+                ))
+            }
+            (Self::RadialGradient(a), Self::RadialGradient(b))
+                if a.stops.len() == b.stops.len() =>
+            {
+                Self::RadialGradient(RadialGradient::new(
+                    a.center.lerp(b.center, t),
+                    f32::interpolate(&a.radius, &b.radius, t),
+                    stops(&a.stops, &b.stops),
+                ))
+            }
+            _ => to.clone(),
+        }
+    }
+}
+
 impl Default for Brush {
     fn default() -> Self {
         Self::Solid(Color::TRANSPARENT)

@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     runtime::Runtime,
-    signal::{Access, ReadSignal, SignalId},
+    signal::{Access, ReadSignal, Signal, SignalId},
 };
 
 #[derive(Clone, Copy)]
@@ -27,6 +27,7 @@ impl Access for PropTracker {
 }
 
 #[derive(Clone, Copy)]
+/// A static value or reactive signal accepted by component and style builders.
 pub enum Prop<T> {
     Static(T),
     Dynamic(ReadSignal<T>),
@@ -92,11 +93,29 @@ impl<T: 'static> Prop<T> {
     }
 }
 
+/// Marks types that can be passed directly as static properties.
 pub trait PropValue {}
 
 impl<T> From<ReadSignal<T>> for Prop<T> {
     fn from(signal: ReadSignal<T>) -> Self {
         Self::Dynamic(signal)
+    }
+}
+
+impl<T> From<Signal<T>> for Prop<T> {
+    fn from(value: Signal<T>) -> Self {
+        (*value).into()
+    }
+}
+
+impl From<ReadSignal<&'static str>> for Prop<Rc<str>> {
+    fn from(value: ReadSignal<&'static str>) -> Self {
+        value.map(Rc::from).into()
+    }
+}
+impl From<ReadSignal<String>> for Prop<Rc<str>> {
+    fn from(value: ReadSignal<String>) -> Self {
+        value.map(Rc::from).into()
     }
 }
 

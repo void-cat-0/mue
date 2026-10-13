@@ -1,15 +1,11 @@
 //! 固定底部 Tab 栏示例。运行：cargo run -p tab
-//! 过渡暂时在示例内实现，由主循环推进信号，使用布局位移移动整个页面。
-
-#[path = "../../palette.rs"]
-mod palette;
-
-use std::rc::Rc;
+//! State-driven page transitions, advanced by App::frame.
 
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
+    animation::{Animation, with_animation},
     color::Color,
     node::*,
     shader::Brush,
@@ -17,8 +13,17 @@ use mue_macroquad::{
 };
 use taffy::LengthPercentageAuto;
 
-/// 过场时长（秒）
 const TRANSITION: f32 = 0.28;
+
+const ACTIVE: Color = Color::from_rgba(70, 95, 130, 255);
+const BLUE: Color = Color::from_rgba(37, 58, 94, 255);
+const CANVAS: Color = Color::BLACK;
+const GREEN: Color = Color::from_rgba(46, 82, 63, 255);
+const HIGHLIGHT: Color = Color::from_rgba(100, 135, 180, 255);
+const HOVER: Color = Color::from_rgba(55, 65, 85, 255);
+const PLUM: Color = Color::from_rgba(88, 52, 84, 255);
+const PRESSED: Color = Color::from_rgba(15, 20, 30, 255);
+const SURFACE: Color = Color::from_rgba(25, 30, 40, 255);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Page {
@@ -40,118 +45,44 @@ impl Page {
 
     fn color(self) -> Color {
         match self {
-            Page::Home => palette::BLUE,
-            Page::About => palette::GREEN,
-            Page::Settings => palette::PLUM,
+            Page::Home => BLUE,
+            Page::About => GREEN,
+            Page::Settings => PLUM,
         }
     }
 }
 
-struct PageTransition {
-    stack: Signal<Rc<[Page]>>,
-    offsets: Signal<[f32; 3]>,
-    target: Page,
-    from: [f32; 3],
-    to: [f32; 3],
-    elapsed: f32,
-}
-
-impl PageTransition {
-    fn new(page: Page) -> Self {
-        let mut offsets = [1.0; 3];
-        offsets[page as usize] = 0.0;
-        Self {
-            stack: signal(Rc::from([page])),
-            offsets: signal(offsets),
-            target: page,
-            from: offsets,
-            to: offsets,
-            elapsed: TRANSITION,
-        }
-    }
-
-    fn advance(&mut self, target: Page, dt: f32) {
-        batch(|| {
-            if target != self.target {
-                self.from = self.offsets.get_untracked();
-                let mut stack = self.stack.get_clone_untracked().to_vec();
-                if !stack.contains(&target) {
-                    self.from[target as usize] = if (target as usize) > (self.target as usize) {
-                        1.0
-                    } else {
-                        -1.0
-                    };
-                    stack.push(target);
-                }
-                let destination = self.from[target as usize];
-                for page in Page::ALL {
-                    let i = page as usize;
-                    self.to[i] = if page == target {
-                        0.0
-                    } else if self.from[i] < destination {
-                        -1.0
-                    } else {
-                        1.0
-                    };
-                }
-                self.target = target;
-                self.elapsed = 0.0;
-                self.stack.set(stack.into());
-            }
-            if self.elapsed >= TRANSITION {
-                return;
-            }
-            self.elapsed = (self.elapsed + dt.max(0.0)).min(TRANSITION);
-            let t = self.elapsed / TRANSITION;
-            let eased = t * t * (3.0 - 2.0 * t);
-            self.offsets.set(std::array::from_fn(|i| {
-                self.from[i] + (self.to[i] - self.from[i]) * eased
-            }));
-            if self.elapsed >= TRANSITION {
-                self.stack.set(Rc::from([self.target]));
-            }
-        });
-    }
-}
-
-fn page_node(page: Page, offsets: ReadSignal<[f32; 3]>) -> Node {
+fn page_node(page: Page, target: Signal<Page>) -> Node {
     flexbox()
         .background(page.color())
         .absolute()
         .inset_top(0.)
         .inset_left(computed(move |_| {
-            LengthPercentageAuto::percent(offsets.get()[page as usize])
+            LengthPercentageAuto::percent(page as usize as f32 - target.get() as usize as f32)
         }))
         .size_full()
         .flex_column()
         .items_center()
         .justify_center()
-        .children((
-            text(page.title()).font_size(56.),
-            text("Tap a button to switch pages").font_size(18.),
-        ))
+        .children((text(page.title()).font_size(56.),))
         .into_node()
 }
 
 #[mue_macros::component]
-fn pages(
-    #[model] target: Page,
-    #[model] stack: Rc<[Page]>,
-    #[model] offsets: [f32; 3],
-) -> impl Component {
+fn pages(#[model] target: Page) -> impl Component {
     let buttons = Page::ALL.map(|destination| {
         let hovered = signal(false);
         let pressed = signal(false);
         flexbox()
             .background(computed(move |_| {
                 Brush::Solid(if pressed.get() {
-                    palette::PRESSED
+                    PRESSED
                 } else {
                     match (destination == target.get(), hovered.get()) {
-                        (true, true) => palette::HIGHLIGHT,
-                        (true, false) => palette::ACTIVE,
-                        (false, true) => palette::HOVER,
-                        (false, false) => palette::SURFACE,
+                        (true, true) => HIGHLIGHT,
+                        (true, false) => ACTIVE,
+                        (false, true) => HOVER,
+                        (false, false) => SURFACE,
                     }
                 })
             }))
@@ -159,12 +90,16 @@ fn pages(
             .margin((8.,))
             .use_hovered(hovered)
             .use_pressed(pressed)
-            .on_tap(move |_| target.set(destination))
+            .on_activate(move || {
+                with_animation(Animation::ease_in_out(TRANSITION), || {
+                    target.set(destination)
+                })
+            })
             .children(text(destination.title()).font_size(22.))
             .into_node()
     });
 
-    let children = map_keyed(*stack, |page| *page, move |page| page_node(*page, *offsets));
+    let children = Page::ALL.map(|page| page_node(page, target));
     flexbox().size_full().flex_column().children((
         flexbox().relative().w_full().flex_1().children(children),
         flexbox()
@@ -184,20 +119,16 @@ fn main() {
             window_height: 600,
             ..Default::default()
         },
-        async {
-            run().await;
-        },
+        run(),
     );
 }
 
 async fn run() {
     let target = signal(Page::Home);
-    let mut transition = PageTransition::new(Page::Home);
-    let mut app = App::new(pages(target, transition.stack, transition.offsets));
+    let mut app = App::new(pages(target));
 
     loop {
-        clear_background(palette::CANVAS.into());
-        transition.advance(target.get_untracked(), get_frame_time());
+        clear_background(CANVAS.into());
         app.frame();
         next_frame().await;
     }

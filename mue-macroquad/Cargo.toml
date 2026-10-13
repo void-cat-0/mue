@@ -24,3 +24,4 @@ paste = "1.0.15"
 slotmap = { workspace = true }
 smallvec = { workspace = true }
 taffy = { workspace = true }
+pulldown-cmark = { version = "0.13", default-features = false }

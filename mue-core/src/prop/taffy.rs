@@ -1,5 +1,25 @@
 use super::{Prop, PropValue};
 
+macro_rules! reactive_length {
+    ($($ty:ty),*) => { $(
+        impl From<crate::signal::ReadSignal<f32>> for Prop<$ty> {
+            fn from(value: crate::signal::ReadSignal<f32>) -> Self {
+                value.map(<$ty>::length).into()
+            }
+        }
+        impl From<Prop<f32>> for Prop<$ty> {
+            fn from(value: Prop<f32>) -> Self {
+                value.map(<$ty>::length)
+            }
+        }
+    )* };
+}
+reactive_length!(
+    taffy::Dimension,
+    taffy::LengthPercentage,
+    taffy::LengthPercentageAuto
+);
+
 impl_prop_value!(
     taffy::style::Dimension,
     taffy::style::LengthPercentage,

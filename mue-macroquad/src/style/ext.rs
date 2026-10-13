@@ -52,7 +52,17 @@ macro_rules! impl_align_items {
     };
 }
 
+/// Shortcuts for common layout styles and pointer interactions.
 pub trait StyleableExt: Styleable {
+    /// Handle a tap without an unused event argument.
+    fn on_activate(self, mut action: impl FnMut() + 'static) -> Self {
+        self.on_tap(move |_| action())
+    }
+
+    /// Toggle boolean state whenever this node is tapped.
+    fn toggle_on_tap(self, state: Signal<bool>) -> Self {
+        self.on_activate(move || state.toggle())
+    }
     fn w_full(self) -> Self {
         self.width(Dimension::percent(1.))
     }

@@ -137,6 +137,7 @@ impl Runtime {
 
         let mut effect = self.effect_mut(effect_id);
         effect.cleanup();
+        let update_context = mem::take(&mut effect.update_context);
 
         let tracker = match &mut effect.dependencies {
             Dependencies::Static(_) => None,
@@ -159,7 +160,7 @@ impl Runtime {
             let mut callback = effect.callback.take().unwrap();
             drop(effect);
 
-            let updated = callback(&mut value);
+            let updated = update_context.run(|| callback(&mut value));
             self.signal_mut(signal_id).value = value;
             effect_callback = Some(callback);
             updated
@@ -194,7 +195,7 @@ impl Runtime {
         drop(effect);
 
         if updated {
-            self.on_update(signal_id);
+            update_context.run(|| self.on_update(signal_id));
         }
 
         result
@@ -255,6 +256,7 @@ impl Runtime {
 
     fn mark_stale(&self, effect_id: EffectId, state: EffectState) {
         let mut effect = self.effect_mut(effect_id);
+        effect.update_context = crate::update_context::UpdateContext::current();
         if effect.state >= state {
             return;
         }

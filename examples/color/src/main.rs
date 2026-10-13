@@ -1,17 +1,23 @@
 //! The same Brush types work for background fills and foreground color.
 //! Run with `cargo run -p color`.
 
-#[path = "../../palette.rs"]
-mod palette;
-
 use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_macroquad::{
     App,
+    color::Color as UiColor,
     math::vec2,
     node::{IntoNode, Node, flexbox, text},
     shader::{Brush, ColorStop, LinearGradient, RadialGradient},
     style::{Styleable, StyleableExt},
 };
+
+const BLUE: UiColor = UiColor::from_rgba(37, 58, 94, 255);
+const CANVAS: UiColor = UiColor::BLACK;
+const GREEN: UiColor = UiColor::from_rgba(46, 82, 63, 255);
+const HIGHLIGHT: UiColor = UiColor::from_rgba(100, 135, 180, 255);
+const INK: UiColor = UiColor::WHITE;
+const PLUM: UiColor = UiColor::from_rgba(88, 52, 84, 255);
+const SURFACE: UiColor = UiColor::from_rgba(25, 30, 40, 255);
 
 fn swatch(title: &'static str, fill: impl Into<Brush>) -> Node {
     flexbox()
@@ -23,10 +29,7 @@ fn swatch(title: &'static str, fill: impl Into<Brush>) -> Node {
                 .height(140.)
                 .background(fill.into())
                 .margin_bottom(12.),
-            text(title)
-                .font_size(18.)
-                .line_height(26.)
-                .color(palette::INK),
+            text(title).font_size(18.).line_height(26.).color(INK),
         ))
         .into_node()
 }
@@ -48,26 +51,23 @@ async fn run() {
         vec2(0., 0.),
         vec2(1., 0.),
         vec![
-            ColorStop::new(0., palette::BLUE),
-            ColorStop::new(0.5, palette::HIGHLIGHT),
-            ColorStop::new(1., palette::PLUM),
+            ColorStop::new(0., BLUE),
+            ColorStop::new(0.5, HIGHLIGHT),
+            ColorStop::new(1., PLUM),
         ],
     );
     let diagonal = LinearGradient::new(
         vec2(0., 0.),
         vec2(1., 1.),
-        vec![
-            ColorStop::new(0., palette::GREEN),
-            ColorStop::new(1., palette::HIGHLIGHT),
-        ],
+        vec![ColorStop::new(0., GREEN), ColorStop::new(1., HIGHLIGHT)],
     );
     let radial = RadialGradient::new(
         vec2(0.5, 0.5),
         0.65,
         vec![
-            ColorStop::new(0., palette::HIGHLIGHT),
-            ColorStop::new(0.5, palette::BLUE),
-            ColorStop::new(1., palette::SURFACE),
+            ColorStop::new(0., HIGHLIGHT),
+            ColorStop::new(0.5, BLUE),
+            ColorStop::new(1., SURFACE),
         ],
     );
     let mut app = App::new(
@@ -81,16 +81,15 @@ async fn run() {
                     .line_height(44.)
                     .margin((8.,)),
                 flexbox().flex_row().children((
-                    swatch("Blue", palette::BLUE),
-                    swatch("Green", palette::GREEN),
-                    swatch("Plum", palette::PLUM),
+                    swatch("Blue", BLUE),
+                    swatch("Green", GREEN),
+                    swatch("Plum", PLUM),
                 )),
                 flexbox().flex_row().children((
                     swatch("Linear · three stops", linear.clone()),
                     swatch("Diagonal", diagonal),
                     swatch("Radial", radial),
                 )),
-                // Foreground uses exactly the same gradient as the first gradient swatch.
                 text("Color is a fill, too.")
                     .font_size(40.)
                     .line_height(52.)
@@ -99,7 +98,7 @@ async fn run() {
             )),
     );
     loop {
-        clear_background(palette::CANVAS.into());
+        clear_background(CANVAS.into());
         app.frame();
         next_frame().await;
     }

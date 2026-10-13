@@ -1,6 +1,9 @@
+use super::document::Document;
 use std::{cell::RefCell, rc::Rc};
 
-use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Placement, Shaping, SwashCache};
+use cosmic_text::{
+    Attrs, Buffer, CacheKey, FontSystem, Metrics, Placement, Shaping, SwashCache, Wrap,
+};
 use guillotiere::{
     AllocId, Allocation, AtlasAllocator,
     euclid::{Box2D, Size2D, UnknownUnit},
@@ -10,6 +13,7 @@ use lru::LruCache;
 use macroquad::texture::{Image, Texture2D};
 use mue_core::{
     effect::{computed, watch_effect},
+    prop::Prop,
     signal::Access,
 };
 use taffy::{AvailableSpace, Size};
@@ -105,10 +109,6 @@ fn alloc_or_evict(
         if let Some(alloc) = allocator.allocate(size) {
             return CAllocation::Real(alloc);
         }
-        // trace!(
-        // "Failed to allocate space of {}x{} in the atlas, evicting one item",
-        // size.width, size.height
-        // );
         if let Some((_, (CAllocId::Real(id), _))) = cache.pop_lru() {
             allocator.deallocate(id);
         }
@@ -138,9 +138,6 @@ impl Atlas {
         }
         let length = length.min(max_length as i32);
         let size: Size2D<i32, UnknownUnit> = size2(length, length);
-        // let length = length as u32;
-        // println!("Creating a new atlas with size: {}x{}", length, length);
-        // let texture = Texture2D::new_empty(length, length);
         let texture = Texture2D::from_image(&Image {
             bytes: vec![0; length as usize * length as usize * 4],
             width: length as u16,
@@ -253,11 +250,37 @@ impl Atlas {
     }
 }
 
-/// Notes: Vairable fonts are not well suppported, and the font should be loaded before using text()
+/// Display wrapping text with reactive content, font, alignment, and paint styles.
+/// Load custom fonts before building the node. Height follows the shaped lines.
 #[mue_macros::node]
 pub fn text(style: &mut Style, text: Rc<str>) {
+    render_text(style, text.map(|text| Document::plain(text.to_string())));
+}
+
+fn shape_buffer(buffer: &mut Buffer, fonts: &mut FontSystem, metrics: Metrics, width: Option<f32>) {
+    buffer.set_metrics_and_size(fonts, metrics, width, None);
+    buffer.shape_until_scroll(fonts, false);
+}
+
+fn measured_size(buffer: &Buffer) -> Size<f32> {
+    Size {
+        // An intrinsic width must not wrap its last glyph on the draw pass.
+        width: buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0., f32::max)
+            .ceil(),
+        height: buffer
+            .layout_runs()
+            .last()
+            .map_or(0., |run| run.line_top + run.line_height),
+    }
+}
+
+pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
     let layout = use_layout(style);
     let rect = layout.rect;
+    let layout_id = layout.layout_id;
 
     let paint = use_paint(style);
     use_background(style, rect);
@@ -289,37 +312,23 @@ pub fn text(style: &mut Style, text: Rc<str>) {
             let width_constraint = known_dimensions.width.or(match available_space.width {
                 AvailableSpace::Definite(w) => Some(w),
                 AvailableSpace::MaxContent => None,
-                AvailableSpace::MinContent => None,
-            });
-            let height_constraint = known_dimensions.height.or(match available_space.height {
-                AvailableSpace::Definite(h) => Some(h),
-                AvailableSpace::MaxContent => None,
-                AvailableSpace::MinContent => None,
+                AvailableSpace::MinContent => Some(0.),
             });
 
             let mut buffer = buffer.borrow_mut();
             Runtime::with_fonts_mut(|fonts| {
-                buffer.set_metrics_and_size(
+                shape_buffer(
+                    &mut buffer,
                     &mut fonts.font_system,
                     metrics.get_untracked(),
                     width_constraint,
-                    height_constraint,
                 );
             });
-
-            let total_height = buffer
-                .layout_runs()
-                .last()
-                .map_or(0.0, |run| run.line_top + run.line_height);
+            let measured = measured_size(&buffer);
 
             Size {
-                width: known_dimensions.width.unwrap_or_else(|| {
-                    buffer
-                        .layout_runs()
-                        .map(|run| run.line_w)
-                        .fold(0.0, f32::max)
-                }),
-                height: known_dimensions.height.unwrap_or(total_height),
+                width: known_dimensions.width.unwrap_or(measured.width),
+                height: known_dimensions.height.unwrap_or(measured.height),
             }
         }
     });
@@ -330,34 +339,67 @@ pub fn text(style: &mut Style, text: Rc<str>) {
         move || {
             let mut buffer = buffer.borrow_mut();
             Runtime::with_fonts_mut(|fonts| {
-                let rect = rect.get();
                 let family = font_family.get_clone();
                 let attrs = Attrs::new()
                     .family(family.as_family())
                     .weight(font_weight.get());
                 let mut buffer = buffer.borrow_with(&mut fonts.font_system);
-                buffer.set_text(&text.get_clone(), &attrs, Shaping::Advanced, align.get());
-                buffer.set_metrics_and_size(metrics.get(), Some(rect.w), Some(rect.h));
+                let content = content.get_clone();
+                let metrics = metrics.get();
+                buffer.set_wrap(Wrap::WordOrGlyph);
+                buffer.set_rich_text(
+                    content
+                        .spans
+                        .iter()
+                        .map(|span| (span.text.as_str(), span.style.attrs(&attrs, metrics))),
+                    &attrs,
+                    Shaping::Advanced,
+                    align.get(),
+                );
+                buffer.set_metrics_and_size(metrics, None, None);
                 layout.mark_dirty();
             });
         }
     });
 
     style.on_render.append(move |_| {
-        let buffer = buffer.borrow();
+        let mut buffer = buffer.borrow_mut();
         Runtime::with_fonts_mut(|fonts| {
+            let outer_bounds = rect.get();
+            let bounds = Runtime::with_taffy_mut(|taffy| {
+                let layout = taffy.layout(layout_id).unwrap();
+                let left = layout.padding.left + layout.border.left;
+                let top = layout.padding.top + layout.border.top;
+                Rect::new(
+                    outer_bounds.x + left,
+                    outer_bounds.y + top,
+                    (outer_bounds.w - left - layout.padding.right - layout.border.right).max(0.),
+                    (outer_bounds.h - top - layout.padding.bottom - layout.border.bottom).max(0.),
+                )
+            });
+            // Visible overflow must not hide lines after a size or font animation.
+            shape_buffer(
+                &mut buffer,
+                &mut fonts.font_system,
+                metrics.get_untracked(),
+                Some(bounds.w),
+            );
             paint.draw(|p| {
-                let bounds = rect.get();
                 let origin = bounds.min();
                 for run in buffer.layout_runs() {
                     for glyph in run.glyphs.iter() {
                         let physical_glyph = glyph.physical((0., 0.), 1.0);
-                        // cache if needed
-                        fonts.font_atlas.cache_glyph(
-                            &mut fonts.font_system,
-                            &mut fonts.swash_cache,
-                            physical_glyph.cache_key,
-                        );
+                        if fonts
+                            .font_atlas
+                            .cache_glyph(
+                                &mut fonts.font_system,
+                                &mut fonts.swash_cache,
+                                physical_glyph.cache_key,
+                            )
+                            .is_none()
+                        {
+                            continue;
+                        }
                         let rect = fonts
                             .font_atlas
                             .get_glyph(physical_glyph.cache_key)
@@ -386,7 +428,20 @@ pub fn text(style: &mut Style, text: Rc<str>) {
                             draw_rect,
                             fonts.font_atlas.texture.clone(),
                             uv_rect,
-                            color.get_clone().shader(bounds),
+                            glyph
+                                .color_opt
+                                .map_or_else(
+                                    || color.get_clone(),
+                                    |color| {
+                                        crate::shader::Brush::Solid(crate::color::Color::from_rgba(
+                                            color.r(),
+                                            color.g(),
+                                            color.b(),
+                                            color.a(),
+                                        ))
+                                    },
+                                )
+                                .shader(bounds),
                         );
                     }
                 }

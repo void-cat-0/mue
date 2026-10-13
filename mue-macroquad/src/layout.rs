@@ -3,6 +3,7 @@ use taffy::{AvailableSpace, Size};
 
 use crate::{math::Rect, node::NodeInner, runtime::Runtime, style::Style};
 
+/// Compute intrinsic content size within Taffy's known dimensions and constraints.
 pub trait MeasureFn {
     fn measure(
         &mut self,
@@ -25,12 +26,14 @@ where
 }
 
 #[non_exhaustive]
+/// A node's layout handle and current absolute bounds.
 pub struct Layout {
     pub layout_id: taffy::NodeId,
     pub rect: ReadSignal<Rect>,
 }
 
 impl Layout {
+    /// Supply intrinsic sizing. Reactive reads invalidate the cached measurement.
     pub fn set_measure_fn(&self, mut measure_fn: impl MeasureFn + 'static) {
         let reaction = create_reaction({
             let layout_id = self.layout_id;
@@ -54,6 +57,7 @@ impl Layout {
         });
     }
 
+    /// Invalidate cached layout after non-reactive content changes.
     pub fn mark_dirty(&self) {
         Runtime::with_taffy_mut(|taffy| {
             taffy.mark_dirty(self.layout_id).unwrap();
@@ -73,6 +77,7 @@ impl Default for OwnedLayout {
     }
 }
 
+/// Create layout for the node being built. Call at most once per node.
 pub fn use_layout(style: &mut Style) -> Layout {
     let style = style.build_taffy();
     NodeInner::with_mut(|node| {

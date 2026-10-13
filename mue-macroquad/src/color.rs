@@ -1,3 +1,4 @@
+use crate::animation::Animatable;
 use mue_core::prop::PropValue;
 
 /// An sRGB color with channels in the 0..=1 range.
@@ -10,6 +11,12 @@ pub struct Color {
 }
 
 impl PropValue for Color {}
+
+impl Animatable for Color {
+    fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
+        from.lerp(*to, progress)
+    }
+}
 
 impl Color {
     pub const TRANSPARENT: Self = Self::new(0., 0., 0., 0.);

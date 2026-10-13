@@ -1,12 +1,10 @@
-#[path = "../../palette.rs"]
-mod palette;
-
 use std::{cell::RefCell, rc::Rc};
 
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
+    color::Color as UiColor,
     event::pointer::{PointerAction, PointerId},
     layout::use_layout,
     node::Node,
@@ -51,8 +49,6 @@ fn rotate(p: Vec2, angle: f32) -> Vec2 {
 }
 
 impl MapState {
-    // Preserve the world point under the old midpoint while transforming it
-    // to the new midpoint, so zooming/rotating never jumps to the map origin.
     fn transform(&mut self, old: Vec2, new: Vec2, factor: f32, angle: f32) {
         let scale = (self.scale * factor).clamp(0.25, 4.);
         self.offset = new + rotate(self.offset - old, angle) * (scale / self.scale);
@@ -95,6 +91,12 @@ impl MapState {
         }
     }
 }
+
+const CANVAS: UiColor = UiColor::BLACK;
+const HIGHLIGHT: UiColor = UiColor::from_rgba(100, 135, 180, 255);
+const HOVER: UiColor = UiColor::from_rgba(55, 65, 85, 255);
+const INK: UiColor = UiColor::WHITE;
+const SURFACE: UiColor = UiColor::from_rgba(25, 30, 40, 255);
 
 #[derive(Clone, Copy)]
 enum Control {
@@ -239,7 +241,7 @@ fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> Node {
                 ] {
                     let a = screen(a);
                     let b = screen(b);
-                    draw_line(a.x, a.y, b.x, b.y, 1., palette::HOVER.into());
+                    draw_line(a.x, a.y, b.x, b.y, 1., HOVER.into());
                 }
             }
             let aspect = texture.width() / texture.height();
@@ -278,7 +280,7 @@ fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> Node {
                     contact.position.y,
                     22.,
                     2.,
-                    palette::HIGHLIGHT.into(),
+                    HIGHLIGHT.into(),
                 );
             }
         });
@@ -305,10 +307,10 @@ fn main() {
                 if is_key_pressed(KeyCode::R) {
                     *state.borrow_mut() = MapState::default();
                 }
-                clear_background(palette::CANVAS.into());
+                clear_background(CANVAS.into());
                 app.frame();
-                draw_rectangle(16., 16., 156., 42., palette::SURFACE.into());
-                draw_text("Deer map", 30., 44., 24., palette::INK.into());
+                draw_rectangle(16., 16., 156., 42., SURFACE.into());
+                draw_text("Deer map", 30., 44., 24., INK.into());
                 {
                     let state = state.borrow();
                     let label = format!(
@@ -322,15 +324,9 @@ fn main() {
                         16.,
                         width + 28.,
                         42.,
-                        palette::SURFACE.into(),
+                        SURFACE.into(),
                     );
-                    draw_text(
-                        label,
-                        screen_width() - width - 30.,
-                        43.,
-                        20.,
-                        palette::INK.into(),
-                    );
+                    draw_text(label, screen_width() - width - 30., 43., 20., INK.into());
                 }
                 let mouse = Vec2::from(mouse_position());
                 for (r, _, label) in controls() {
@@ -341,12 +337,12 @@ fn main() {
                         r.w,
                         r.h,
                         if hovered {
-                            palette::HIGHLIGHT.into()
+                            HIGHLIGHT.into()
                         } else {
-                            palette::SURFACE.into()
+                            SURFACE.into()
                         },
                     );
-                    let color = if hovered { BLACK } else { palette::INK.into() };
+                    let color = if hovered { BLACK } else { INK.into() };
                     let size = if label.len() > 1 { 18 } else { 28 };
                     let text = measure_text(label, None, size, 1.);
                     draw_text(

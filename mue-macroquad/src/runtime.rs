@@ -71,8 +71,11 @@ pub(crate) struct Runtime {
 
 impl Runtime {
     fn new() -> Self {
+        let mut taffy = TaffyTree::new();
+        // Preserve fractional positions and widths during layout animation.
+        taffy.disable_rounding();
         Self {
-            taffy: RefCell::new(TaffyTree::new()),
+            taffy: RefCell::new(taffy),
             nodes: RefCell::new(SlotMap::with_key()),
 
             fonts: RefCell::new(FontState::default()),

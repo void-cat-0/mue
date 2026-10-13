@@ -39,6 +39,7 @@ struct Transform(Prop<Matrix>);
 #[derive(Clone)]
 struct Opacity(Prop<f32>);
 
+/// Draw geometry using the node's inherited transform and opacity.
 pub struct Paint {
     pub transform: Prop<Matrix>,
     opacity: Prop<f32>,
@@ -46,7 +47,7 @@ pub struct Paint {
 }
 
 impl Paint {
-    /// Build shapes reactively. Returns a ReadSignal<Shapes> that updates when dependencies change.
+    /// Build cached shapes that update whenever their tracked dependencies change.
     pub fn build(&self, mut f: impl FnMut(&mut ShapesBuilder) + 'static) -> ReadSignal<Rc<Shapes>> {
         let transform = self.transform;
         let alpha = self.opacity;
@@ -86,6 +87,7 @@ fn frobenius_norm(m: &Matrix) -> f32 {
     (m.col(0).length_squared() + m.col(1).length_squared() + m.col(2).length_squared()).sqrt()
 }
 
+/// Obtain paint state while building a node, inheriting parent transform and opacity.
 pub fn use_paint(style: &mut Style) -> Paint {
     fn extract<T: Clone + PartialEq + 'static>(
         prev: Option<Prop<T>>,

@@ -18,6 +18,7 @@ pub struct ComponentRef<'a> {
     options: &'a dyn Any,
 }
 impl<'a> ComponentRef<'a> {
+    /// Return this instance's options if it belongs to the target factory.
     pub fn options<B, O: 'static>(&self, target: &Factory<B, O>) -> Option<&'a O> {
         if self.id == target.id {
             Some(
@@ -32,7 +33,9 @@ impl<'a> ComponentRef<'a> {
 }
 
 #[derive(Clone)]
+/// A visual-style callback selected by factory identity and instance options.
 pub struct Theme(Rc<dyn for<'a> Fn(ComponentRef<'a>, Style) -> Style>);
+/// Build a theme callback. It may set visual properties, but not children or hooks.
 pub fn theme(f: impl for<'a> Fn(ComponentRef<'a>, Style) -> Style + 'static) -> Theme {
     Theme(Rc::new(f))
 }
@@ -44,6 +47,7 @@ impl PartialEq for Theme {
 }
 
 #[derive(Clone)]
+/// A fixed theme or a reactive theme signal.
 pub enum ThemeSource {
     Static(Theme),
     Dynamic(ReadSignal<Theme>),
@@ -87,12 +91,14 @@ impl ThemeChain {
     }
 }
 
+/// A view constructed inside a theme scope.
 pub struct ThemeProvider<F> {
     theme: ThemeSource,
     view: F,
 }
 
 /// Enter a theme scope before constructing the enclosed view.
+/// Nested themes take precedence; explicit instance styles take precedence over both.
 pub fn provide_theme<T>(
     theme: impl Into<ThemeSource>,
     view: impl FnOnce() -> T,

@@ -1,5 +1,6 @@
 use std::{mem, rc::Rc, sync::atomic::Ordering};
 
+use crate::animation;
 use glam::vec2;
 use mue_core::batch;
 use ordered_float::NotNan;
@@ -12,6 +13,7 @@ use crate::{
     runtime::{Runtime, TimeoutKey},
 };
 
+/// Owns the root view and drives animation, layout, input, and rendering.
 pub struct App {
     root_node: Node,
     layout_id: Option<taffy::NodeId>,
@@ -20,6 +22,7 @@ pub struct App {
 }
 
 impl App {
+    /// Build and retain a root view.
     pub fn new(root_node: impl IntoNode) -> Self {
         let root_node = root_node.into_node();
         let layout_id = Runtime::with(|rt| rt.node(root_node.id).layout_id);
@@ -32,8 +35,11 @@ impl App {
         }
     }
 
+    /// Advance animations and render one frame, then dispatch pointer events.
+    /// Call once per frame before `macroquad::next_frame`.
     pub fn frame(&mut self) {
         let root_node = *self.root_node;
+        animation::advance(macroquad::time::get_frame_time());
         batch(|| {
             let time = get_time();
             Runtime::with(|rt| {

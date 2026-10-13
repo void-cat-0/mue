@@ -8,6 +8,7 @@ use crate::{
     style::Style,
 };
 
+/// Fill an inscribed circle using the node's background brush.
 #[mue_macros::node]
 pub fn circle(style: &mut Style) {
     let Layout { rect, .. } = use_layout(style);
@@ -25,6 +26,7 @@ pub fn circle(style: &mut Style) {
     });
 }
 
+/// Draw prebuilt shapes within a node's layout and lifetime.
 #[mue_macros::node]
 pub fn shape(style: &mut Style, shapes: Rc<Shapes>) {
     use_layout(style);

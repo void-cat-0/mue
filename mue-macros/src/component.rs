@@ -21,6 +21,11 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = input.sig.generics.split_for_impl();
     let vis = &input.vis;
     let ident = &input.sig.ident;
+    let docs: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .collect();
 
     #[derive(Clone)]
     enum Arg {
@@ -213,6 +218,7 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
     };
 
     quote! {
+        #[doc = concat!("Styleable builder returned by [`", stringify!(#ident), "`].")]
         pub struct #builder_name #ty_generics #where_clause {
             #( #fields_decl ),*
         }
@@ -236,6 +242,7 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
 
         #style_derive
 
+        #(#docs)*
         #vis fn #ident #impl_generics(#( #new_args ),*) -> #builder_name #ty_generics #where_clause {
             #builder_name::new(#( #new_arg_names ),*)
         }

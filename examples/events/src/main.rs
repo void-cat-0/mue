@@ -1,14 +1,15 @@
-#[path = "../../palette.rs"]
-mod palette;
-
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
+    color::Color as UiColor,
     node::*,
     runtime::set_timeout,
     style::{Styleable, StyleableExt},
 };
+
+const BLUE: UiColor = UiColor::from_rgba(37, 58, 94, 255);
+const CANVAS: UiColor = UiColor::BLACK;
 
 fn main() {
     macroquad::Window::from_config(
@@ -18,7 +19,7 @@ fn main() {
             window_height: 600,
             ..Default::default()
         },
-        async { run().await },
+        run(),
     );
 }
 
@@ -44,11 +45,10 @@ fn view() -> impl Component {
             if hovered.get() { "\nHovered" } else { "" },
             wheel.get()
         )
-        .into()
     }))
     .use_pressed(pressed)
     .use_hovered(hovered)
-    .on_tap(move |_| count.update(|c| *c += 1))
+    .on_activate(move || count.update(|c| *c += 1))
     .on_long_press(move |_| {
         long_pressed.set(true);
         if let Some(old) = long_pressed_handle.replace(set_timeout(1., move || {
@@ -79,12 +79,12 @@ async fn run() {
                     .padding((24.,))
                     .width(440.)
                     .height(240.)
-                    .background(palette::BLUE),
+                    .background(BLUE),
             )),
     );
 
     loop {
-        clear_background(palette::CANVAS.into());
+        clear_background(CANVAS.into());
         app.frame();
         next_frame().await;
     }

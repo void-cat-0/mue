@@ -11,6 +11,8 @@
 - **事件与手势**：点击、hover、滚轮、长按、拖动、滑动、双指缩放与旋转，以及基于 taffy 布局的命中测试。
 - **自定义字体**：按字面（family / weight）注册 `ttf` / `otf`，字重本身也能是响应式的。
 - **Factory 与主题**：具名参数、实例级覆盖、按身份匹配的 `theme!` 分支、局部 Provider 和响应式换肤。
+- **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
+- **状态动画**：`with_animation` 事务、节点 `.animation(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
 
 ## 工作区结构
 
@@ -25,7 +27,9 @@
 | `examples/map` | 图片网格地图，支持拖动、惯性滑动、双指缩放与旋转。 |
 | `examples/pages` | 页面切换与切换动画。 |
 | `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
-| `examples/theme` | 嵌套 Factory、主题信号切换与动态 children。 |
+| `examples/theme` | 练习计数、按钮变体、嵌套主题与明暗主题切换。 |
+| `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
+| `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
 
 ## 快速开始
 
@@ -39,6 +43,8 @@ cargo run -p map
 cargo run -p pages
 cargo run -p tab
 cargo run -p theme
+cargo run -p document
+cargo run -p animation
 ```
 
 `Factory` 复用组件定义；主题只覆盖选中的样式字段。`theme!` 克隆分支里的 Factory 句柄，原句柄仍可用来创建实例：
@@ -80,6 +86,45 @@ async fn the_main() {
     }
 }
 ```
+
+## 文档与 Markdown
+
+`document("第一段\n\n第二段")` 显示纯文本；`markdown(source)` 将 CommonMark 转成 cosmic-text 的富文本 spans。两者都接受响应式属性，使用现有的字体、字号、行高、对齐、颜色及宽度样式。改变内容、宽度或字体会重新排版，自动高度包含全部段落。正文颜色可使用现有的 Brush，span 颜色可单独覆盖。
+
+```rust
+use mue_macroquad::{node::{document, markdown, Document, Span}, style::Styleable};
+
+let article = markdown("# Field notes\n\nA **quiet** morning by the *sea*.")
+    .width(600.).font_size(18.).line_height(28.);
+let signature = document(Document::rich([
+    Span::new("Mara Ellis").bold(),
+    Span::new("\nOctober 13, 2026").italic(),
+]));
+```
+
+Markdown 支持段落、标题、嵌套强调、行内/块代码、引用、列表及软/硬换行。链接和图片只显示标签，HTML 显示为文字；不提供编辑、点击链接、图片加载、表格或代码高亮。cosmic-text 负责字形与双向文本，CommonMark 解析由 pulldown-cmark 完成。
+
+## 动画
+
+```rust
+use mue_core::prelude::*;
+use mue_macroquad::{animation::{Animation, with_animation}, node::text, style::{Styleable, StyleableExt}};
+
+let visible = signal(true);
+let label = text("Hello")
+    .opacity(visible.select(1., 0.2))
+    .on_activate(move || {
+        with_animation(Animation::ease_in_out(0.3), || visible.toggle());
+    });
+```
+
+`with_animation` 让状态修改引起的可插值样式变化使用指定曲线，包括 computed 链、batch 内的事件与 Factory 主题。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`with_animation(None, ...)` 立即切换。节点的 `.animation(Animation::spring(0.8, 0.3))` 为该节点的可插值属性提供默认动画，显式事务优先。
+
+支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位尺寸/边距/内距/位置、透明度、圆角、字号、行高、变换矩阵、纯色及结构一致的渐变。`auto`、不同单位及不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。此版本不含关键帧、匹配几何或自动挂载/卸载过渡。
+
+自定义动画数据可实现 `Animatable`。`animated(*signal)` 返回 `Animated { value, running }`，也可用 `animated_with(*signal, curve)` 指定默认曲线。`value` 可用于 computed 或 Prop，`running` 可用于完成后的响应式逻辑。资源跟随创建它的 scope 释放。`App::frame` 自动在布局前调用 `mue_macroquad::animation::advance(dt)`。动画曲线、插值和帧驱动位于 mue-macroquad，core 仅负责传播通用更新上下文。
+
+`pages` 与 `tab` 保留三个页面，用同一个状态事务移动页面；不再维护示例内的计时器。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
 
 ## 手势
 
@@ -172,3 +217,9 @@ cargo clippy -p events -p gestures -p map --all-targets --no-deps
 ## License
 
 MIT，见 [LICENSE](LICENSE)。
+
+## 简洁的响应式属性
+
+`expanded.select(480., 180.)` 根据布尔状态选择值，可直接传给 `.width(...)`。响应式像素值不需要手动构造 Taffy 尺寸。`text(open.select("Open", "Closed"))` 和 `text(count.map(|n| format!("{n}")))` 自动转换文本类型。
+
+`state.toggle()` 切换布尔状态，`.toggle_on_tap(state)` 绑定点击切换。`.on_activate(move || ...)` 接受没有事件参数的点击回调。`document` / `markdown` 及其内容类型位于 `mue_macroquad::node`。

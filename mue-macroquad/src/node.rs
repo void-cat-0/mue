@@ -1,11 +1,13 @@
 mod children;
 mod container;
+pub mod document;
 mod geom;
 pub mod image;
 pub mod text;
 
 pub use children::{Children, IntoChildren, join_children, map_keyed, show_if};
 pub use container::{FlexboxBuilder, div, flexbox};
+pub use document::{Document, Span, SpanStyle, document, markdown};
 pub use geom::circle;
 pub use image::image;
 pub use text::text;
@@ -76,6 +78,7 @@ impl NodeInner {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// A borrowed node handle; copying it does not extend the node's lifetime.
 pub struct NodeRef {
     pub(crate) id: NodeId,
 }
@@ -139,21 +142,27 @@ impl Disposable for NodeRef {
 }
 
 #[repr(transparent)]
+/// An owning node handle. Dropping it releases its children and reactive scope.
 pub struct Node(Owned<NodeRef>);
 
 impl Node {
     pub(crate) fn retain_scope(&self, scope: Scope) {
         Runtime::with(|rt| rt.nodes.borrow_mut()[self.id].retained_scopes.push(scope));
     }
+    /// Build a custom node within its own reactive scope.
     pub fn build(f: impl FnOnce()) -> Self {
         Self::build_with_style(Style::default(), |_style| f())
     }
 
+    /// Build a custom node with layout, paint, and event styles.
     pub fn build_with_style(mut style: Style, f: impl FnOnce(&mut Style)) -> Self {
         let node = NodeInner::new(style.children.take().unwrap_or_else(|| ().into_children()));
         let scope = node.scope;
         CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
-        scope.run(|| f(&mut style));
+        scope.run(|| {
+            crate::animation::bind_style(&mut style);
+            f(&mut style);
+        });
         let mut node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
         node.hooks = style.build_hooks();
         append_hooks(node.as_mut(), &mut style);

@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// How an image scales within the node's content area.
 pub enum ObjectFit {
     #[default]
     Fill,
@@ -22,6 +23,8 @@ pub enum ObjectFit {
 
 impl PropValue for ObjectFit {}
 
+/// Display a texture with reactive sizing, cropping, fit, and foreground tint.
+/// Without an explicit size, the node uses the texture region's natural size.
 #[mue_macros::node]
 pub fn image(
     style: &mut Style,

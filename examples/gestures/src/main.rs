@@ -1,6 +1,3 @@
-#[path = "../../palette.rs"]
-mod palette;
-
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -12,60 +9,15 @@ use mue_macroquad::{
 };
 use taffy::Dimension;
 
-const INK: Color = Color::new(
-    palette::INK.r,
-    palette::INK.g,
-    palette::INK.b,
-    palette::INK.a,
-);
-const BLUE: Color = Color::new(
-    palette::HIGHLIGHT.r,
-    palette::HIGHLIGHT.g,
-    palette::HIGHLIGHT.b,
-    palette::HIGHLIGHT.a,
-);
-const MUTED: Color = Color::new(
-    palette::HIGHLIGHT.r,
-    palette::HIGHLIGHT.g,
-    palette::HIGHLIGHT.b,
-    palette::HIGHLIGHT.a,
-);
-const BACKGROUND: Color = Color::new(
-    palette::CANVAS.r,
-    palette::CANVAS.g,
-    palette::CANVAS.b,
-    palette::CANVAS.a,
-);
-const SURFACE: Color = Color::new(
-    palette::SURFACE.r,
-    palette::SURFACE.g,
-    palette::SURFACE.b,
-    palette::SURFACE.a,
-);
-const BORDER: Color = Color::new(
-    palette::HOVER.r,
-    palette::HOVER.g,
-    palette::HOVER.b,
-    palette::HOVER.a,
-);
-const PENDING: Color = Color::new(
-    palette::ACTIVE.r,
-    palette::ACTIVE.g,
-    palette::ACTIVE.b,
-    palette::ACTIVE.a,
-);
-const SUCCESS: Color = Color::new(
-    palette::GREEN.r,
-    palette::GREEN.g,
-    palette::GREEN.b,
-    palette::GREEN.a,
-);
-const CANCELLED: Color = Color::new(
-    palette::PLUM.r,
-    palette::PLUM.g,
-    palette::PLUM.b,
-    palette::PLUM.a,
-);
+const INK: Color = WHITE;
+const BLUE: Color = Color::new(100. / 255., 135. / 255., 180. / 255., 1.);
+const MUTED: Color = BLUE;
+const BACKGROUND: Color = BLACK;
+const SURFACE: Color = Color::new(25. / 255., 30. / 255., 40. / 255., 1.);
+const BORDER: Color = Color::new(55. / 255., 65. / 255., 85. / 255., 1.);
+const PENDING: Color = Color::new(70. / 255., 95. / 255., 130. / 255., 1.);
+const SUCCESS: Color = Color::new(46. / 255., 82. / 255., 63. / 255., 1.);
+const CANCELLED: Color = Color::new(88. / 255., 52. / 255., 84. / 255., 1.);
 
 #[derive(Clone, Copy)]
 enum Demo {
@@ -251,7 +203,6 @@ fn panel(demo: Demo) -> Node {
                     MUTED,
                 );
                 let center = vec2(r.w * 0.5, r.h * 0.54);
-                // Keep all feedback inside the test panel, including captured drags.
                 let screen = |p: Vec2| {
                     vec2(
                         r.x + p.x.clamp(30., (r.w - 30.).max(30.)),

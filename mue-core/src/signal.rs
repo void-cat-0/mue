@@ -43,6 +43,7 @@ impl SignalInner {
     }
 }
 
+/// A copyable read-only handle. Tracked reads subscribe the current effect.
 pub struct ReadSignal<T> {
     pub(crate) id: SignalId,
     _marker: PhantomData<T>,
@@ -56,6 +57,7 @@ impl<T> Clone for ReadSignal<T> {
 
 impl<T> Copy for ReadSignal<T> {}
 
+/// Read reactive values with or without subscribing to changes.
 pub trait Access {
     type Value;
 
@@ -113,11 +115,17 @@ impl<T> ReadSignal<T> {
         Runtime::with(|rt| self.id == rt.null_signal)
     }
 
+    /// Whether this handle's owning scope or signal has been disposed.
+    pub fn is_disposed(&self) -> bool {
+        Runtime::with(|rt| !rt.signals.borrow().contains_key(self.id))
+    }
+
     fn with_inner_mut<R>(self, rt: &Runtime, f: impl FnOnce(&mut SignalInner) -> R) -> R {
         f(&mut rt.signal_mut(self.id))
     }
 
     #[track_caller]
+    /// Derive a value, notifying dependents only when the result changes.
     pub fn map<U: PartialEq + 'static>(self, mut f: impl FnMut(T) -> U + 'static) -> ReadSignal<U>
     where
         T: Clone + 'static,
@@ -130,6 +138,24 @@ impl<T> ReadSignal<T> {
         T: Clone + 'static,
     {
         crate::effect::computed_always(move |_| f(self.get_clone()))
+    }
+}
+
+impl ReadSignal<bool> {
+    /// Choose between two values whenever this boolean changes.
+    /// For example, `expanded.select(480., 180.)` supplies a reactive pixel width.
+    pub fn select<T: Clone + PartialEq + 'static>(
+        self,
+        when_true: T,
+        when_false: T,
+    ) -> ReadSignal<T> {
+        self.map(move |value| {
+            if value {
+                when_true.clone()
+            } else {
+                when_false.clone()
+            }
+        })
     }
 }
 
@@ -166,11 +192,19 @@ impl<T: 'static> Access for ReadSignal<T> {
 }
 
 #[repr(transparent)]
+/// A copyable writable handle whose updates notify subscribed effects.
 pub struct Signal<T>(ReadSignal<T>);
 
 impl<T> Clone for Signal<T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl Signal<bool> {
+    /// Invert the value and notify dependents.
+    pub fn toggle(self) {
+        self.set_with(|value| !value);
     }
 }
 impl<T> Copy for Signal<T> {}
@@ -282,6 +316,7 @@ fn create_signal<T: 'static>(inner: SignalInner) -> Signal<T> {
 }
 
 #[track_caller]
+/// Create equality-checked state in the current scope.
 pub fn signal<T: PartialEq + 'static>(value: T) -> Signal<T> {
     Signal::new(value)
 }

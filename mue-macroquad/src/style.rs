@@ -111,7 +111,7 @@ macro_rules! define_style {
     };
 
     (
-        $($name:ident : $ty:ty $( = $default:expr)?;)*
+        $($(#[$property_doc:meta])* $name:ident : $ty:ty $( = $default:expr)?;)*
         @rects {
             $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)*
         }
@@ -121,7 +121,9 @@ macro_rules! define_style {
     ) => {
         paste! {
             #[derive(Default)]
+            /// Optional layout, paint, font, and event properties for a node.
             pub struct Style {
+                pub(crate) animation: Option<crate::animation::Animation>,
                 $(pub(crate) $name: Option<Prop<$ty>>,)*
                 $(
                     pub(crate) [<$rect_name _left>]: Option<Prop<$rect_ty>>,
@@ -133,10 +135,19 @@ macro_rules! define_style {
                 pub(crate) children: Option<Owned<Children>>,
             }
 
+            /// Fluent styles accepting either static properties or reactive signals.
+            /// Length literals and reactive `f32` values are pixels.
             pub trait Styleable: Sized {
                 fn style_mut(&mut self) -> &mut Style;
 
+                /// Animate changes to this node's interpolatable visual properties.
+                fn animation(mut self, animation: crate::animation::Animation) -> Self {
+                    self.style_mut().animation = Some(animation);
+                    self
+                }
+
                 $(
+                    $(#[$property_doc])*
                     fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
                         self.style_mut().$name = Some(value.into());
                         self
@@ -189,6 +200,7 @@ macro_rules! define_style {
                     }
                 )*
 
+                /// Replace the node's children. Factory content is passed to `create`.
                 fn children(mut self, children: impl IntoChildren) -> Self {
                     self.style_mut().children = Some(children.into_children());
                     self
@@ -216,7 +228,9 @@ macro_rules! define_style {
                     result.provide_defaults(default);
                     result
                 }
+                /// Fill missing properties from `other` and append its event hooks.
                 pub fn merge(mut self, other: Self) -> Self {
+                    self.animation = self.animation.or(other.animation);
                     $(
                         self.$name = self.$name.or(other.$name);
                     )*
@@ -230,7 +244,9 @@ macro_rules! define_style {
                     self
                 }
 
+                /// Fill missing properties and prepend default event hooks.
                 pub fn provide_defaults(&mut self, mut default: Self) {
+                    self.animation = self.animation.or(default.animation);
                     $(
                         if self.$name.is_none() {
                             self.$name = default.$name;
@@ -309,46 +325,68 @@ define_style! {
 
     display: Display;
 
+    /// Set the preferred width; numbers are pixels and the default is auto.
     width: Dimension = Dimension::auto();
+    /// Set the preferred height; numbers are pixels and the default is auto.
     height: Dimension = Dimension::auto();
 
+    /// Set a lower bound on width.
     min_width: Dimension = Dimension::auto();
+    /// Set a lower bound on height.
     min_height: Dimension = Dimension::auto();
 
+    /// Set an upper bound on width.
     max_width: Dimension = Dimension::auto();
+    /// Set an upper bound on height.
     max_height: Dimension = Dimension::auto();
 
     overflow_x: Overflow = Overflow::Visible;
     overflow_y: Overflow = Overflow::Visible;
 
+    /// Align children along the flex cross axis.
     align_items: Option<taffy::AlignItems>;
     align_self: Option<taffy::AlignSelf>;
     justify_items: Option<taffy::AlignItems>;
     justify_self: Option<taffy::AlignSelf>;
     align_content: Option<taffy::AlignContent>;
+    /// Distribute children along the flex main axis.
     justify_content: Option<taffy::JustifyContent>;
 
+    /// Choose normal relative positioning or absolute positioning with insets.
     position: Position;
 
+    /// Choose the main axis and ordering for flex children.
     flex_direction: taffy::FlexDirection;
     flex_wrap: taffy::FlexWrap;
 
     flex_basis: Dimension = Dimension::auto();
+    /// Set how much of the parent's remaining main-axis space this node takes.
     flex_grow: f32 = 0.0;
+    /// Set how much this node shrinks when flex children exceed available space.
     flex_shrink: f32 = 1.0;
 
     // Paint
+    /// Transform painted geometry without changing its layout size.
     transform: Matrix = Matrix::IDENTITY;
+    /// Multiply painted alpha; 0 is transparent and 1 is opaque.
     opacity: f32 = 1.0;
+    /// Paint the background with a solid color, gradient, or texture brush.
     background: Brush = Brush::default();
+    /// Set the foreground brush for text and image tint.
     color: Brush = Brush::Solid(Color::WHITE);
+    /// Round background corners by this radius in pixels.
     radius: f32 = 0.0;
 
     // Text
+    /// Align shaped lines within the text node's content width.
     text_align: Option<Align>;
+    /// Set glyph size in pixels, including document spans without overrides.
     font_size: f32 = 32.0;
+    /// Set baseline spacing in pixels.
     line_height: f32 = 44.0;
+    /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
+    /// Choose a font weight; the matching face must be registered or installed.
     font_weight: Weight = Weight::NORMAL;
 
     @rects {

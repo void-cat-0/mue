@@ -52,6 +52,7 @@ impl Deref for Dependencies {
 }
 
 pub(crate) struct EffectInner {
+    pub update_context: crate::update_context::UpdateContext,
     pub callback: Option<EffectCallback>,
     pub cleanups: Vec<CleanupCallback>,
     pub signal: SignalId,
@@ -72,6 +73,7 @@ impl EffectInner {
         #[cfg(debug_assertions)] location: &'static std::panic::Location<'static>,
     ) -> Self {
         Self {
+            update_context: Default::default(),
             callback: Some(callback),
             cleanups: Vec::new(),
             signal,
@@ -129,6 +131,7 @@ impl Disposable for Effect {
 }
 
 #[track_caller]
+/// Watch changes to one signal. The callback does not run on registration.
 pub fn watch<T: 'static>(
     signal: ReadSignal<T>,
     mut f: impl FnMut(ReadSignal<T>) + 'static,
@@ -154,6 +157,7 @@ pub fn watch<T: 'static>(
 }
 
 #[track_caller]
+/// Watch one signal and run the callback once immediately with its current value.
 pub fn watch_immediate<T: 'static>(
     signal: ReadSignal<T>,
     mut f: impl FnMut(Prop<T>) + 'static,
@@ -181,6 +185,7 @@ pub fn watch_immediate<T: 'static>(
 }
 
 #[track_caller]
+/// Run an effect immediately and rerun it when any tracked read changes.
 pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
@@ -256,6 +261,8 @@ fn create_computed<T: 'static>(callback: EffectCallback) -> ReadSignal<T> {
 }
 
 #[track_caller]
+/// Derive a cached value from tracked reads, notifying dependents on unequal results.
+/// The callback receives the previous result, or `None` on its first run.
 pub fn computed<T: PartialEq + 'static>(
     mut f: impl FnMut(Option<&T>) -> T + 'static,
 ) -> ReadSignal<T> {
@@ -274,6 +281,7 @@ pub fn computed<T: PartialEq + 'static>(
 }
 
 #[track_caller]
+/// Derive a cached value and notify dependents after every recomputation.
 pub fn computed_always<T: 'static>(mut f: impl FnMut(Option<&T>) -> T + 'static) -> ReadSignal<T> {
     create_computed(Box::new(move |value| {
         let new_value = f(value.as_mut().and_then(|v| v.downcast_ref::<T>()));

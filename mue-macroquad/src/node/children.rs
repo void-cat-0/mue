@@ -10,8 +10,10 @@ use mue_core::{
 
 use crate::node::{IntoNode, Node, NodeRef};
 
+/// A reactive ordered list of borrowed node handles.
 pub type Children = ReadSignal<Rc<[NodeRef]>>;
 
+/// Convert nodes, tuples, and reactive child lists into owned children.
 pub trait IntoChildren {
     fn into_children(self) -> Owned<Children>;
 }
@@ -61,6 +63,8 @@ impl<const N: usize> IntoChildren for [Node; N] {
     impl_static_children!(@inner [Node; N]);
 }
 
+/// Map a reactive list to nodes, retaining each node while its key is present.
+/// Keys must be unique; retained nodes keep their original content and local state.
 pub fn map_keyed<T, K, N>(
     list: impl Into<Prop<Rc<[T]>>>,
     key_fn: impl FnMut(&T) -> K + 'static,
@@ -107,6 +111,7 @@ where
     )
 }
 
+/// Show an existing node conditionally, retaining its state while hidden.
 pub fn show_if(condition: impl Into<Prop<bool>>, node: Node) -> Owned<Children> {
     fn inner(condition: Prop<bool>, node: Node) -> Owned<Children> {
         let refs = Rc::<[NodeRef]>::from([*node]);
@@ -125,6 +130,7 @@ pub fn show_if(condition: impl Into<Prop<bool>>, node: Node) -> Owned<Children> 
     inner(condition.into(), node)
 }
 
+/// Flatten owned child lists into one reactive list, preserving order.
 pub fn join_children(children: impl Into<Rc<[Owned<Children>]>>) -> Owned<Children> {
     fn inner(children: Rc<[Owned<Children>]>) -> Owned<Children> {
         let mut buffer = Vec::with_capacity(children.len());

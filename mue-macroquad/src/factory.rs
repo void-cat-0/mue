@@ -42,6 +42,7 @@ impl<B, O: Clone> Clone for Factory<B, O> {
     }
 }
 
+/// Define a reusable component constructor with a stable identity for themes.
 pub fn factory<B>(base: B) -> Factory<B> {
     Factory {
         base: Rc::new(base),
@@ -53,6 +54,7 @@ pub fn factory<B>(base: B) -> Factory<B> {
 }
 
 impl<B, O> Factory<B, O> {
+    /// Set default instance options before adding a style callback.
     pub fn defaults<P: Clone + 'static>(self, defaults: P) -> Factory<B, P> {
         assert!(!self.styled, "set factory defaults before style");
         Factory {
@@ -64,6 +66,7 @@ impl<B, O> Factory<B, O> {
         }
     }
 
+    /// Set visual defaults from the final instance options.
     pub fn style(self, style: impl Fn(Style, &O) -> Style + 'static) -> Self {
         Self {
             base: self.base,
@@ -76,6 +79,8 @@ impl<B, O> Factory<B, O> {
 }
 
 impl<B, O: Clone> Factory<B, O> {
+    /// Create a styleable instance. Pass its content here, including child lists.
+    /// Instance styles override themes, factory defaults, and base styles.
     pub fn create<C, I, R>(&self, content: C) -> FactoryInstance<B, O, I, R>
     where
         C: Into<I>,
@@ -92,6 +97,7 @@ impl<B, O: Clone> Factory<B, O> {
     }
 }
 
+/// A component instance awaiting node construction, with content and options.
 pub struct FactoryInstance<B, O, C, R> {
     factory: Factory<B, O>,
     content: C,
@@ -101,6 +107,7 @@ pub struct FactoryInstance<B, O, C, R> {
 }
 
 impl<B, O, C, R> FactoryInstance<B, O, C, R> {
+    /// Override this instance's options before theme and style resolution.
     pub fn options(mut self, change: impl FnOnce(&mut O)) -> Self {
         change(&mut self.options);
         self
