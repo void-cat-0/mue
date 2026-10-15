@@ -12,3 +12,6 @@ mue-core = { workspace = true }
 mue-macroquad = { workspace = true }
 mue-macros = { workspace = true }
 taffy = { workspace = true }
+
+[lib]
+crate-type = ["cdylib", "rlib"]

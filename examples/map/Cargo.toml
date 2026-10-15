@@ -10,3 +10,6 @@ rust-version.workspace = true
 macroquad = { workspace = true }
 mue-core = { workspace = true }
 mue-macroquad = { workspace = true }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
