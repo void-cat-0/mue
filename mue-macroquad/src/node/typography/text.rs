@@ -57,7 +57,7 @@ impl mue_core::prop::PropValue for TextVerticalAlign {}
 pub struct FontState {
     font_system: FontSystem,
     swash_cache: SwashCache,
-    font_atlas: Atlas,
+    font_atlas: Option<Atlas>,
 }
 
 impl FontState {
@@ -92,7 +92,7 @@ impl Default for FontState {
         Self {
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
-            font_atlas: Atlas::new(4096),
+            font_atlas: None,
         }
     }
 }
@@ -309,8 +309,14 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
 
     let paint = use_paint(style);
     use_background(style, rect);
-    let font_size = style.take_font_size();
-    let line_height = style.take_line_height();
+    let declared_font_size = style.font_size;
+    let font_size = crate::node::use_font_size();
+    crate::node::NodeInner::with_mut(|node| {
+        if node.font_size.is_none() {
+            node.font_size = declared_font_size;
+        }
+    });
+    let line_height = crate::style::units::resolve_length(style.take_line_height(), "line_height");
     let font_family = style.take_font_family();
     let font_weight = style.take_font_weight();
     let font_italic = style.take_font_italic();
@@ -318,8 +324,10 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
     let wrap_mode = style.take_text_wrap_mode();
     let overflow = style.take_text_overflow();
     let max_lines = style.take_text_max_lines();
-    let spacing = style.take_paragraph_spacing();
-    let letter_spacing = style.take_letter_spacing();
+    let spacing =
+        crate::style::units::resolve_length(style.take_paragraph_spacing(), "paragraph_spacing");
+    let letter_spacing =
+        crate::style::units::resolve_length(style.take_letter_spacing(), "letter_spacing");
     let tab_width = style.take_tab_width();
     let vertical_align = style.take_text_vertical_align();
     let strike = style.take_text_strikethrough();
@@ -494,8 +502,8 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                         }
                         for glyph in run.glyphs.iter() {
                             let physical_glyph = glyph.physical((0., 0.), 1.0);
-                            if fonts
-                                .font_atlas
+                            let atlas = fonts.font_atlas.get_or_insert_with(|| Atlas::new(4096));
+                            if atlas
                                 .cache_glyph(
                                     &mut fonts.font_system,
                                     &mut fonts.swash_cache,
@@ -505,14 +513,8 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                             {
                                 continue;
                             }
-                            let rect = fonts
-                                .font_atlas
-                                .get_glyph(physical_glyph.cache_key)
-                                .unwrap();
-                            let placement = fonts
-                                .font_atlas
-                                .get_placement(physical_glyph.cache_key)
-                                .unwrap();
+                            let rect = atlas.get_glyph(physical_glyph.cache_key).unwrap();
+                            let placement = atlas.get_placement(physical_glyph.cache_key).unwrap();
                             let draw_rect = Rect::new(
                                 (physical_glyph.x + placement.left) as f32 + origin.x,
                                 ((physical_glyph.y - placement.top) as f32 + run.line_y) + origin.y,
@@ -520,8 +522,8 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                                 placement.height as f32,
                             );
                             let uv_rect = {
-                                let width = fonts.font_atlas.texture.width();
-                                let height = fonts.font_atlas.texture.height();
+                                let width = atlas.texture.width();
+                                let height = atlas.texture.height();
                                 Rect::new(
                                     rect.x / width,
                                     rect.y / height,
@@ -531,7 +533,7 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                             };
                             p.draw_texture(
                                 draw_rect,
-                                fonts.font_atlas.texture.clone(),
+                                atlas.texture.clone(),
                                 uv_rect,
                                 glyph
                                     .color_opt

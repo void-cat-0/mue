@@ -1,7 +1,7 @@
 mod ext;
 pub mod units;
 
-pub use units::{IntoLength, IntoLengthValue, Percent, Px, Vh, Vw, percent, px, vh, vw};
+pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
 use crate::{color::Color, shader::Brush};
 use cosmic_text::Align;
@@ -16,10 +16,7 @@ use mue_core::{
 };
 use paste::paste;
 use std::mem;
-use taffy::{
-    BoxSizing, Dimension, Display, LengthPercentage, LengthPercentageAuto, Overflow, Point,
-    Position, prelude::TaffyZero,
-};
+use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
     event::{pointer::PointerEvent, wheel::WheelEvent},
@@ -34,11 +31,11 @@ pub trait IntoRectProp<T> {
 }
 impl<U, T> IntoRectProp<T> for (U,)
 where
-    U: IntoLength<T>,
+    U: Into<Prop<T>>,
     T: Clone,
 {
     fn into_rect_prop(self) -> taffy::Rect<Prop<T>> {
-        let prop = self.0.into_length();
+        let prop = self.0.into();
         taffy::Rect {
             left: prop.clone(),
             right: prop.clone(),
@@ -49,13 +46,13 @@ where
 }
 impl<U1, U2, T> IntoRectProp<T> for (U1, U2)
 where
-    U1: IntoLength<T>,
-    U2: IntoLength<T>,
+    U1: Into<Prop<T>>,
+    U2: Into<Prop<T>>,
     T: Clone,
 {
     fn into_rect_prop(self) -> taffy::Rect<Prop<T>> {
-        let x = self.0.into_length();
-        let y = self.1.into_length();
+        let x = self.0.into();
+        let y = self.1.into();
         taffy::Rect {
             left: x.clone(),
             right: x,
@@ -66,43 +63,31 @@ where
 }
 impl<U1, U2, U3, U4, T> IntoRectProp<T> for (U1, U2, U3, U4)
 where
-    U1: IntoLength<T>,
-    U2: IntoLength<T>,
-    U3: IntoLength<T>,
-    U4: IntoLength<T>,
+    U1: Into<Prop<T>>,
+    U2: Into<Prop<T>>,
+    U3: Into<Prop<T>>,
+    U4: Into<Prop<T>>,
     T: Clone,
 {
     fn into_rect_prop(self) -> taffy::Rect<Prop<T>> {
         taffy::Rect {
-            left: self.0.into_length(),
-            top: self.1.into_length(),
-            bottom: self.2.into_length(),
-            right: self.3.into_length(),
+            left: self.0.into(),
+            top: self.1.into(),
+            bottom: self.2.into(),
+            right: self.3.into(),
         }
     }
 }
 
 macro_rules! define_style {
-    (@setter [length] [$(#[$doc:meta])*] $name:ident, $ty:ty) => {
-        $(#[$doc])*
-        fn $name(mut self, value: impl IntoLengthValue) -> Self {
-            self.style_mut().$name = Some(value.into_length_value());
-            self
-        }
-    };
-    (@setter [layout] [$(#[$doc:meta])*] $name:ident, $ty:ty) => {
-        $(#[$doc])*
-        fn $name(mut self, value: impl IntoLength<$ty>) -> Self {
-            self.style_mut().$name = Some(value.into_length());
-            self
-        }
-    };
-    (@setter [] [$(#[$doc:meta])*] $name:ident, $ty:ty) => {
-        $(#[$doc])*
-        fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
-            self.style_mut().$name = Some(value.into());
-            self
-        }
+    (@themed_property $result:ident, $theme:ident, $defaults:ident, font_size, $ty:ty, $($default:expr)?) => {
+        let fallback = $defaults.font_size.take();
+        $result.font_size = Some(computed_always(move |_| {
+            let current = $theme.get_clone();
+            current.font_size.as_ref().or(fallback.as_ref())
+                .map(|value| value.get())
+                .unwrap_or(FontSize::Em(1.))
+        }).into());
     };
     (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
         let fallback = $defaults.$field.take();
@@ -135,7 +120,7 @@ macro_rules! define_style {
     };
 
     (
-        $($(#[$property_doc:meta])* $name:ident : $ty:ty $(= $default:expr)? $(=> $kind:ident)?;)*
+        $($(#[$property_doc:meta])* $name:ident : $ty:ty $(= $default:expr)?;)*
         @rects {
             $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)*
         }
@@ -171,34 +156,38 @@ macro_rules! define_style {
                 }
 
                 $(
-                    define_style!(@setter [$($kind)?] [$(#[$property_doc])*] $name, $ty);
+                    $(#[$property_doc])*
+                    fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
+                        self.style_mut().$name = Some(value.into());
+                        self
+                    }
                 )*
 
                 $(
-                    fn [<$rect_name _left>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
-                        self.style_mut().[<$rect_name _left>] = Some(value.into_length());
+                    fn [<$rect_name _left>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        self.style_mut().[<$rect_name _left>] = Some(value.into());
                         self
                     }
-                    fn [<$rect_name _right>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
-                        self.style_mut().[<$rect_name _right>] = Some(value.into_length());
+                    fn [<$rect_name _right>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        self.style_mut().[<$rect_name _right>] = Some(value.into());
                         self
                     }
-                    fn [<$rect_name _top>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
-                        self.style_mut().[<$rect_name _top>] = Some(value.into_length());
+                    fn [<$rect_name _top>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        self.style_mut().[<$rect_name _top>] = Some(value.into());
                         self
                     }
-                    fn [<$rect_name _bottom>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
-                        self.style_mut().[<$rect_name _bottom>] = Some(value.into_length());
+                    fn [<$rect_name _bottom>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        self.style_mut().[<$rect_name _bottom>] = Some(value.into());
                         self
                     }
-                    fn [<$rect_name _x>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
-                        let prop = value.into_length();
+                    fn [<$rect_name _x>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        let prop = value.into();
                         self.style_mut().[<$rect_name _left>] = Some(prop.clone());
                         self.style_mut().[<$rect_name _right>] = Some(prop.clone());
                         self
                     }
-                    fn [<$rect_name _y>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
-                        let prop = value.into_length();
+                    fn [<$rect_name _y>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        let prop = value.into();
                         self.style_mut().[<$rect_name _top>] = Some(prop.clone());
                         self.style_mut().[<$rect_name _bottom>] = Some(prop);
                         self
@@ -346,19 +335,19 @@ define_style! {
     display: Display;
 
     /// Set the preferred width; numbers are pixels and the default is auto.
-    width: Dimension = Dimension::auto() => layout;
+    width: Size = Size::Auto;
     /// Set the preferred height; numbers are pixels and the default is auto.
-    height: Dimension = Dimension::auto() => layout;
+    height: Size = Size::Auto;
 
     /// Set a lower bound on width.
-    min_width: Dimension = Dimension::auto() => layout;
+    min_width: Size = Size::Auto;
     /// Set a lower bound on height.
-    min_height: Dimension = Dimension::auto() => layout;
+    min_height: Size = Size::Auto;
 
     /// Set an upper bound on width.
-    max_width: Dimension = Dimension::auto() => layout;
+    max_width: Size = Size::Auto;
     /// Set an upper bound on height.
-    max_height: Dimension = Dimension::auto() => layout;
+    max_height: Size = Size::Auto;
 
     overflow_x: Overflow = Overflow::Visible;
     overflow_y: Overflow = Overflow::Visible;
@@ -380,12 +369,12 @@ define_style! {
     flex_wrap: taffy::FlexWrap;
 
     /// Horizontal space between columns and vertical space between rows.
-    column_gap: LengthPercentage = LengthPercentage::ZERO => layout;
-    row_gap: LengthPercentage = LengthPercentage::ZERO => layout;
+    column_gap: Size = Size::Px(0.);
+    row_gap: Size = Size::Px(0.);
     /// Preferred width divided by height, when one dimension is automatic.
     aspect_ratio: Option<f32>;
 
-    flex_basis: Dimension = Dimension::auto() => layout;
+    flex_basis: Size = Size::Auto;
     /// Set how much of the parent's remaining main-axis space this node takes.
     flex_grow: f32 = 0.0;
     /// Set how much this node shrinks when flex children exceed available space.
@@ -401,15 +390,16 @@ define_style! {
     /// Set the foreground brush for text and image tint.
     color: Brush = Brush::Solid(Color::WHITE);
     /// Round background corners by this radius in pixels.
-    radius: f32 = 0.0 => length;
+    radius: Size = Size::Px(0.);
 
     // Text
     /// Align shaped lines within the text node's content width.
     text_align: Option<Align>;
-    /// Set glyph size in pixels, including document spans without overrides.
-    font_size: f32 = 32.0 => length;
+    /// Set glyph size; percent/em use the parent computed size, rem uses the root.
+    /// Unspecified sizes inherit; the root defaults to 32 logical pixels.
+    font_size: FontSize = FontSize::Em(1.);
     /// Set baseline spacing in pixels.
-    line_height: f32 = 44.0 => length;
+    line_height: Size = Size::Px(44.);
     /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
@@ -427,15 +417,15 @@ define_style! {
     text_max_lines: Option<usize>;
     text_vertical_align: crate::node::TextVerticalAlign;
     /// Extra space between newline-delimited paragraphs, in logical pixels.
-    paragraph_spacing: f32 = 0. => length;
-    letter_spacing: f32 = 0. => length;
+    paragraph_spacing: Size = Size::Px(0.);
+    letter_spacing: Size = Size::Px(0.);
     tab_width: u16 = 4;
 
     @rects {
-        margin: taffy::Rect<LengthPercentageAuto> = LengthPercentageAuto::ZERO;
-        padding: taffy::Rect<LengthPercentage> = LengthPercentage::ZERO;
-        border: taffy::Rect<LengthPercentage> = LengthPercentage::ZERO;
-        inset: taffy::Rect<LengthPercentageAuto> = LengthPercentageAuto::auto();
+        margin: taffy::Rect<Size> = Size::Px(0.);
+        padding: taffy::Rect<Size> = Size::Px(0.);
+        border: taffy::Rect<Size> = Size::Px(0.);
+        inset: taffy::Rect<Size> = Size::Auto;
     }
 
     @hooks {
@@ -533,17 +523,17 @@ impl Style {
             display: display.get(),
             box_sizing: box_sizing.get(),
             aspect_ratio: aspect_ratio.get(),
-            gap: gap.get(),
+            gap: gap.get().map(|v| v.to_length_percentage("gap")),
 
-            size: size.get(),
-            min_size: min_size.get(),
-            max_size: max_size.get(),
+            size: size.get().map(Size::to_dimension),
+            min_size: min_size.get().map(Size::to_dimension),
+            max_size: max_size.get().map(Size::to_dimension),
 
             overflow: overflow.get(),
 
-            margin: margin.get(),
-            padding: padding.get(),
-            border: border.get(),
+            margin: margin.get().map(Size::to_length_percentage_auto),
+            padding: padding.get().map(|v| v.to_length_percentage("padding")),
+            border: border.get().map(|v| v.to_length_percentage("border")),
 
             align_items: align_items.get(),
             align_self: align_self.get(),
@@ -553,39 +543,16 @@ impl Style {
             justify_content: justify_content.get(),
 
             position: position.get(),
-            inset: inset.get(),
+            inset: inset.get().map(Size::to_length_percentage_auto),
 
             flex_direction: flex_direction.get(),
             flex_wrap: flex_wrap.get(),
 
-            flex_basis: flex_basis.get(),
+            flex_basis: flex_basis.get().to_dimension(),
             flex_grow: flex_grow.get(),
             flex_shrink: flex_shrink.get(),
 
             ..Default::default()
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Style, Styleable, percent, px, vh, vw};
-
-    #[test]
-    fn styleable_accepts_explicit_units_for_layout_and_scalar_lengths() {
-        let _style = Style::new()
-            .width(px(120.0))
-            .height(percent(50.0))
-            .min_width(vw(10.0))
-            .max_height(vh(25.0))
-            .column_gap(px(8.0))
-            .row_gap(percent(2.0))
-            .padding((px(1.0), vw(2.0)))
-            .margin((vh(1.0), px(2.0), percent(3.0), vw(4.0)))
-            .inset_x(px(5.0))
-            .font_size(px(18.0))
-            .line_height(vh(4.0))
-            .letter_spacing(px(0.5))
-            .paragraph_spacing(vw(1.0));
     }
 }

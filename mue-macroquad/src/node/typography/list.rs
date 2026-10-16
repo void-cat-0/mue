@@ -41,7 +41,6 @@ pub fn list(style: &mut Style, #[default] marker: ListMarker) {
             .enumerate()
             .collect::<Rc<[(usize, NodeRef)]>>()
     });
-    let font_size = style.take_font_size();
     let line_height = style.take_line_height();
     let font_family = style.take_font_family();
     let font_weight = style.take_font_weight();
@@ -56,7 +55,6 @@ pub fn list(style: &mut Style, #[default] marker: ListMarker) {
                 .items_start()
                 .children((
                     text(marker.map(move |marker| Rc::<str>::from(marker.label(index))))
-                        .font_size(font_size)
                         .line_height(line_height)
                         .font_family(font_family.clone())
                         .font_weight(font_weight)

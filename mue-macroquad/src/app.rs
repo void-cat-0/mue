@@ -24,7 +24,12 @@ pub struct App {
 impl App {
     /// Build and retain a root view.
     pub fn new(root_node: impl IntoNode) -> Self {
+        crate::viewport::set(crate::viewport::Viewport {
+            width: macroquad::window::screen_width(),
+            height: macroquad::window::screen_height(),
+        });
         let root_node = root_node.into_node();
+        root_node.resolve_font_sizes();
         let layout_id = Runtime::with(|rt| rt.node(root_node.id).layout_id);
 
         Self {
@@ -39,10 +44,13 @@ impl App {
     /// Call once per frame before `macroquad::next_frame`.
     pub fn frame(&mut self) {
         let root_node = *self.root_node;
-        animation::advance(macroquad::time::get_frame_time());
-        crate::viewport::set(crate::viewport::Viewport {
+        let viewport = crate::viewport::Viewport {
             width: macroquad::window::screen_width(),
             height: macroquad::window::screen_height(),
+        };
+        batch(|| {
+            crate::viewport::set(viewport);
+            animation::advance(macroquad::time::get_frame_time());
         });
         batch(|| {
             let time = get_time();
@@ -65,15 +73,17 @@ impl App {
                     callback();
                 }
             });
-
+        });
+        self.root_node.resolve_font_sizes();
+        batch(|| {
             if let Some(layout_id) = self.layout_id {
                 Runtime::with_taffy_mut(|taffy| {
                     taffy
                         .compute_layout_with_measure(
                             layout_id,
                             Size {
-                                width: AvailableSpace::Definite(macroquad::window::screen_width()),
-                                height: AvailableSpace::Definite(macroquad::window::screen_height()),
+                                width: AvailableSpace::Definite(viewport.width),
+                                height: AvailableSpace::Definite(viewport.height),
                             },
                             |known_dimensions, available_space, _node_id, node_context, _style| {
                                 node_context.map_or(Size::ZERO, |f| {

@@ -82,6 +82,50 @@ impl Animation {
 /// Values that can be presented between two state values.
 pub trait Animatable: Clone + PartialEq + 'static {
     fn interpolate(from: &Self, to: &Self, progress: f32) -> Self;
+
+    fn can_interpolate(_from: &Self, _to: &Self) -> bool {
+        true
+    }
+}
+
+use crate::style::{FontSize, Size};
+
+impl Animatable for Size {
+    fn can_interpolate(from: &Self, to: &Self) -> bool {
+        std::mem::discriminant(from) == std::mem::discriminant(to) && !matches!(to, Self::Auto)
+    }
+
+    fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
+        match (from, to) {
+            (Self::Px(a), Self::Px(b)) => Self::Px(f32::interpolate(a, b, progress)),
+            (Self::Percent(a), Self::Percent(b)) => Self::Percent(f32::interpolate(a, b, progress)),
+            (Self::Vw(a), Self::Vw(b)) => Self::Vw(f32::interpolate(a, b, progress)),
+            (Self::Vh(a), Self::Vh(b)) => Self::Vh(f32::interpolate(a, b, progress)),
+            // Unit changes, including a transition to or from `Auto`, are
+            // discrete. The declaration is never implicitly converted.
+            _ => *to,
+        }
+    }
+}
+
+impl Animatable for FontSize {
+    fn can_interpolate(from: &Self, to: &Self) -> bool {
+        std::mem::discriminant(from) == std::mem::discriminant(to)
+    }
+
+    fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
+        match (from, to) {
+            (Self::Px(a), Self::Px(b)) => Self::Px(f32::interpolate(a, b, progress)),
+            (Self::Percent(a), Self::Percent(b)) => Self::Percent(f32::interpolate(a, b, progress)),
+            (Self::Em(a), Self::Em(b)) => Self::Em(f32::interpolate(a, b, progress)),
+            (Self::Rem(a), Self::Rem(b)) => Self::Rem(f32::interpolate(a, b, progress)),
+            (Self::Vw(a), Self::Vw(b)) => Self::Vw(f32::interpolate(a, b, progress)),
+            (Self::Vh(a), Self::Vh(b)) => Self::Vh(f32::interpolate(a, b, progress)),
+            // Different units switch immediately; no implicit conversion is
+            // possible without the layout/typography resolution context.
+            _ => *to,
+        }
+    }
 }
 
 impl Animatable for f32 {
@@ -240,7 +284,8 @@ pub fn animated_with<T: Animatable>(
         tween.from = value.get_clone_untracked();
         tween.to = destination.clone();
         tween.elapsed = 0.;
-        tween.animation = animation.filter(|_| tween.from != destination);
+        tween.animation = animation
+            .filter(|_| tween.from != destination && T::can_interpolate(&tween.from, &destination));
         let is_running = tween.animation.is_some();
         drop(tween);
         if !is_running {
@@ -456,6 +501,48 @@ mod tests {
         assert_eq!(displayed.value.get(), 6.);
         source.set(3.);
         assert_eq!(displayed.value.get(), 3.);
+        assert!(!displayed.running.get());
+    }
+
+    #[test]
+    fn size_interpolates_only_within_the_same_unit() {
+        assert_eq!(
+            Size::interpolate(&Size::Px(10.), &Size::Px(30.), 0.5),
+            Size::Px(20.)
+        );
+        assert_eq!(
+            Size::interpolate(&Size::Percent(10.), &Size::Vw(30.), 0.5),
+            Size::Vw(30.)
+        );
+        assert_eq!(
+            Size::interpolate(&Size::Px(10.), &Size::Auto, 0.5),
+            Size::Auto
+        );
+    }
+
+    #[test]
+    fn font_size_interpolates_only_within_the_same_unit() {
+        assert_eq!(
+            FontSize::interpolate(&FontSize::Em(1.), &FontSize::Em(3.), 0.5),
+            FontSize::Em(2.)
+        );
+        assert_eq!(
+            FontSize::interpolate(&FontSize::Px(10.), &FontSize::Rem(30.), 0.5),
+            FontSize::Rem(30.)
+        );
+    }
+
+    #[test]
+    fn unit_changes_are_discrete_through_a_live_animation() {
+        let source = signal(Size::Px(10.));
+        let displayed = animated(*source);
+        with_animation(Animation::linear(1.), || source.set(Size::Percent(50.)));
+        assert_eq!(displayed.value.get(), Size::Percent(50.));
+        assert!(!displayed.running.get());
+        advance(0.5);
+        assert_eq!(displayed.value.get(), Size::Percent(50.));
+        advance(0.5);
+        assert_eq!(displayed.value.get(), Size::Percent(50.));
         assert!(!displayed.running.get());
     }
 }

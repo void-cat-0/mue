@@ -34,7 +34,6 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
             ident: syn::Ident,
             ty: proc_macro2::TokenStream,
             default: Option<proc_macro2::TokenStream>,
-            is_length: bool,
         },
     }
 
@@ -57,14 +56,10 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
 
                 let mut default = None;
                 let mut is_model = false;
-                let mut is_length = false;
                 pat_type.attrs.retain_mut(|attr| {
                     if let Meta::Path(path) = &attr.meta {
                         if path.is_ident("default") {
                             default = Some(quote! { Default::default() });
-                            return false;
-                        } else if path.is_ident("length") {
-                            is_length = true;
                             return false;
                         } else if path.is_ident("model") {
                             is_model = true;
@@ -81,29 +76,20 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
                     true
                 });
 
-                if is_length {
-                    assert!(!is_model, "#[length] cannot be combined with #[model]");
-                    assert!(
-                        matches!(&inner_ty, Type::Path(path) if path.path.is_ident("f32")),
-                        "#[length] requires an f32 parameter"
-                    );
-                }
-
                 if is_model {
                     *pat_type.ty = syn::parse_quote! { #signal<#inner_ty> };
                     Arg::Arg {
                         ident: ident.clone(),
-                        is_length,
                         ty: quote! { #signal<#inner_ty> },
                         default: default.map(|d| quote! { ::mue_core::signal::signal(#d) }),
                     }
                 } else {
                     *pat_type.ty = syn::parse_quote! { #prop<#inner_ty> };
+                    let default = default.map(|d| quote! { #prop::Static(#d) });
                     Arg::Arg {
                         ident: ident.clone(),
-                        is_length,
                         ty: quote! { #prop<#inner_ty> },
-                        default: default.map(|d| quote! { #prop::Static(#d) }),
+                        default,
                     }
                 }
             }
@@ -130,22 +116,9 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
         }
     });
     let setters = fields.iter().filter_map(|arg| match arg {
-        Arg::Arg {
-            ident,
-            ty,
-            default,
-            is_length,
-        } => {
-            let bound = if *is_length {
-                quote! { #macroquad::style::IntoLengthValue }
-            } else {
-                quote! { #into<#ty> }
-            };
-            let mut value = if *is_length {
-                quote! { #macroquad::style::IntoLengthValue::into_length_value(value) }
-            } else {
-                quote! { #into::into(value) }
-            };
+        Arg::Arg { ident, ty, default } => {
+            let bound = quote! { #into<#ty> };
+            let mut value = quote! { #into::into(value) };
             if default.is_some() {
                 value = quote! { Some(#value) };
             }
@@ -162,18 +135,9 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
     let new_args: Vec<_> = args
         .iter()
         .filter_map(|arg| match arg {
-            Arg::Arg {
-                ident,
-                ty,
-                default,
-                is_length,
-            } => {
+            Arg::Arg { ident, ty, default } => {
                 if default.is_none() {
-                    let bound = if *is_length {
-                        quote! { #macroquad::style::IntoLengthValue }
-                    } else {
-                        quote! { #into<#ty> }
-                    };
+                    let bound = quote! { #into<#ty> };
                     Some(quote! { #ident: impl #bound })
                 } else {
                     None
@@ -194,18 +158,9 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
     });
     let prop_struct_init = fields.iter().map(|arg| match arg {
         Arg::Style(_) => quote! { style: #macroquad::style::Style::default() },
-        Arg::Arg {
-            ident,
-            default,
-            is_length,
-            ..
-        } => {
+        Arg::Arg { ident, default, .. } => {
             if default.is_none() {
-                if *is_length {
-                    quote! { #ident: #macroquad::style::IntoLengthValue::into_length_value(#ident) }
-                } else {
-                    quote! { #ident: #into::into(#ident) }
-                }
+                quote! { #ident: #into::into(#ident) }
             } else {
                 quote! { #ident: None }
             }
