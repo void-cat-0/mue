@@ -40,6 +40,10 @@ impl App {
     pub fn frame(&mut self) {
         let root_node = *self.root_node;
         animation::advance(macroquad::time::get_frame_time());
+        crate::viewport::set(crate::viewport::Viewport {
+            width: macroquad::window::screen_width(),
+            height: macroquad::window::screen_height(),
+        });
         batch(|| {
             let time = get_time();
             Runtime::with(|rt| {

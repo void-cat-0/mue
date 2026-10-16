@@ -46,8 +46,12 @@ impl FloatPlacement {
 pub fn float(
     style: &mut Style,
     #[default] placement: FloatPlacement,
-    #[default] offset_x: f32,
-    #[default] offset_y: f32,
+    #[default]
+    #[length]
+    offset_x: f32,
+    #[default]
+    #[length]
+    offset_y: f32,
 ) {
     style.provide_defaults(
         Style::new()

@@ -1,4 +1,7 @@
 mod ext;
+pub mod units;
+
+pub use units::{IntoLength, IntoLengthValue, Percent, Px, Vh, Vw, percent, px, vh, vw};
 
 use crate::{color::Color, shader::Brush};
 use cosmic_text::Align;
@@ -31,11 +34,11 @@ pub trait IntoRectProp<T> {
 }
 impl<U, T> IntoRectProp<T> for (U,)
 where
-    U: Into<Prop<T>>,
+    U: IntoLength<T>,
     T: Clone,
 {
     fn into_rect_prop(self) -> taffy::Rect<Prop<T>> {
-        let prop = self.0.into();
+        let prop = self.0.into_length();
         taffy::Rect {
             left: prop.clone(),
             right: prop.clone(),
@@ -46,13 +49,13 @@ where
 }
 impl<U1, U2, T> IntoRectProp<T> for (U1, U2)
 where
-    U1: Into<Prop<T>>,
-    U2: Into<Prop<T>>,
+    U1: IntoLength<T>,
+    U2: IntoLength<T>,
     T: Clone,
 {
     fn into_rect_prop(self) -> taffy::Rect<Prop<T>> {
-        let x = self.0.into();
-        let y = self.1.into();
+        let x = self.0.into_length();
+        let y = self.1.into_length();
         taffy::Rect {
             left: x.clone(),
             right: x,
@@ -63,23 +66,44 @@ where
 }
 impl<U1, U2, U3, U4, T> IntoRectProp<T> for (U1, U2, U3, U4)
 where
-    U1: Into<Prop<T>>,
-    U2: Into<Prop<T>>,
-    U3: Into<Prop<T>>,
-    U4: Into<Prop<T>>,
+    U1: IntoLength<T>,
+    U2: IntoLength<T>,
+    U3: IntoLength<T>,
+    U4: IntoLength<T>,
     T: Clone,
 {
     fn into_rect_prop(self) -> taffy::Rect<Prop<T>> {
         taffy::Rect {
-            left: self.0.into(),
-            top: self.1.into(),
-            bottom: self.2.into(),
-            right: self.3.into(),
+            left: self.0.into_length(),
+            top: self.1.into_length(),
+            bottom: self.2.into_length(),
+            right: self.3.into_length(),
         }
     }
 }
 
 macro_rules! define_style {
+    (@setter [length] [$(#[$doc:meta])*] $name:ident, $ty:ty) => {
+        $(#[$doc])*
+        fn $name(mut self, value: impl IntoLengthValue) -> Self {
+            self.style_mut().$name = Some(value.into_length_value());
+            self
+        }
+    };
+    (@setter [layout] [$(#[$doc:meta])*] $name:ident, $ty:ty) => {
+        $(#[$doc])*
+        fn $name(mut self, value: impl IntoLength<$ty>) -> Self {
+            self.style_mut().$name = Some(value.into_length());
+            self
+        }
+    };
+    (@setter [] [$(#[$doc:meta])*] $name:ident, $ty:ty) => {
+        $(#[$doc])*
+        fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
+            self.style_mut().$name = Some(value.into());
+            self
+        }
+    };
     (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
         let fallback = $defaults.$field.take();
         $result.$field = Some(computed_always(move |_| {
@@ -111,7 +135,7 @@ macro_rules! define_style {
     };
 
     (
-        $($(#[$property_doc:meta])* $name:ident : $ty:ty $( = $default:expr)?;)*
+        $($(#[$property_doc:meta])* $name:ident : $ty:ty $(= $default:expr)? $(=> $kind:ident)?;)*
         @rects {
             $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)*
         }
@@ -147,38 +171,34 @@ macro_rules! define_style {
                 }
 
                 $(
-                    $(#[$property_doc])*
-                    fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
-                        self.style_mut().$name = Some(value.into());
-                        self
-                    }
+                    define_style!(@setter [$($kind)?] [$(#[$property_doc])*] $name, $ty);
                 )*
 
                 $(
-                    fn [<$rect_name _left>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        self.style_mut().[<$rect_name _left>] = Some(value.into());
+                    fn [<$rect_name _left>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
+                        self.style_mut().[<$rect_name _left>] = Some(value.into_length());
                         self
                     }
-                    fn [<$rect_name _right>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        self.style_mut().[<$rect_name _right>] = Some(value.into());
+                    fn [<$rect_name _right>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
+                        self.style_mut().[<$rect_name _right>] = Some(value.into_length());
                         self
                     }
-                    fn [<$rect_name _top>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        self.style_mut().[<$rect_name _top>] = Some(value.into());
+                    fn [<$rect_name _top>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
+                        self.style_mut().[<$rect_name _top>] = Some(value.into_length());
                         self
                     }
-                    fn [<$rect_name _bottom>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        self.style_mut().[<$rect_name _bottom>] = Some(value.into());
+                    fn [<$rect_name _bottom>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
+                        self.style_mut().[<$rect_name _bottom>] = Some(value.into_length());
                         self
                     }
-                    fn [<$rect_name _x>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        let prop = value.into();
+                    fn [<$rect_name _x>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
+                        let prop = value.into_length();
                         self.style_mut().[<$rect_name _left>] = Some(prop.clone());
                         self.style_mut().[<$rect_name _right>] = Some(prop.clone());
                         self
                     }
-                    fn [<$rect_name _y>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        let prop = value.into();
+                    fn [<$rect_name _y>](mut self, value: impl IntoLength<$rect_ty>) -> Self {
+                        let prop = value.into_length();
                         self.style_mut().[<$rect_name _top>] = Some(prop.clone());
                         self.style_mut().[<$rect_name _bottom>] = Some(prop);
                         self
@@ -326,19 +346,19 @@ define_style! {
     display: Display;
 
     /// Set the preferred width; numbers are pixels and the default is auto.
-    width: Dimension = Dimension::auto();
+    width: Dimension = Dimension::auto() => layout;
     /// Set the preferred height; numbers are pixels and the default is auto.
-    height: Dimension = Dimension::auto();
+    height: Dimension = Dimension::auto() => layout;
 
     /// Set a lower bound on width.
-    min_width: Dimension = Dimension::auto();
+    min_width: Dimension = Dimension::auto() => layout;
     /// Set a lower bound on height.
-    min_height: Dimension = Dimension::auto();
+    min_height: Dimension = Dimension::auto() => layout;
 
     /// Set an upper bound on width.
-    max_width: Dimension = Dimension::auto();
+    max_width: Dimension = Dimension::auto() => layout;
     /// Set an upper bound on height.
-    max_height: Dimension = Dimension::auto();
+    max_height: Dimension = Dimension::auto() => layout;
 
     overflow_x: Overflow = Overflow::Visible;
     overflow_y: Overflow = Overflow::Visible;
@@ -360,12 +380,12 @@ define_style! {
     flex_wrap: taffy::FlexWrap;
 
     /// Horizontal space between columns and vertical space between rows.
-    column_gap: LengthPercentage = LengthPercentage::ZERO;
-    row_gap: LengthPercentage = LengthPercentage::ZERO;
+    column_gap: LengthPercentage = LengthPercentage::ZERO => layout;
+    row_gap: LengthPercentage = LengthPercentage::ZERO => layout;
     /// Preferred width divided by height, when one dimension is automatic.
     aspect_ratio: Option<f32>;
 
-    flex_basis: Dimension = Dimension::auto();
+    flex_basis: Dimension = Dimension::auto() => layout;
     /// Set how much of the parent's remaining main-axis space this node takes.
     flex_grow: f32 = 0.0;
     /// Set how much this node shrinks when flex children exceed available space.
@@ -381,15 +401,15 @@ define_style! {
     /// Set the foreground brush for text and image tint.
     color: Brush = Brush::Solid(Color::WHITE);
     /// Round background corners by this radius in pixels.
-    radius: f32 = 0.0;
+    radius: f32 = 0.0 => length;
 
     // Text
     /// Align shaped lines within the text node's content width.
     text_align: Option<Align>;
     /// Set glyph size in pixels, including document spans without overrides.
-    font_size: f32 = 32.0;
+    font_size: f32 = 32.0 => length;
     /// Set baseline spacing in pixels.
-    line_height: f32 = 44.0;
+    line_height: f32 = 44.0 => length;
     /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
@@ -407,8 +427,8 @@ define_style! {
     text_max_lines: Option<usize>;
     text_vertical_align: crate::node::TextVerticalAlign;
     /// Extra space between newline-delimited paragraphs, in logical pixels.
-    paragraph_spacing: f32 = 0.;
-    letter_spacing: f32 = 0.;
+    paragraph_spacing: f32 = 0. => length;
+    letter_spacing: f32 = 0. => length;
     tab_width: u16 = 4;
 
     @rects {
@@ -544,5 +564,28 @@ impl Style {
 
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Style, Styleable, percent, px, vh, vw};
+
+    #[test]
+    fn styleable_accepts_explicit_units_for_layout_and_scalar_lengths() {
+        let _style = Style::new()
+            .width(px(120.0))
+            .height(percent(50.0))
+            .min_width(vw(10.0))
+            .max_height(vh(25.0))
+            .column_gap(px(8.0))
+            .row_gap(percent(2.0))
+            .padding((px(1.0), vw(2.0)))
+            .margin((vh(1.0), px(2.0), percent(3.0), vw(4.0)))
+            .inset_x(px(5.0))
+            .font_size(px(18.0))
+            .line_height(vh(4.0))
+            .letter_spacing(px(0.5))
+            .paragraph_spacing(vw(1.0));
     }
 }

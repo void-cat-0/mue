@@ -4,7 +4,7 @@ use taffy::{AlignContent, AlignItems, Dimension, FlexDirection, Position};
 
 use crate::event::pointer::{PointerAction, PointerId};
 
-use super::Styleable;
+use super::{IntoLength, Styleable};
 
 macro_rules! impl_align_content {
     ($prefix:ident, $fn:ident) => {
@@ -55,8 +55,8 @@ macro_rules! impl_align_items {
 /// Shortcuts for common layout styles and pointer interactions.
 pub trait StyleableExt: Styleable {
     /// Set equal row and column spacing.
-    fn gap(self, value: impl Into<mue_core::prop::Prop<taffy::LengthPercentage>>) -> Self {
-        let value = value.into();
+    fn gap(self, value: impl IntoLength<taffy::LengthPercentage>) -> Self {
+        let value = value.into_length();
         self.column_gap(value).row_gap(value)
     }
 

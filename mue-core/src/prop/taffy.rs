@@ -7,6 +7,11 @@ macro_rules! reactive_length {
                 value.map(<$ty>::length).into()
             }
         }
+        impl From<crate::signal::Signal<f32>> for Prop<$ty> {
+            fn from(value: crate::signal::Signal<f32>) -> Self {
+                (*value).into()
+            }
+        }
         impl From<Prop<f32>> for Prop<$ty> {
             fn from(value: Prop<f32>) -> Self {
                 value.map(<$ty>::length)

@@ -19,7 +19,9 @@ impl PropValue for Orientation {}
 pub fn separator(
     style: &mut Style,
     #[default] orientation: Orientation,
-    #[default(1.)] thickness: f32,
+    #[default(1.)]
+    #[length]
+    thickness: f32,
 ) {
     style.provide_defaults(
         Style::new()

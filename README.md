@@ -95,6 +95,26 @@ async fn the_main() {
 }
 ```
 
+## 长度单位
+
+`mue_macroquad::style` 提供 `px`、`percent`、`vw`、`vh`。裸 `f32` 仍表示逻辑像素；`percent(50.)` 表示包含块的 50%，`vw(50.)` / `vh(50.)` 分别表示逻辑视口宽度 / 高度的 50%。视口单位随 `App::frame` 同步窗口尺寸，单位构造器也支持响应式数值输入。
+
+```rust
+use mue_macroquad::{node::text, style::{Styleable, percent, px, vw}};
+
+let label = text("Hello")
+    .width(percent(80.))
+    .font_size(px(18.))
+    .radius(vw(1.))
+    .padding((px(12.), px(8.)));
+```
+
+布局属性通过 `IntoLength<T>` 接受长度，保留 Taffy 的百分比和 `auto` 语义；字号、行高、圆角、字距等逻辑像素属性通过 `IntoLengthValue` 接受长度，不接受包含块百分比。两种 trait 均支持裸像素值和响应式输入，也可为自定义长度类型实现。
+
+长度单位不再自动转换为通用 `Prop<f32>`，因此 `opacity(px(...))`、`flex_grow(vw(...))`、`aspect_ratio().ratio(px(...))` 和 `vw(vh(...))` 等混用会在编译时被拒绝。`opacity`、flex 权重和宽高比继续使用无量纲数值。
+
+自定义 `#[node]` / `#[component]` 的 `f32` 参数可加 `#[length]` 标记：生成的构造函数和 setter 接受 `IntoLengthValue`，函数内部仍使用 `Prop<f32>`。该标记可与 `#[default(...)]` 组合，不能与 `#[model]` 组合。例如 `#[length] #[default(8.)] spacing: f32`。内置 `float` 的偏移和 `separator` 的厚度也使用此标记。时间、角度、速度及手势配置等直接 `f32` API 不在本次修改范围内。
+
 ## 文档与 Markdown
 
 `document("第一段\n\n第二段")` 显示纯文本；`markdown(source)` 将 CommonMark 转成 cosmic-text 的富文本 spans。两者都接受响应式属性，使用现有的字体、字号、行高、对齐、颜色及宽度样式。改变内容、宽度或字体会重新排版，自动高度包含全部段落。正文颜色可使用现有的 Brush，span 颜色可单独覆盖。
