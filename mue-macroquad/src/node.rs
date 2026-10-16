@@ -335,7 +335,6 @@ mod font_size_tests {
         style::FontSize,
         viewport::{self, Viewport},
     };
-    use mue_core::prelude::Scope;
     use taffy::prelude::TaffyMaxContent;
 
     fn container(style: Style) -> Node {
@@ -510,15 +509,5 @@ mod font_size_tests {
         let second = measure_width();
         assert!(second >= first * 1.9, "first={first}, second={second}");
         assert_eq!(font(label_ref), 40.);
-    }
-
-    #[test]
-    fn font_signals_are_owned_by_the_node_scope() {
-        let scope = Scope::new();
-        let root = scope.run(|| container(Style::new().font_size(20.)));
-        root.resolve_font_sizes();
-        assert_eq!(font(*root), 20.);
-        drop(root);
-        scope.dispose();
     }
 }

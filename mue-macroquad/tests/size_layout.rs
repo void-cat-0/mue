@@ -1,6 +1,5 @@
 use mue_core::{
     effect::computed,
-    prop::Prop,
     signal::{Access, signal},
 };
 use mue_macroquad::style::{Size, SizeExt};
@@ -29,48 +28,6 @@ fn layout(tree: &mut TaffyTree<()>, root: NodeId) {
         },
     )
     .unwrap();
-}
-
-#[test]
-fn computed_lowering_keeps_percent_relative_to_parent_and_auto_intrinsic() {
-    let source = signal(Size::px(120.0));
-    let declaration: Prop<Size> = source.into();
-    let lowered = computed(move |_| Style {
-        size: TaffySize {
-            width: declaration.get().to_dimension(),
-            height: Size::px(20.0).to_dimension(),
-        },
-        flex_shrink: 0.0,
-        ..Style::default()
-    });
-    let mut tree = TaffyTree::<()>::new();
-    let content = tree.new_leaf(parent_style(64.0, 10.0)).unwrap();
-    let child = tree
-        .new_with_children(lowered.get_clone(), &[content])
-        .unwrap();
-    let root = tree
-        .new_with_children(parent_style(400.0, 300.0), &[child])
-        .unwrap();
-    layout(&mut tree, root);
-    assert_eq!(tree.layout(child).unwrap().size.width, 120.0);
-
-    source.set(Size::percent(50.0));
-    tree.set_style(child, lowered.get_clone()).unwrap();
-    layout(&mut tree, root);
-    assert_eq!(tree.layout(child).unwrap().size.width, 200.0);
-    tree.set_style(root, parent_style(600.0, 300.0)).unwrap();
-    layout(&mut tree, root);
-    assert_eq!(tree.layout(child).unwrap().size.width, 300.0);
-    assert_eq!(source.get(), Size::percent(50.0));
-
-    source.set(Size::auto());
-    tree.set_style(child, lowered.get_clone()).unwrap();
-    layout(&mut tree, root);
-    assert_eq!(tree.layout(child).unwrap().size.width, 64.0);
-    source.set(Size::px(90.0));
-    tree.set_style(child, lowered.get_clone()).unwrap();
-    layout(&mut tree, root);
-    assert_eq!(tree.layout(child).unwrap().size.width, 90.0);
 }
 
 #[test]

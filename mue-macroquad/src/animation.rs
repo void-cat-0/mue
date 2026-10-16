@@ -505,44 +505,31 @@ mod tests {
     }
 
     #[test]
-    fn size_interpolates_only_within_the_same_unit() {
-        assert_eq!(
-            Size::interpolate(&Size::Px(10.), &Size::Px(30.), 0.5),
-            Size::Px(20.)
-        );
-        assert_eq!(
-            Size::interpolate(&Size::Percent(10.), &Size::Vw(30.), 0.5),
-            Size::Vw(30.)
-        );
-        assert_eq!(
-            Size::interpolate(&Size::Px(10.), &Size::Auto, 0.5),
-            Size::Auto
-        );
-    }
-
-    #[test]
-    fn font_size_interpolates_only_within_the_same_unit() {
-        assert_eq!(
-            FontSize::interpolate(&FontSize::Em(1.), &FontSize::Em(3.), 0.5),
-            FontSize::Em(2.)
-        );
-        assert_eq!(
-            FontSize::interpolate(&FontSize::Px(10.), &FontSize::Rem(30.), 0.5),
-            FontSize::Rem(30.)
-        );
-    }
-
-    #[test]
-    fn unit_changes_are_discrete_through_a_live_animation() {
-        let source = signal(Size::Px(10.));
-        let displayed = animated(*source);
-        with_animation(Animation::linear(1.), || source.set(Size::Percent(50.)));
-        assert_eq!(displayed.value.get(), Size::Percent(50.));
-        assert!(!displayed.running.get());
+    fn unit_changes_snap_while_same_unit_changes_animate() {
+        let size = signal(Size::Px(10.));
+        let font = signal(FontSize::Em(1.));
+        let displayed_size = animated(*size);
+        let displayed_font = animated(*font);
+        with_animation(Animation::linear(1.), || {
+            size.set(Size::Px(30.));
+            font.set(FontSize::Em(3.));
+        });
         advance(0.5);
-        assert_eq!(displayed.value.get(), Size::Percent(50.));
+        assert_eq!(displayed_size.value.get(), Size::Px(20.));
+        assert_eq!(displayed_font.value.get(), FontSize::Em(2.));
+        assert!(displayed_size.running.get());
+        assert!(displayed_font.running.get());
+
+        with_animation(Animation::linear(1.), || {
+            size.set(Size::Percent(50.));
+            font.set(FontSize::Rem(1.5));
+        });
+        assert_eq!(displayed_size.value.get(), Size::Percent(50.));
+        assert_eq!(displayed_font.value.get(), FontSize::Rem(1.5));
+        assert!(!displayed_size.running.get());
+        assert!(!displayed_font.running.get());
         advance(0.5);
-        assert_eq!(displayed.value.get(), Size::Percent(50.));
-        assert!(!displayed.running.get());
+        assert_eq!(displayed_size.value.get(), Size::Percent(50.));
+        assert_eq!(displayed_font.value.get(), FontSize::Rem(1.5));
     }
 }

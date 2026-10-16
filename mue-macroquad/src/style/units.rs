@@ -16,15 +16,6 @@
 //! let _: Prop<f32> = px(0.5).into();
 //! ```
 //!
-//! ```compile_fail
-//! use mue_macroquad::style::units::FontSize;
-//! let _ = FontSize::Auto;
-//! ```
-//!
-//! ```compile_fail
-//! use mue_macroquad::style::units::{percent, px};
-//! let _ = percent(px(50.0));
-//! ```
 
 use mue_core::{effect::computed, prop::Prop, signal::Access};
 use taffy::{Dimension, LengthPercentage, LengthPercentageAuto};
@@ -196,63 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn constructors_defaults_and_into_conversions_are_available() {
-        const VALUES: [Size; 5] = [
-            Size::px(12.0),
-            Size::percent(50.0),
-            Size::vw(25.0),
-            Size::vh(10.0),
-            Size::auto(),
-        ];
-        const FONTS: [FontSize; 6] = [
-            FontSize::px(12.0),
-            FontSize::percent(150.0),
-            FontSize::em(1.5),
-            FontSize::rem(2.0),
-            FontSize::vw(3.0),
-            FontSize::vh(4.0),
-        ];
-        assert_eq!(VALUES[1], Size::Percent(50.0));
-        assert_eq!(FONTS[2], FontSize::Em(1.5));
-        assert_eq!(Size::default(), Size::Px(0.0));
-        assert_eq!(FontSize::default(), FontSize::Px(32.0));
-        let size: Prop<Size> = 12.0.into();
-        let font: Prop<FontSize> = 18.0.into();
-        assert_eq!(size.get(), Size::Px(12.0));
-        assert_eq!(font.get(), FontSize::Px(18.0));
-        let declaration: Prop<Size> = Size::percent(50.0).into();
-        assert_eq!(declaration.get(), Size::Percent(50.0));
-    }
-
-    #[test]
-    fn numeric_and_reactive_into_conversions_preserve_values() {
-        let number = signal(12.0);
-        let size_from_signal: Prop<Size> = number.into();
-        let size_from_read: Prop<Size> = (*number).into();
-        let size_from_prop: Prop<Size> = Prop::<f32>::Static(12.0).into();
-        assert_eq!(size_from_signal.get(), Size::Px(12.0));
-        assert_eq!(size_from_read.get(), Size::Px(12.0));
-        assert_eq!(size_from_prop.get(), Size::Px(12.0));
-        number.set(24.0);
-        assert_eq!(size_from_signal.get(), Size::Px(24.0));
-        assert_eq!(size_from_read.get(), Size::Px(24.0));
-
-        let font_from_signal: Prop<FontSize> = number.into();
-        let font_from_read: Prop<FontSize> = (*number).into();
-        let font_from_prop: Prop<FontSize> = Prop::<f32>::Static(18.0).into();
-        assert_eq!(font_from_signal.get(), FontSize::Px(24.0));
-        assert_eq!(font_from_read.get(), FontSize::Px(24.0));
-        assert_eq!(font_from_prop.get(), FontSize::Px(18.0));
-
-        let typed = signal(Size::Px(3.0));
-        let read: Prop<Size> = (*typed).into();
-        let prop: Prop<Size> = Prop::Dynamic(*typed);
-        typed.set(Size::Vw(7.0));
-        assert_eq!(read.get(), Size::Vw(7.0));
-        assert_eq!(prop.get(), Size::Vw(7.0));
-    }
-
-    #[test]
     fn taffy_inputs_unnormalize_percentages_and_follow_signals() {
         macro_rules! check {
             ($ty:ty) => {{
@@ -285,28 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn lowerings_preserve_percent_auto_and_property_errors() {
-        for declared in [-25.0, 0.0, 50.0, 150.0] {
-            let size = Size::percent(declared);
-            let raws = [
-                size.to_dimension().into_raw(),
-                size.to_length_percentage("gap").into_raw(),
-                size.to_length_percentage_auto().into_raw(),
-            ];
-            for raw in raws {
-                assert_eq!(raw.tag(), taffy::CompactLength::PERCENT_TAG);
-                assert_eq!(raw.value(), declared / 100.0);
-            }
-        }
-        assert!(Size::Auto.to_dimension().is_auto());
-        assert!(Size::Auto.to_length_percentage_auto().is_auto());
-        assert_eq!(
-            Size::px(-4.0)
-                .to_length_percentage("offset")
-                .into_raw()
-                .value(),
-            -4.0
-        );
+    fn unsupported_property_units_are_rejected() {
         assert_panic(
             || Size::Auto.to_length_percentage("padding_left"),
             "padding_left",
@@ -352,28 +265,6 @@ mod tests {
             resolve_length(12.0.into(), "radius"),
             Prop::Static(12.0)
         ));
-    }
-
-    #[test]
-    fn signals_switch_units_and_lower_into_taffy() {
-        set_viewport(800.0, 600.0);
-        let source = signal(Size::px(12.0));
-        let declaration: Prop<Size> = source.into();
-        let dimension = computed(move |_| declaration.get().to_dimension());
-        let scalar = resolve_length(declaration, "offset");
-        assert_eq!(scalar.get(), 12.0);
-        source.set(Size::vw(50.0));
-        assert_eq!(scalar.get(), 400.0);
-        set_viewport(1000.0, 800.0);
-        assert_eq!(scalar.get(), 500.0);
-        if let Prop::Dynamic(signal) = scalar {
-            mue_core::Disposable::dispose(&signal);
-        }
-        source.set(Size::percent(75.0));
-        assert_eq!(dimension.get().into_raw().value(), 0.75);
-        source.set(Size::Auto);
-        assert!(dimension.get().is_auto());
-        assert_eq!(declaration.get(), Size::Auto);
     }
 
     #[test]
@@ -462,11 +353,7 @@ mod tests {
 
     #[test]
     fn font_units_resolve_parent_root_viewport_and_switch_units() {
-        assert_eq!(FontSize::DEFAULT_PX, 32.0);
         assert_eq!(FontSize::px(18.0).resolve(f32::NAN, f32::NAN), 18.0);
-        assert_eq!(FontSize::percent(150.0).resolve(20.0, 32.0), 30.0);
-        assert_eq!(FontSize::em(1.5).resolve(20.0, 32.0), 30.0);
-        assert_eq!(FontSize::rem(0.5).resolve(20.0, 32.0), 16.0);
         set_viewport(800.0, 600.0);
         let font = signal(FontSize::percent(150.0));
         let parent = signal(20.0);

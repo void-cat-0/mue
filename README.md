@@ -97,23 +97,38 @@ async fn the_main() {
 
 ## 长度单位
 
-`mue_macroquad::style` 提供 `px`、`percent`、`vw`、`vh`。裸 `f32` 仍表示逻辑像素；`percent(50.)` 表示包含块的 50%，`vw(50.)` / `vh(50.)` 分别表示逻辑视口宽度 / 高度的 50%。视口单位随 `App::frame` 同步窗口尺寸，单位构造器也支持响应式数值输入。
+`mue_macroquad::style` 的长度是纯值 `Size`：`Size::Px`、`Size::Percent`、`Size::Vw`、`Size::Vh` 和 `Size::Auto`。公开百分比以 100 表示整体，不限制为 `0..=100`（例如 `Size::Percent(50.)` 表示 50%），视口单位分别相对逻辑视口宽度和高度。`px`、`percent`、`vw`、`vh` 是对应的纯值构造器，不会把值预先换算成当前视口像素。
 
 ```rust
-use mue_macroquad::{node::text, style::{Styleable, percent, px, vw}};
+use mue_macroquad::{node::text, style::{FontSize, Styleable, percent, px, vw}};
 
 let label = text("Hello")
     .width(percent(80.))
-    .font_size(px(18.))
+    .font_size(FontSize::px(18.))
     .radius(vw(1.))
     .padding((px(12.), px(8.)));
 ```
 
-布局属性通过 `IntoLength<T>` 接受长度，保留 Taffy 的百分比和 `auto` 语义；字号、行高、圆角、字距等逻辑像素属性通过 `IntoLengthValue` 接受长度，不接受包含块百分比。两种 trait 均支持裸像素值和响应式输入，也可为自定义长度类型实现。
+裸 `f32` 及 `Signal<f32>` / `ReadSignal<f32>` 均表示像素；显式的动态像素值可写成 `signal.map(Size::Px)`。需要保留单位并在运行时切换的值，应使用 `Signal<Size>`（或 `Signal<FontSize>`）并单独回写，例如在 `Px`、`Percent`、`Vw`、`Vh` 和 `Auto` 之间切换。信号保存的是声明本身，视口变化只影响随后解析，不会把声明改写成像素。
 
-长度单位不再自动转换为通用 `Prop<f32>`，因此 `opacity(px(...))`、`flex_grow(vw(...))`、`aspect_ratio().ratio(px(...))` 和 `vw(vh(...))` 等混用会在编译时被拒绝。`opacity`、flex 权重和宽高比继续使用无量纲数值。
+```rust
+use mue_core::prelude::*;
+use mue_macroquad::{node::text, style::{FontSize, Size, Styleable}};
 
-自定义 `#[node]` / `#[component]` 的 `f32` 参数可加 `#[length]` 标记：生成的构造函数和 setter 接受 `IntoLengthValue`，函数内部仍使用 `Prop<f32>`。该标记可与 `#[default(...)]` 组合，不能与 `#[model]` 组合。例如 `#[length] #[default(8.)] spacing: f32`。内置 `float` 的偏移和 `separator` 的厚度也使用此标记。时间、角度、速度及手势配置等直接 `f32` API 不在本次修改范围内。
+let width = signal(Size::Percent(50.));
+let font_size = signal(FontSize::Em(1.25));
+let label = text("Editable units").width(width).font_size(font_size);
+width.set(Size::Px(240.));
+font_size.set(FontSize::Rem(1.5));
+```
+
+字号使用独立的纯值 `FontSize`：`FontSize::Px`、`Percent`、`Em`、`Rem`、`Vw`、`Vh`，也提供 `FontSize::px`、`percent`、`em`、`rem`、`vw`、`vh` 构造器。默认根字号为 32px；未声明字号继承父节点的计算值，`Percent` / `Em` 相对父字号，`Rem` 相对根字号，根节点的相对单位以 32px 为基准。
+
+所有布局长度及 radius、line-height、paragraph-spacing、letter-spacing 都保留 `Prop<Size>` 声明，在具体消费边界解析。布局支持 `Percent` 和 `Auto` 的地方保留 Taffy 语义；标量长度支持 `Px`、`Vw`、`Vh`，对 `Percent` 和 `Auto` 明确拒绝，不隐式转成像素。`opacity`、flex 权重和宽高比仍是无量纲数值，不能传长度。
+
+自定义 `#[node]` / `#[component]` 参数直接声明为 `Size` 或 `FontSize`，宏会生成接受 `impl Into<Prop<T>>` 的构造器和 setter。默认值可写为 `#[default(Size::Px(8.))]`，或使用 `#[default]` 采用该类型的默认值。`#[model]` 参数接收可回写的 `Signal<T>`。
+
+`Size` 和 `FontSize` 定义在 `mue_core::units`，并由 `mue_macroquad::style` 重新导出。标准 `From/Into` 支持裸 `f32`、`Prop<f32>` 和数值信号；启用 `impl-taffy` feature 时，`Size` 也接受 Taffy 长度输入。`mue-macroquad` 已启用该 feature。
 
 ## 文档与 Markdown
 
@@ -148,7 +163,7 @@ let label = text("Hello")
 
 `with_animation` 让状态修改引起的可插值样式变化使用指定曲线，包括 computed 链、batch 内的事件与 Factory 主题。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`with_animation(None, ...)` 立即切换。节点的 `.animation(Animation::spring(0.8, 0.3))` 为该节点的可插值属性提供默认动画，显式事务优先。
 
-支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位尺寸/边距/内距/位置、透明度、圆角、字号、行高、变换矩阵、纯色及结构一致的渐变。`auto`、不同单位及不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
+支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
 
 自定义动画数据可实现 `Animatable`。`animated(*signal)` 返回 `Animated { value, running }`，也可用 `animated_with(*signal, curve)` 指定默认曲线。`value` 可用于 computed 或 Prop，`running` 可用于完成后的响应式逻辑。资源跟随创建它的 scope 释放。`App::frame` 自动在布局前调用 `mue_macroquad::animation::advance(dt)`。动画曲线、插值和帧驱动位于 mue-macroquad，core 仅负责传播通用更新上下文。
 

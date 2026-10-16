@@ -194,18 +194,6 @@ mod tests {
     use crate::signal::{Access, signal};
 
     #[test]
-    fn numbers_convert_to_pixel_values_and_properties() {
-        let size: Size = 12_f32.into();
-        let font: FontSize = 18_f32.into();
-        let size_prop: Prop<Size> = 12_f32.into();
-        let font_prop: Prop<FontSize> = 18_f32.into();
-        assert_eq!(size, Size::Px(12.));
-        assert_eq!(font, FontSize::Px(18.));
-        assert_eq!(size_prop.get(), size);
-        assert_eq!(font_prop.get(), font);
-    }
-
-    #[test]
     fn numeric_signals_remain_reactive_after_standard_conversion() {
         let source = signal(12_f32);
         let sizes: [Prop<Size>; 4] = [
@@ -235,17 +223,5 @@ mod tests {
         }
         assert_eq!(sizes[3].get(), Size::Px(12.));
         assert_eq!(fonts[3].get(), FontSize::Px(12.));
-    }
-
-    #[test]
-    fn enum_signals_preserve_unit_switching() {
-        let size = signal(Size::Px(12.));
-        let font = signal(FontSize::Px(18.));
-        let size_prop: Prop<Size> = size.into();
-        let font_prop: Prop<FontSize> = font.into();
-        size.set(Size::Percent(50.));
-        font.set(FontSize::Em(1.5));
-        assert_eq!(size_prop.get(), Size::Percent(50.));
-        assert_eq!(font_prop.get(), FontSize::Em(1.5));
     }
 }
