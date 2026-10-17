@@ -1,11 +1,13 @@
 //! Read-only rich paragraphs and Markdown. Run with `cargo run -p document`.
+#[path = "../../shared/responsive.rs"]
+mod responsive;
 use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     color::Color,
     node::*,
-    style::{Styleable, StyleableExt},
+    style::{Size, Styleable, StyleableExt},
 };
 
 const INK: Color = Color::from_rgba(30, 40, 55, 255);
@@ -55,52 +57,82 @@ async fn run() {
     let large = signal(false);
     let alternate = signal(false);
     let source = alternate.select(NEXT_ENTRY, ENTRY);
+    responsive::sync();
     let mut app = App::new(
         stack()
             .size_full()
+            .font_size(responsive::root_font())
             .background(PAPER)
-            .padding((32.,))
+            .padding((Size::vw(3.5),))
             .children((
-                hstack().margin_bottom(24.).children((
-                    heading("Field journal").font_size(20.).color(BLUE).flex_1(),
-                    flexbox()
-                        .padding((12., 8.))
-                        .background(BLUE)
-                        .toggle_on_tap(large)
-                        .children(text(large.select("Smaller type", "Larger type")).font_size(16.)),
-                    flexbox()
-                        .margin_left(12.)
-                        .padding((12., 8.))
-                        .background(BLUE)
-                        .toggle_on_tap(alternate)
-                        .children(
-                            text(alternate.select("Previous entry", "Next entry")).font_size(16.),
-                        ),
-                )),
-                scroll_area().flex_1().w_full().children(
-                    stack().children((
-                        markdown(source)
-                            .w_full()
-                            .max_width(760.)
-                            .font_size(large.select(22., 18.))
-                            .line_height(large.select(31., 26.))
-                            .color(INK)
-                            .flex_none(),
-                        document(Document::rich([
-                            Span::new("Mara Ellis").bold(),
-                            Span::new("\nOctober 13, 2026").italic(),
-                        ]))
-                        .margin_top(24.)
-                        .font_size(16.)
-                        .line_height(23.)
-                        .color(BLUE)
-                        .flex_none(),
+                wrap()
+                    .w_full()
+                    .flex_none()
+                    .gap(responsive::ui(12.))
+                    .margin_bottom(responsive::ui(24.))
+                    .children((
+                        heading("Field journal")
+                            .font_size(responsive::font(20.))
+                            .line_height(responsive::ui(44. * 1.45))
+                            .color(BLUE)
+                            .min_width(0.)
+                            .flex_basis(Size::percent(30.))
+                            .flex_1(),
+                        flexbox()
+                            .flex_none()
+                            .max_width(Size::percent(100.))
+                            .padding((responsive::ui(12.), responsive::ui(8.)))
+                            .min_width(responsive::ui(44.))
+                            .min_height(responsive::ui(44.))
+                            .background(BLUE)
+                            .toggle_on_tap(large)
+                            .children(
+                                text(large.select("Smaller type", "Larger type"))
+                                    .font_size(responsive::font(16.))
+                                    .line_height(responsive::ui(44.)),
+                            ),
+                        flexbox()
+                            .flex_none()
+                            .max_width(Size::percent(100.))
+                            .padding((responsive::ui(12.), responsive::ui(8.)))
+                            .min_width(responsive::ui(44.))
+                            .min_height(responsive::ui(44.))
+                            .background(BLUE)
+                            .toggle_on_tap(alternate)
+                            .children(
+                                text(alternate.select("Previous entry", "Next entry"))
+                                    .font_size(responsive::font(16.))
+                                    .line_height(responsive::ui(44.)),
+                            ),
                     )),
+                scroll_area().flex_1().w_full().children(
+                    stack()
+                        .w_full()
+                        .max_width(responsive::ui(760.))
+                        .margin_x(Size::auto())
+                        .children((
+                            markdown(source)
+                                .w_full()
+                                .font_size(responsive::font(large.select(22., 18.)))
+                                .line_height(responsive::ui(large.select(31., 26.)))
+                                .color(INK)
+                                .flex_none(),
+                            document(Document::rich([
+                                Span::new("Mara Ellis").bold(),
+                                Span::new("\nOctober 13, 2026").italic(),
+                            ]))
+                            .margin_top(responsive::ui(24.))
+                            .font_size(responsive::font(16.))
+                            .line_height(responsive::ui(23.))
+                            .color(BLUE)
+                            .flex_none(),
+                        )),
                 ),
             )),
     );
     loop {
         clear_background(PAPER.into());
+        responsive::sync();
         app.frame();
         next_frame().await;
     }

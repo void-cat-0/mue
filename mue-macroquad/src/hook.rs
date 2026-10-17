@@ -1,7 +1,9 @@
 use crate::event::{pointer::PointerEvent, wheel::WheelEvent};
 
+type CallbackFunction<T> = Option<Box<dyn FnMut(&T) + 'static>>;
+
 pub struct HookFn<T> {
-    callback: Option<Box<dyn FnMut(&T)>>,
+    callback: CallbackFunction<T>,
 }
 
 impl<T> Default for HookFn<T> {

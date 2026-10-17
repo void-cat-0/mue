@@ -95,6 +95,45 @@ async fn the_main() {
 }
 ```
 
+## 长度单位
+
+`mue_macroquad::style` 的长度是纯值 `Size`：`Size::Px`、`Size::Percent`、`Size::Vw`、`Size::Vh` 和 `Size::Auto`。公开百分比以 100 表示整体，不限制为 `0..=100`（例如 `Size::Percent(50.)` 表示 50%），视口单位分别相对逻辑视口宽度和高度。`px`、`percent`、`vw`、`vh` 是对应的纯值构造器，不会把值预先换算成当前视口像素。
+
+```rust
+use mue_macroquad::{node::text, style::{FontSize, Styleable, percent, px, vw}};
+
+let label = text("Hello")
+    .width(percent(80.))
+    .font_size(FontSize::px(18.))
+    .radius(vw(1.))
+    .padding((px(12.), px(8.)));
+```
+
+裸 `f32` 及 `Signal<f32>` / `ReadSignal<f32>` 均表示像素；显式的动态像素值可写成 `signal.map(Size::Px)`。需要保留单位并在运行时切换的值，应使用 `Signal<Size>`（或 `Signal<FontSize>`）并单独回写，例如在 `Px`、`Percent`、`Vw`、`Vh` 和 `Auto` 之间切换。信号保存的是声明本身，视口变化只影响随后解析，不会把声明改写成像素。
+
+```rust
+use mue_core::prelude::*;
+use mue_macroquad::{node::text, style::{FontSize, Size, Styleable}};
+
+let width = signal(Size::Percent(50.));
+let font_size = signal(FontSize::Em(1.25));
+let label = text("Editable units").width(width).font_size(font_size);
+width.set(Size::Px(240.));
+font_size.set(FontSize::Rem(1.5));
+```
+
+字号使用独立的纯值 `FontSize`：`FontSize::Px`、`Percent`、`Em`、`Rem`、`Vw`、`Vh`，也提供 `FontSize::px`、`percent`、`em`、`rem`、`vw`、`vh` 构造器。默认根字号为 32px；未声明字号继承父节点的计算值，`Percent` / `Em` 相对父字号，`Rem` 相对根字号，根节点的相对单位以 32px 为基准。
+
+所有布局长度及 radius、line-height、paragraph-spacing、letter-spacing 都保留 `Prop<Size>` 声明，在具体消费边界解析。布局支持 `Percent` 和 `Auto` 的地方保留 Taffy 语义；标量长度支持 `Px`、`Vw`、`Vh`，对 `Percent` 和 `Auto` 明确拒绝，不隐式转成像素。`opacity`、flex 权重和宽高比仍是无量纲数值，不能传长度。
+
+示例默认以 `Percent`、`Vw`、`Vh`、`flex` 和 `wrap` 组织布局，优先让内容随逻辑视口和父容器变化；`max_width` / `max_height` 只作为桌面端阅读宽度或演示上限。地图坐标、绘图形状、动画位移，以及滚动示例中刻意制造溢出的超宽内容仍使用固定值，因为它们是对应 API 的演示参数而不是界面尺寸。移动端验证建议使用窄屏窗口并分别测试横屏、竖屏和高分辨率设备。
+
+示例排版统一使用 `examples/shared/responsive.rs`：以视口短边 480 为设计基准，`scale = max(min(width, height) / 480, 0.75)`，根字号为 `32 * scale`，子字号通过 `font(...)` 转为 `Rem`，行高、触控目标及相关留白通过 `ui(...)` 同比缩放。各入口在构建前和每帧布局前同步尺寸，旋转不改变缩放比例，高分辨率不设置缩放上限；这是示例级视口适配，不是系统 DPI 或无障碍字号换算。
+
+自定义 `#[node]` / `#[component]` 参数直接声明为 `Size` 或 `FontSize`，宏会生成接受 `impl Into<Prop<T>>` 的构造器和 setter。默认值可写为 `#[default(Size::Px(8.))]`，或使用 `#[default]` 采用该类型的默认值。`#[model]` 参数接收可回写的 `Signal<T>`。
+
+`Size` 和 `FontSize` 定义在 `mue_core::units`，并由 `mue_macroquad::style` 重新导出。标准 `From/Into` 支持裸 `f32`、`Prop<f32>` 和数值信号；启用 `impl-taffy` feature 时，`Size` 也接受 Taffy 长度输入。`mue-macroquad` 已启用该 feature。
+
 ## 文档与 Markdown
 
 `document("第一段\n\n第二段")` 显示纯文本；`markdown(source)` 将 CommonMark 转成 cosmic-text 的富文本 spans。两者都接受响应式属性，使用现有的字体、字号、行高、对齐、颜色及宽度样式。改变内容、宽度或字体会重新排版，自动高度包含全部段落。正文颜色可使用现有的 Brush，span 颜色可单独覆盖。
@@ -128,11 +167,30 @@ let label = text("Hello")
 
 `with_animation` 让状态修改引起的可插值样式变化使用指定曲线，包括 computed 链、batch 内的事件与 Factory 主题。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`with_animation(None, ...)` 立即切换。节点的 `.animation(Animation::spring(0.8, 0.3))` 为该节点的可插值属性提供默认动画，显式事务优先。
 
-支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位尺寸/边距/内距/位置、透明度、圆角、字号、行高、变换矩阵、纯色及结构一致的渐变。`auto`、不同单位及不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
+支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
 
 自定义动画数据可实现 `Animatable`。`animated(*signal)` 返回 `Animated { value, running }`，也可用 `animated_with(*signal, curve)` 指定默认曲线。`value` 可用于 computed 或 Prop，`running` 可用于完成后的响应式逻辑。资源跟随创建它的 scope 释放。`App::frame` 自动在布局前调用 `mue_macroquad::animation::advance(dt)`。动画曲线、插值和帧驱动位于 mue-macroquad，core 仅负责传播通用更新上下文。
 
-`pages` 与 `tab` 使用导航节点切换页面，分别把控件放在顶部与底部；根页面保留局部状态，替换目标页面会重建该页面。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
+`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
+
+## 同级页面
+
+`pages(selected, children)` 用静态或响应式 `usize` 索引选择固定列表中的页面。页面按传入顺序排列，索引增加时向左滑动，减少时向右滑动；跨页跳转经过中间页。全部页面只构建一次并保留到组件释放，切换后计数器等局部状态不会重置。按钮栏由调用方组合，不提供滑动手势。
+
+```rust
+use mue_core::prelude::*;
+use mue_macroquad::{node::{pages, text, PagesTransition}, style::StyleableExt};
+
+let selected = signal(0usize);
+let view = pages(selected, [text("Home"), text("Notes"), text("Settings")])
+    .transition(PagesTransition::Slide);
+selected.set(2);
+selected.set(1); // 向右滑动回到 Notes
+```
+
+`.transition(...)` 支持 `Slide`（默认）、`SlideVertical` 和 `None`；`.transition_animation(...)` 配置曲线。垂直切换时索引增加向上、减少向下。动画中途切换从当前显示位置重新定向，位移限制在起点和终点之间；尺寸变化时立即结束过渡并重新布局。只有视口内页面参与布局与绘制，仅选中的页面参与命中测试。空列表显示空内容；越界索引按最后一页显示，不修改选中信号。
+
+`pages` 用于同级页面；需要 push/back、详情层级或分栏时使用 `navigation_stack`。
 
 ## 导航
 
@@ -238,12 +296,17 @@ cargo run -p map
 ```bash
 cargo check --workspace
 cargo clippy -p events -p gestures -p map --all-targets --no-deps
+# 需要图形环境；连续切换字号/字体/字重并验证同帧多次 App 绘制
+cargo run -p mue-macroquad --example glyph_atlas_stress -- 600
 ```
+
+字形图集按需创建 1024² RGBA 页面，最多 8 页（约 32 MiB，不包含字体源数据及驱动开销）。本轮已引用的字形在下一轮提交已有绘制后才允许回收，旧条目逐步淘汰；单个字形超出页面或单轮工作集超过预算时跳过该字形，不覆盖已排队内容，也不因缓存压力 panic。连续字号动画仍按原始精度栅格化，本版本没有字号量化。
 
 ## 备注
 
 - `macroquad` / `miniquad` 目前指向 fork 的 git 源，见根 `Cargo.toml` 的 `[workspace.dependencies]`。
-- 示例字体使用 vendored 的 Space Mono（SIL OFL 1.1，见 `examples/basics/assets/fonts/OFL-SpaceMono.txt`）。
+- `basics` 使用 vendored Space Mono（SIL OFL 1.1，见 `examples/basics/assets/fonts/OFL-SpaceMono.txt`）。`playground` 自包含嵌入 Noto Sans / Serif / Mono、Sans CJK SC、Sans Arabic 和 Symbols 2，不依赖移动端系统字体；基础三类映射到对应 Noto 家族。字体资源约 37.1 MiB，覆盖示例文字而非所有语言，不包含彩色 Emoji。进入 playground 的 **Font licenses** 页面可查看随二进制嵌入的版权和完整 OFL 1.1 协议；固定来源、版本及 SHA-256 见 `examples/playground/assets/fonts/sources.json`。
+- 无系统字体环境可先构建 `mue_macroquad::font::fontdb::Database`，加载字体并设置通用家族，再调用 `font::initialize(locale, db)`。必须在当前 UI 线程加载其他字体或创建文本前调用；重复初始化会返回错误，避免使现有文本的字体 ID 失效。
 - 可变字体在 `fontdb` 中只按默认实例登记字重；演示非默认字重时请使用按字重拆分的静态字体文件。
 
 ## License
@@ -265,7 +328,7 @@ MIT，见 [LICENSE](LICENSE)。
 
 | 分组 | 节点 |
 | --- | --- |
-| 布局 | `navigation_stack`、children 工具、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
+| 布局 | `pages`、`navigation_stack`、children 工具、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
 | 排版 | `blockquote`、`code`、`code_block`、`em`、`heading`、`link`、`link_overlay`、`list` / `list_item`、`text`、`document` / `markdown` |
 | 图形 | `circle`、`shape`、`image` |
 

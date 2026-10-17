@@ -1,6 +1,9 @@
 //! cargo run -p navigation
 //! cargo run -p navigation -- --stack
 
+#[path = "../../shared/responsive.rs"]
+mod responsive;
+
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -8,7 +11,7 @@ use mue_macroquad::{
     animation::Animation,
     color::Color,
     node::*,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 
 const CANVAS: Color = Color::from_rgba(19, 25, 34, 255);
@@ -33,12 +36,21 @@ impl Route {
 
 fn button(label: &'static str, action: impl FnMut() + 'static) -> impl Component {
     flexbox()
-        .padding((14., 10.))
-        .margin_bottom(10.)
+        .padding((responsive::ui(14.), responsive::ui(10.)))
+        .min_height(responsive::ui(44.))
+        .min_width(0.)
+        .max_width(percent(100.))
+        .flex_shrink(0.)
+        .margin_bottom(vh(1.5))
         .background(BLUE)
-        .radius(8.)
+        .radius(responsive::ui(8.))
         .on_activate(action)
-        .children(text(label).font_size(18.))
+        .children(
+            text(label)
+                .font_size(responsive::font(18.))
+                .line_height(responsive::ui(28.))
+                .min_width(0.),
+        )
 }
 
 fn back(path: Signal<Vec<Route>>) {
@@ -48,12 +60,12 @@ fn back(path: Signal<Vec<Route>>) {
 }
 
 fn library(path: Signal<Vec<Route>>) -> impl Component {
-    stack()
-        .size_full()
-        .padding((24.,))
-        .background(SURFACE)
-        .children((
-            heading("Field notes").font_size(30.).margin_bottom(24.),
+    scroll_area().size_full().background(SURFACE).children(
+        stack().w_full().padding((percent(5.), vh(4.))).children((
+            heading("Field notes")
+                .font_size(responsive::font(30.))
+                .line_height(responsive::ui(40.))
+                .margin_bottom(vh(4.)),
             ["Coast", "Forest", "Mountains"].map(|place| {
                 button(place, move || path.set(vec![Route::Place(place)])).into_node()
             }),
@@ -66,7 +78,8 @@ fn library(path: Signal<Vec<Route>>) -> impl Component {
                     },
                 ]);
             }),
-        ))
+        )),
+    )
 }
 
 fn destination(path: Signal<Vec<Route>>, route: Route) -> impl Component {
@@ -74,22 +87,21 @@ fn destination(path: Signal<Vec<Route>>, route: Route) -> impl Component {
     let place = match route {
         Route::Place(place) | Route::Note { place, .. } => place,
     };
-    stack()
-        .size_full()
-        .padding((24.,))
-        .background(CANVAS)
-        .children((
-            flexbox().children((
-                button("Back", move || back(path)).margin_right(12.),
+    scroll_area().size_full().background(CANVAS).children(
+        stack().w_full().padding((percent(5.), vh(4.))).children((
+            wrap().column_gap(percent(3.)).children((
+                button("Back", move || back(path)),
                 button("Library", move || path.set(Vec::new())),
             )),
             heading(route.title())
-                .font_size(32.)
-                .margin_top(16.)
-                .margin_bottom(20.),
+                .font_size(responsive::font(32.))
+                .line_height(responsive::ui(44.))
+                .margin_top(vh(2.5))
+                .margin_bottom(vh(3.)),
             text(count.map(|n| format!("Count: {n}")))
-                .font_size(24.)
-                .margin_bottom(14.),
+                .font_size(responsive::font(24.))
+                .line_height(responsive::ui(34.))
+                .margin_bottom(vh(2.)),
             button("Increment", move || count.update(|n| *n += 1)),
             button("New note", move || {
                 path.update(|routes| {
@@ -112,7 +124,8 @@ fn destination(path: Signal<Vec<Route>>, route: Route) -> impl Component {
                     }
                 });
             }),
-        ))
+        )),
+    )
 }
 
 fn main() {
@@ -128,47 +141,54 @@ fn main() {
 }
 
 async fn run() {
+    responsive::sync();
     let path = signal(Vec::<Route>::new());
     let root = move || library(path);
     let screen = move |route: &Route| destination(path, *route);
     let mut app = App::new(
-        stack().size_full().children((
-            flexbox()
-                .w_full()
-                .flex_none()
-                .padding((24., 16.))
-                .background(SURFACE)
-                .children(
-                    text(path.map(|routes| {
-                        std::iter::once("Library".to_string())
-                            .chain(routes.into_iter().map(Route::title))
-                            .collect::<Vec<_>>()
-                            .join(" > ")
-                    }))
-                    .font_size(18.)
-                    .min_width(0.)
+        stack()
+            .size_full()
+            .font_size(responsive::root_font())
+            .children((
+                flexbox()
+                    .w_full()
+                    .flex_none()
+                    .padding((vw(2.5), vh(2.5)))
+                    .background(SURFACE)
+                    .children(
+                        text(path.map(|routes| {
+                            std::iter::once("Library".to_string())
+                                .chain(routes.into_iter().map(Route::title))
+                                .collect::<Vec<_>>()
+                                .join(" > ")
+                        }))
+                        .font_size(responsive::font(18.))
+                        .line_height(responsive::ui(28.))
+                        .min_width(0.)
+                        .flex_1()
+                        .text_wrap(false)
+                        .text_max_lines(Some(1))
+                        .text_overflow(TextOverflow::EllipsisMiddle),
+                    ),
+                navigation_stack(path, root, screen)
+                    .transition_animation(TRANSITION)
+                    .split_view(
+                        280. * responsive::scale(),
+                        // The split-view API takes fixed lengths; keep retained screens intact.
+                        (if std::env::args().any(|arg| arg == "--stack") {
+                            10000.
+                        } else {
+                            720.
+                        }) * responsive::scale(),
+                    )
+                    .height(taffy::Dimension::auto())
                     .flex_1()
-                    .text_wrap(false)
-                    .text_max_lines(Some(1))
-                    .text_overflow(TextOverflow::EllipsisMiddle),
-                ),
-            navigation_stack(path, root, screen)
-                .transition_animation(TRANSITION)
-                .split_view(
-                    280.,
-                    if std::env::args().any(|arg| arg == "--stack") {
-                        10000.
-                    } else {
-                        720.
-                    },
-                )
-                .height(taffy::Dimension::auto())
-                .flex_1()
-                .min_height(0.),
-        )),
+                    .min_height(0.),
+            )),
     );
 
     loop {
+        responsive::sync();
         if is_key_pressed(KeyCode::Escape) {
             back(path);
         }

@@ -1,11 +1,14 @@
 //! An interactive exercise of node options. Run with `cargo run -p playground`.
 mod controls;
+mod fonts;
 mod graphics;
 #[path = "../../shared/halftone.rs"]
 mod halftone;
 mod input;
 mod layout;
 mod motion;
+#[path = "../../shared/responsive.rs"]
+mod responsive;
 mod scrolling;
 mod theming;
 mod typography;
@@ -14,12 +17,11 @@ use macroquad::prelude::{clear_background, get_time, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    font::load_font,
     node::*,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 
-const PAGES: [&str; 7] = [
+const PAGES: [&str; 8] = [
     "Layout",
     "Typography",
     "Graphics",
@@ -27,6 +29,7 @@ const PAGES: [&str; 7] = [
     "Scrolling",
     "Input",
     "Theme",
+    "Font licenses",
 ];
 
 fn destination(index: usize) -> Node {
@@ -37,7 +40,8 @@ fn destination(index: usize) -> Node {
         3 => motion::page(),
         4 => scrolling::page(),
         5 => input::page(),
-        _ => theming::page(),
+        6 => theming::page(),
+        _ => fonts::licenses(),
     };
     scroll_area()
         .size_full()
@@ -49,11 +53,14 @@ fn destination(index: usize) -> Node {
         })
         .children(
             container()
-                .max_width(1000.)
-                .padding((24.,))
-                .gap(20.)
+                .max_width(percent(100.))
+                .min_width(0.)
+                .padding((vw(3.), vh(3.)))
+                .gap(vh(2.5))
                 .children((
-                    heading(PAGES[index]).font_size(30.).line_height(40.),
+                    heading(PAGES[index])
+                        .font_size(responsive::font(30.))
+                        .line_height(responsive::ui(40.)),
                     content,
                 )),
         )
@@ -73,75 +80,84 @@ pub extern "C" fn quad_main() {
 }
 
 pub async fn run() {
-    load_font(include_bytes!("../assets/fonts/SpaceMono-Regular.ttf").to_vec());
-    load_font(include_bytes!("../assets/fonts/SpaceMono-Bold.ttf").to_vec());
-    let path = signal(Vec::<usize>::new());
+    fonts::initialize();
+    responsive::sync();
+    let selected = signal(0usize);
     let fps = signal(0u32);
     let (transition, transition_control) = choice(
         "Transition",
         vec![
-            ("Slide", NavigationTransition::Slide),
-            ("Vertical", NavigationTransition::SlideVertical),
-            ("None", NavigationTransition::None),
+            ("Slide", PagesTransition::Slide),
+            ("Vertical", PagesTransition::SlideVertical),
+            ("None", PagesTransition::None),
         ],
     );
-    // Rebuild only the navigation configuration; each active stack retains its own screen scopes.
-    let (split, split_control) = toggle("Split");
-    let revision = signal(0u32);
-    watch(*split, move |_| revision.update(|n| *n += 1));
-    watch(transition, move |_| revision.update(|n| *n += 1));
-    let stacks = map_keyed(
-        revision.map(|n| std::rc::Rc::from([n])),
-        |n| *n,
-        move |_| {
-            navigation_stack(path, move || destination(0), |index| destination(*index))
-                .transition(transition.get())
+    let page_view = map_keyed(
+        transition.map(|value| std::rc::Rc::from([value])),
+        |value| *value as u8,
+        move |value| {
+            pages(selected, (0..PAGES.len()).map(destination))
+                .transition(*value)
                 .transition_animation(SPRING)
-                .split_view(300., if split.get() { 800. } else { 10000. })
                 .into_node()
         },
     );
     let mut app = App::new(
-        stack().size_full().gap(0.).background(BG).children((
-            wrap().padding((18., 12.)).gap(10.).children(
-                PAGES
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, title)| {
-                        button(title, move || {
-                            path.set(if i == 0 { vec![] } else { vec![i] })
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            separator(),
-            flexbox().flex_1().min_height(0.).children(stacks),
-            hstack().padding((18., 10.)).children((
-                button("Back", move || {
-                    path.update(|p| {
-                        p.pop();
-                    });
-                }),
-                button("Next", move || {
-                    let next = path.get_clone().last().map_or(1, |n| (n + 1) % PAGES.len());
-                    path.update(|p| p.push(next));
-                }),
-                text(path.map(|p| format!("Depth {}", p.len())))
-                    .font_size(16.)
-                    .flex_1(),
-                text(fps.map(|fps| format!("{fps} FPS")))
-                    .font_size(16.)
-                    .width(90.)
+        stack()
+            .size_full()
+            .font_size(responsive::root_font())
+            .gap(0.)
+            .background(BG)
+            .children((
+                wrap()
+                    .w_full()
                     .flex_none()
-                    .text_wrap(false),
-                split_control,
-                transition_control,
+                    .padding((vw(2.), vh(1.5)))
+                    .gap(vw(1.))
+                    .children(
+                        PAGES
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, title)| button(title, move || selected.set(i)))
+                            .collect::<Vec<_>>(),
+                    ),
+                separator(),
+                flexbox()
+                    .w_full()
+                    .flex_1()
+                    .min_width(0.)
+                    .min_height(0.)
+                    .children(page_view),
+                wrap()
+                    .w_full()
+                    .flex_none()
+                    .padding((vw(2.), vh(1.25)))
+                    .gap(vw(1.))
+                    .children((
+                        button("Previous", move || {
+                            selected.update(|index| *index = index.saturating_sub(1));
+                        }),
+                        button("Next", move || {
+                            selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1));
+                        }),
+                        text(selected.map(|index| format!("Page {} / {}", index + 1, PAGES.len())))
+                            .font_size(responsive::font(16.))
+                            .line_height(responsive::ui(24.))
+                            .flex_1(),
+                        text(fps.map(|fps| format!("{fps} FPS")))
+                            .font_size(responsive::font(16.))
+                            .line_height(responsive::ui(24.))
+                            .min_width(0.)
+                            .flex_none()
+                            .text_wrap(false),
+                        transition_control,
+                    )),
             )),
-        )),
     );
     let mut frames = 0;
     let mut sampled_at = get_time();
     loop {
+        responsive::sync();
         clear_background(BG.into());
         app.frame();
         next_frame().await;

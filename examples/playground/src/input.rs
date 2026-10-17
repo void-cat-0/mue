@@ -1,8 +1,8 @@
-use super::controls::*;
+use super::{controls::*, responsive};
 use mue_core::prelude::*;
 use mue_macroquad::{
     node::*,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 
 pub fn page() -> Node {
@@ -17,16 +17,27 @@ pub fn page() -> Node {
     let rotate = signal(0.);
     let panel = |label: &str| {
         center()
-            .width(280.)
-            .height(150.)
+            .flex_basis(percent(40.))
+            .flex_1()
+            .min_width(0.)
+            .height(vh(18.75))
+            .min_height(responsive::ui(64.))
             .background(PANEL)
-            .children(text(label).font_size(22.))
+            .children(
+                text(label)
+                    .font_size(responsive::font(22.))
+                    .line_height(responsive::ui(32.)),
+            )
     };
     stack()
-        .gap(20.)
+        .w_full()
+        .min_width(0.)
+        .gap(vh(2.5))
         .children((
             link_overlay()
-                .padding((20.,))
+                .w_full()
+                .min_width(0.)
+                .padding((vw(2.5), vh(2.5)))
                 .radius(12.)
                 .background(PANEL)
                 .use_pressed(pressed)
@@ -43,12 +54,14 @@ pub fn page() -> Node {
                             hover.get()
                         )
                     }))
-                    .font_size(20.),
+                    .font_size(responsive::font(20.))
+                    .line_height(responsive::ui(28.)),
                     link(child.map(|n| format!("Child {n}")))
-                        .font_size(20.)
+                        .font_size(responsive::font(20.))
+                        .line_height(responsive::ui(28.))
                         .on_activate(move || child.update(|n| *n += 1)),
                 )),
-            wrap().gap(12.).children((
+            wrap().w_full().gap(vw(1.5)).children((
                 panel("Pan").on_pan(move |e| {
                     pan.set(format!(
                         "{:?}: {:.0}, {:.0}",
@@ -68,7 +81,8 @@ pub fn page() -> Node {
                     rotate.get().to_degrees()
                 )
             }))
-            .font_size(20.),
+            .font_size(responsive::font(20.))
+            .line_height(responsive::ui(28.)),
         ))
         .into_node()
 }

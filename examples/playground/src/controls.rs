@@ -1,9 +1,10 @@
+use super::responsive;
 use mue_core::prelude::*;
 use mue_macroquad::{
     animation::{Animation, with_animation},
     color::Color,
     node::*,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 use std::rc::Rc;
 
@@ -15,11 +16,18 @@ pub const SPRING: Animation = Animation::spring(0.3, 0.1);
 
 pub fn button(label: impl Into<Prop<Rc<str>>>, action: impl FnMut() + 'static) -> Node {
     link_overlay()
-        .padding((12., 7.))
-        .radius(7.)
+        .max_width(percent(100.))
+        .min_width(0.)
+        .padding((responsive::ui(12.), responsive::ui(7.)))
+        .min_height(responsive::ui(44.))
+        .radius(responsive::ui(7.))
         .background(PANEL)
         .on_activate(action)
-        .children(text(label).font_size(16.).line_height(24.))
+        .children(
+            text(label)
+                .font_size(responsive::font(16.))
+                .line_height(responsive::ui(24.)),
+        )
         .into_node()
 }
 pub fn toggle(label: &'static str) -> (Signal<bool>, Node) {
@@ -48,11 +56,23 @@ pub fn choice<T: Clone + PartialEq + 'static>(
     (value, control)
 }
 pub fn controls(nodes: Vec<Node>) -> Node {
-    wrap().gap(8.).children(nodes).into_node()
+    wrap()
+        .w_full()
+        .min_width(0.)
+        .gap(vw(1.))
+        .children(nodes)
+        .into_node()
 }
 pub fn section(title: &str, content: impl IntoChildren) -> Node {
     stack()
-        .gap(14.)
-        .children((heading(title).font_size(22.).line_height(32.), content))
+        .w_full()
+        .min_width(0.)
+        .gap(vh(1.75))
+        .children((
+            heading(title)
+                .font_size(responsive::font(22.))
+                .line_height(responsive::ui(32.)),
+            content,
+        ))
         .into_node()
 }

@@ -1,16 +1,10 @@
+mod atlas;
+
 use super::document::Document;
+use atlas::Atlas;
 use std::{cell::RefCell, rc::Rc};
 
-use cosmic_text::{
-    Attrs, Buffer, CacheKey, FontSystem, Metrics, Placement, Shaping, SwashCache, Wrap,
-};
-use guillotiere::{
-    AllocId, Allocation, AtlasAllocator,
-    euclid::{Box2D, Size2D, UnknownUnit},
-    point2, size2,
-};
-use lru::LruCache;
-use macroquad::texture::{Image, Texture2D};
+use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, SwashCache, Wrap};
 use mue_core::{
     effect::{computed, watch_effect},
     prop::Prop,
@@ -20,7 +14,7 @@ use taffy::{AvailableSpace, Size};
 
 use crate::{
     layout::use_layout, math::Rect, paint::use_background, paint::use_paint, runtime::Runtime,
-    shader::SharedTexture, style::Style,
+    style::Style,
 };
 
 /// Preferred break opportunities. `text_wrap(false)` disables all wrapping.
@@ -57,10 +51,26 @@ impl mue_core::prop::PropValue for TextVerticalAlign {}
 pub struct FontState {
     font_system: FontSystem,
     swash_cache: SwashCache,
-    font_atlas: Atlas,
+    font_atlas: Option<Atlas>,
 }
 
 impl FontState {
+    pub(crate) fn with_locale_and_db(locale: String, db: cosmic_text::fontdb::Database) -> Self {
+        Self {
+            font_system: FontSystem::new_with_locale_and_db(locale, db),
+            swash_cache: SwashCache::new(),
+            font_atlas: None,
+        }
+    }
+
+    pub(crate) fn begin_render_pass(&mut self) {
+        if let Some(atlas) = &mut self.font_atlas {
+            // Macroquad queues UVs, so all prior draws must be submitted before slot reuse.
+            unsafe { macroquad::window::get_internal_gl() }.flush();
+            atlas.begin_pass();
+        }
+    }
+
     /// Register the faces contained in `data` with the shared font system.
     ///
     /// Returns the family name of every face that was added, de-duplicated and in file
@@ -92,192 +102,8 @@ impl Default for FontState {
         Self {
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
-            font_atlas: Atlas::new(4096),
+            font_atlas: None,
         }
-    }
-}
-
-/// For weird rect like 1x0
-enum CAllocation {
-    Real(Allocation),
-    Fake,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CAllocId {
-    Real(AllocId),
-    Fake,
-}
-
-impl CAllocation {
-    pub fn rect(&self) -> Box2D<i32, UnknownUnit> {
-        match self {
-            CAllocation::Real(alloc) => alloc.rectangle,
-            CAllocation::Fake => Box2D {
-                min: point2(0, 0),
-                max: point2(0, 0),
-            },
-        }
-    }
-
-    pub fn id(&self) -> CAllocId {
-        match self {
-            CAllocation::Real(alloc) => CAllocId::Real(alloc.id),
-            CAllocation::Fake => CAllocId::Fake,
-        }
-    }
-}
-
-fn alloc_or_evict(
-    allocator: &mut AtlasAllocator,
-    cache: &mut LruCache<CacheKey, (CAllocId, Placement)>,
-    size: Size2D<i32, UnknownUnit>,
-) -> CAllocation {
-    if size.width <= 0 || size.height <= 0 {
-        return CAllocation::Fake;
-    }
-    for _ in 0..Atlas::MAX_ALLOC_ATTEMPTS {
-        if let Some(alloc) = allocator.allocate(size) {
-            return CAllocation::Real(alloc);
-        }
-        if let Some((_, (CAllocId::Real(id), _))) = cache.pop_lru() {
-            allocator.deallocate(id);
-        }
-    }
-    // TODO: handle this better
-    eprintln!("Current cache size: {}", cache.len());
-    panic!(
-        "Failed to allocate space of {}x{} in the atlas after {} attempts, maybe the atlas is too small?",
-        size.width,
-        size.height,
-        Atlas::MAX_ALLOC_ATTEMPTS
-    );
-}
-
-struct Atlas {
-    allocator: AtlasAllocator,
-    pub texture: SharedTexture,
-    cache: LruCache<CacheKey, (CAllocId, Placement)>,
-}
-
-impl Atlas {
-    pub fn new(max_length: u32) -> Self {
-        let mut length: i32 = 0;
-        unsafe {
-            use miniquad::gl;
-            gl::glGetIntegerv(gl::GL_MAX_TEXTURE_SIZE, &mut length);
-        }
-        let length = length.min(max_length as i32);
-        let size: Size2D<i32, UnknownUnit> = size2(length, length);
-        let texture = Texture2D::from_image(&Image {
-            bytes: vec![0; length as usize * length as usize * 4],
-            width: length as u16,
-            height: length as u16,
-        });
-        Self {
-            allocator: AtlasAllocator::new(size),
-            texture: texture.into(),
-            cache: LruCache::unbounded(),
-        }
-    }
-}
-
-impl Default for Atlas {
-    fn default() -> Self {
-        Self::new(i32::MAX as u32)
-    }
-}
-
-impl Atlas {
-    const MAX_ALLOC_ATTEMPTS: usize = 32;
-    const ALLOC_GAP: i32 = 1;
-
-    pub fn cache_glyph(
-        &mut self,
-        font_system: &mut FontSystem,
-        cache: &mut SwashCache,
-        key: CacheKey,
-    ) -> Option<CAllocId> {
-        if let Some((alloc_id, _)) = self.cache.get(&key) {
-            return Some(*alloc_id);
-        }
-
-        let image = cache.get_image_uncached(font_system, key)?;
-
-        let cosmic_text::Placement {
-            left,
-            top,
-            width,
-            height,
-        } = image.placement;
-
-        let alloc = alloc_or_evict(
-            &mut self.allocator,
-            &mut self.cache,
-            size2(
-                width as i32 + 2 * Self::ALLOC_GAP,
-                height as i32 + 2 * Self::ALLOC_GAP,
-            ),
-        );
-
-        let data = match image.content {
-            cosmic_text::SwashContent::Mask => image
-                .data
-                .iter()
-                .flat_map(|a| [255, 255, 255, *a])
-                .collect(),
-            cosmic_text::SwashContent::Color => image.data,
-            cosmic_text::SwashContent::SubpixelMask => {
-                todo!()
-            }
-        };
-        let quad_image = Image {
-            bytes: data,
-            width: width as u16,
-            height: height as u16,
-        };
-        self.texture.update_part(
-            &quad_image,
-            alloc.rect().min.x + Self::ALLOC_GAP,
-            alloc.rect().min.y + Self::ALLOC_GAP,
-            alloc.rect().width() - 2 * Self::ALLOC_GAP,
-            alloc.rect().height() - 2 * Self::ALLOC_GAP,
-        );
-
-        self.cache.push(
-            key,
-            (
-                alloc.id(),
-                Placement {
-                    left,
-                    top,
-                    width,
-                    height,
-                },
-            ),
-        );
-
-        Some(alloc.id())
-    }
-
-    pub fn get_glyph(&mut self, key: CacheKey) -> Option<Rect> {
-        self.cache.get(&key).map(|(alloc_id, _)| {
-            if let CAllocId::Real(alloc_id) = alloc_id {
-                let box2d = self.allocator[*alloc_id].to_f32();
-                Rect::new(
-                    box2d.min.x + Self::ALLOC_GAP as f32,
-                    box2d.min.y + Self::ALLOC_GAP as f32,
-                    box2d.width() - 2.0 * Self::ALLOC_GAP as f32,
-                    box2d.height() - 2.0 * Self::ALLOC_GAP as f32,
-                )
-            } else {
-                Rect::default()
-            }
-        })
-    }
-
-    pub fn get_placement(&mut self, key: CacheKey) -> Option<Placement> {
-        self.cache.get(&key).map(|(_, placement)| *placement)
     }
 }
 
@@ -309,8 +135,14 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
 
     let paint = use_paint(style);
     use_background(style, rect);
-    let font_size = style.take_font_size();
-    let line_height = style.take_line_height();
+    let declared_font_size = style.font_size;
+    let font_size = crate::node::use_font_size();
+    crate::node::NodeInner::with_mut(|node| {
+        if node.font_size.is_none() {
+            node.font_size = declared_font_size;
+        }
+    });
+    let line_height = crate::style::units::resolve_length(style.take_line_height(), "line_height");
     let font_family = style.take_font_family();
     let font_weight = style.take_font_weight();
     let font_italic = style.take_font_italic();
@@ -318,8 +150,10 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
     let wrap_mode = style.take_text_wrap_mode();
     let overflow = style.take_text_overflow();
     let max_lines = style.take_text_max_lines();
-    let spacing = style.take_paragraph_spacing();
-    let letter_spacing = style.take_letter_spacing();
+    let spacing =
+        crate::style::units::resolve_length(style.take_paragraph_spacing(), "paragraph_spacing");
+    let letter_spacing =
+        crate::style::units::resolve_length(style.take_letter_spacing(), "letter_spacing");
     let tab_width = style.take_tab_width();
     let vertical_align = style.take_text_vertical_align();
     let strike = style.take_text_strikethrough();
@@ -494,45 +328,25 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                         }
                         for glyph in run.glyphs.iter() {
                             let physical_glyph = glyph.physical((0., 0.), 1.0);
-                            if fonts
-                                .font_atlas
-                                .cache_glyph(
-                                    &mut fonts.font_system,
-                                    &mut fonts.swash_cache,
-                                    physical_glyph.cache_key,
-                                )
-                                .is_none()
-                            {
+                            let atlas = fonts.font_atlas.get_or_insert_with(Atlas::new);
+                            let Some(cached) = atlas.cache_glyph(
+                                &mut fonts.font_system,
+                                &mut fonts.swash_cache,
+                                physical_glyph.cache_key,
+                            ) else {
                                 continue;
-                            }
-                            let rect = fonts
-                                .font_atlas
-                                .get_glyph(physical_glyph.cache_key)
-                                .unwrap();
-                            let placement = fonts
-                                .font_atlas
-                                .get_placement(physical_glyph.cache_key)
-                                .unwrap();
+                            };
+                            let placement = cached.placement;
                             let draw_rect = Rect::new(
                                 (physical_glyph.x + placement.left) as f32 + origin.x,
                                 ((physical_glyph.y - placement.top) as f32 + run.line_y) + origin.y,
                                 placement.width as f32,
                                 placement.height as f32,
                             );
-                            let uv_rect = {
-                                let width = fonts.font_atlas.texture.width();
-                                let height = fonts.font_atlas.texture.height();
-                                Rect::new(
-                                    rect.x / width,
-                                    rect.y / height,
-                                    rect.w / width,
-                                    rect.h / height,
-                                )
-                            };
                             p.draw_texture(
                                 draw_rect,
-                                fonts.font_atlas.texture.clone(),
-                                uv_rect,
+                                cached.texture,
+                                cached.uv,
                                 glyph
                                     .color_opt
                                     .map_or_else(

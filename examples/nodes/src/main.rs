@@ -1,4 +1,7 @@
 //! Layout and typography gallery. Run with `cargo run -p nodes`.
+#[path = "../../shared/responsive.rs"]
+mod responsive;
+
 use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -6,7 +9,7 @@ use mue_macroquad::{
     color::Color,
     math::Vector,
     node::*,
-    style::{Style, Styleable, StyleableExt},
+    style::{Size, Style, Styleable, StyleableExt},
 };
 
 const PAPER: Color = Color::from_rgba(22, 27, 36, 255);
@@ -26,6 +29,7 @@ fn main() {
 }
 
 async fn run() {
+    responsive::sync();
     let offset = signal(Vector::ZERO);
     let taps = signal(0u32);
     let expanded = signal(true);
@@ -37,57 +41,60 @@ async fn run() {
         |index| *index,
         |index| {
             text(format!("Retained item {}", index + 1))
-                .font_size(18.)
-                .line_height(28.)
+                .font_size(responsive::font(18.))
+                .line_height(responsive::ui(28.))
         },
     );
-    let mut app = App::new(stack().size_full().padding((28.,)).background(PAPER).gap(18.).children((
-        hstack().children((
-            heading("Layout + type").font_size(30.).line_height(40.).flex_1(),
-            link("Back to top").font_size(16.).line_height(24.).on_activate(move || offset.set(Vector::ZERO)),
+    let mut app = App::new(stack().size_full().font_size(responsive::root_font()).padding((Size::vw(3.),)).background(PAPER).gap(responsive::ui(18.)).children((
+        wrap().w_full().flex_none().children((
+            heading("Layout + type").font_size(responsive::font(30.)).line_height(responsive::ui(40.))
+                .min_width(0.).flex_basis(Size::percent(60.)).flex_1(),
+            link("Back to top").min_height(responsive::ui(44.)).font_size(responsive::font(16.)).line_height(responsive::ui(24.)).on_activate(move || offset.set(Vector::ZERO)),
         )),
         scroll_area().flex_1().w_full().offset(offset)
             .options(ScrollOptions { mouse_drag: true, ..Default::default() })
-            .content_style(Style::new().gap(24.).padding((20.,)))
+            .content_style(Style::new().gap(responsive::ui(24.)).padding((Size::vw(2.),)))
             .children((
-                container().max_width(760.).padding((0.,)).gap(18.).children((
+                container().max_width(responsive::ui(760.)).min_width(0.).padding((0.,)).gap(responsive::ui(18.)).children((
                     text("Wheel, drag the content, or drag a scrollbar. Child links still respond to taps.")
-                        .font_size(18.).line_height(28.),
-                    wrap().gap(12.).children((code("flexbox"), code("stack"), code("wrap"), code("container"))),
-                    aspect_ratio().ratio(3.).w_full().flex_none().background(PANEL).radius(8.).children((
-                        center().size_full().children(em("A frame with a 3:1 ratio").font_size(20.)),
+                        .font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
+                    wrap().gap(responsive::ui(12.)).children((code("flexbox").line_height(responsive::ui(44.)), code("stack").line_height(responsive::ui(44.)), code("wrap").line_height(responsive::ui(44.)), code("container").line_height(responsive::ui(44.)))),
+                    aspect_ratio().ratio(3.).w_full().flex_none().background(PANEL).radius(responsive::ui(8.)).children((
+                        center().size_full().children(em("A frame with a 3:1 ratio").font_size(responsive::font(20.)).line_height(responsive::ui(28.))),
                         float().placement(FloatPlacement::TopEnd).children(
-                            center().width(40.).height(40.).radius(20.).background(ACCENT)
-                                .children(text("+").color(PAPER).font_size(24.).line_height(24.)),
+                            center().width(responsive::ui(40.)).height(responsive::ui(40.)).radius(responsive::ui(20.)).background(ACCENT)
+                                .children(text("+").color(PAPER).font_size(responsive::font(24.)).line_height(responsive::ui(24.))),
                         ),
                     )),
                     separator(),
-                    blockquote("Small pieces, composed with the same style API.").font_size(22.).line_height(32.),
-                    link_overlay().background(PANEL).padding((18.,)).radius(8.).gap(8.)
+                    blockquote("Small pieces, composed with the same style API.").font_size(responsive::font(22.)).line_height(responsive::ui(32.)),
+                    link_overlay().min_height(responsive::ui(44.)).background(PANEL).padding((Size::vw(2.),)).radius(responsive::ui(8.)).gap(responsive::ui(8.))
                         .on_activate(move || taps.update(|count| *count += 1))
                         .children((
-                            heading("An actionable card").level(HeadingLevel::H3).font_size(22.).line_height(30.),
-                            text(taps.map(|count| format!("Card activated {count} times"))).font_size(18.).line_height(28.),
-                            link("Toggle list length").font_size(18.).line_height(28.).toggle_on_tap(expanded),
+                            heading("An actionable card").level(HeadingLevel::H3).font_size(responsive::font(22.)).line_height(responsive::ui(30.)),
+                            text(taps.map(|count| format!("Card activated {count} times"))).font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
+                            link("Toggle list length").min_height(responsive::ui(44.)).font_size(responsive::font(18.)).line_height(responsive::ui(28.)).toggle_on_tap(expanded),
                         )),
-                    list().marker(ListMarker::Ordered(1)).font_size(18.).line_height(28.).children(rows),
-                    scroll_area().axis(ScrollAxis::Horizontal).height(130.).flex_none().background(PANEL)
+                    list().marker(ListMarker::Ordered(1)).font_size(responsive::font(18.)).line_height(responsive::ui(28.)).children(rows),
+                    scroll_area().axis(ScrollAxis::Horizontal).w_full()
+                        .height(Size::vh(17.)).max_height(responsive::ui(130.)).flex_none().background(PANEL)
                         .children(code_block("let view = stack().gap(16.).children((heading(\"Hello\"), text(\"Compose your interface with familiar nodes.\")));" )
-                            .font_size(18.).line_height(28.)),
+                            .font_size(responsive::font(18.)).line_height(responsive::ui(28.)).flex_none()),
                     document(Document::blocks([
                         Document::heading("Rich documents", HeadingLevel::H2),
                         Document::rich([Span::new("Keep styled runs together: "), Span::new("emphasis").italic(),
                             Span::new(", "), Span::new("code").monospace(), Span::new(" and normal text.")]),
                         Document::blockquote("Documents share typography conventions with the standalone nodes."),
-                    ])).font_size(18.).line_height(28.),
+                    ])).font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
                     markdown("## Markdown still works\n\n- Existing APIs are preserved\n- Paragraphs wrap naturally\n\n**End of gallery.**")
-                        .font_size(18.).line_height(28.),
+                        .font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
                 )),
             )),
         text(offset.map(|value| format!("Scroll offset: {:.0}, {:.0}", value.x, value.y)))
-            .font_size(14.).line_height(20.).color(ACCENT),
+            .font_size(responsive::font(14.)).line_height(responsive::ui(20.)).color(ACCENT).flex_none(),
     )));
     loop {
+        responsive::sync();
         clear_background(PAPER.into());
         app.frame();
         next_frame().await;

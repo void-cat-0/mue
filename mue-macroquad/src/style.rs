@@ -1,4 +1,7 @@
 mod ext;
+pub mod units;
+
+pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
 use crate::{color::Color, shader::Brush};
 use cosmic_text::Align;
@@ -13,10 +16,7 @@ use mue_core::{
 };
 use paste::paste;
 use std::mem;
-use taffy::{
-    BoxSizing, Dimension, Display, LengthPercentage, LengthPercentageAuto, Overflow, Point,
-    Position, prelude::TaffyZero,
-};
+use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
     event::{pointer::PointerEvent, wheel::WheelEvent},
@@ -80,6 +80,15 @@ where
 }
 
 macro_rules! define_style {
+    (@themed_property $result:ident, $theme:ident, $defaults:ident, font_size, $ty:ty, $($default:expr)?) => {
+        let fallback = $defaults.font_size.take();
+        $result.font_size = Some(computed_always(move |_| {
+            let current = $theme.get_clone();
+            current.font_size.as_ref().or(fallback.as_ref())
+                .map(|value| value.get())
+                .unwrap_or(FontSize::Em(1.))
+        }).into());
+    };
     (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
         let fallback = $defaults.$field.take();
         $result.$field = Some(computed_always(move |_| {
@@ -111,7 +120,7 @@ macro_rules! define_style {
     };
 
     (
-        $($(#[$property_doc:meta])* $name:ident : $ty:ty $( = $default:expr)?;)*
+        $($(#[$property_doc:meta])* $name:ident : $ty:ty $(= $default:expr)?;)*
         @rects {
             $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)*
         }
@@ -326,19 +335,19 @@ define_style! {
     display: Display;
 
     /// Set the preferred width; numbers are pixels and the default is auto.
-    width: Dimension = Dimension::auto();
+    width: Size = Size::Auto;
     /// Set the preferred height; numbers are pixels and the default is auto.
-    height: Dimension = Dimension::auto();
+    height: Size = Size::Auto;
 
     /// Set a lower bound on width.
-    min_width: Dimension = Dimension::auto();
+    min_width: Size = Size::Auto;
     /// Set a lower bound on height.
-    min_height: Dimension = Dimension::auto();
+    min_height: Size = Size::Auto;
 
     /// Set an upper bound on width.
-    max_width: Dimension = Dimension::auto();
+    max_width: Size = Size::Auto;
     /// Set an upper bound on height.
-    max_height: Dimension = Dimension::auto();
+    max_height: Size = Size::Auto;
 
     overflow_x: Overflow = Overflow::Visible;
     overflow_y: Overflow = Overflow::Visible;
@@ -360,12 +369,12 @@ define_style! {
     flex_wrap: taffy::FlexWrap;
 
     /// Horizontal space between columns and vertical space between rows.
-    column_gap: LengthPercentage = LengthPercentage::ZERO;
-    row_gap: LengthPercentage = LengthPercentage::ZERO;
+    column_gap: Size = Size::Px(0.);
+    row_gap: Size = Size::Px(0.);
     /// Preferred width divided by height, when one dimension is automatic.
     aspect_ratio: Option<f32>;
 
-    flex_basis: Dimension = Dimension::auto();
+    flex_basis: Size = Size::Auto;
     /// Set how much of the parent's remaining main-axis space this node takes.
     flex_grow: f32 = 0.0;
     /// Set how much this node shrinks when flex children exceed available space.
@@ -381,15 +390,16 @@ define_style! {
     /// Set the foreground brush for text and image tint.
     color: Brush = Brush::Solid(Color::WHITE);
     /// Round background corners by this radius in pixels.
-    radius: f32 = 0.0;
+    radius: Size = Size::Px(0.);
 
     // Text
     /// Align shaped lines within the text node's content width.
     text_align: Option<Align>;
-    /// Set glyph size in pixels, including document spans without overrides.
-    font_size: f32 = 32.0;
+    /// Set glyph size; percent/em use the parent computed size, rem uses the root.
+    /// Unspecified sizes inherit; the root defaults to 32 logical pixels.
+    font_size: FontSize = FontSize::Em(1.);
     /// Set baseline spacing in pixels.
-    line_height: f32 = 44.0;
+    line_height: Size = Size::Px(44.);
     /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
@@ -407,15 +417,15 @@ define_style! {
     text_max_lines: Option<usize>;
     text_vertical_align: crate::node::TextVerticalAlign;
     /// Extra space between newline-delimited paragraphs, in logical pixels.
-    paragraph_spacing: f32 = 0.;
-    letter_spacing: f32 = 0.;
+    paragraph_spacing: Size = Size::Px(0.);
+    letter_spacing: Size = Size::Px(0.);
     tab_width: u16 = 4;
 
     @rects {
-        margin: taffy::Rect<LengthPercentageAuto> = LengthPercentageAuto::ZERO;
-        padding: taffy::Rect<LengthPercentage> = LengthPercentage::ZERO;
-        border: taffy::Rect<LengthPercentage> = LengthPercentage::ZERO;
-        inset: taffy::Rect<LengthPercentageAuto> = LengthPercentageAuto::auto();
+        margin: taffy::Rect<Size> = Size::Px(0.);
+        padding: taffy::Rect<Size> = Size::Px(0.);
+        border: taffy::Rect<Size> = Size::Px(0.);
+        inset: taffy::Rect<Size> = Size::Auto;
     }
 
     @hooks {
@@ -513,17 +523,17 @@ impl Style {
             display: display.get(),
             box_sizing: box_sizing.get(),
             aspect_ratio: aspect_ratio.get(),
-            gap: gap.get(),
+            gap: gap.get().map(|v| v.to_length_percentage("gap")),
 
-            size: size.get(),
-            min_size: min_size.get(),
-            max_size: max_size.get(),
+            size: size.get().map(Size::to_dimension),
+            min_size: min_size.get().map(Size::to_dimension),
+            max_size: max_size.get().map(Size::to_dimension),
 
             overflow: overflow.get(),
 
-            margin: margin.get(),
-            padding: padding.get(),
-            border: border.get(),
+            margin: margin.get().map(Size::to_length_percentage_auto),
+            padding: padding.get().map(|v| v.to_length_percentage("padding")),
+            border: border.get().map(|v| v.to_length_percentage("border")),
 
             align_items: align_items.get(),
             align_self: align_self.get(),
@@ -533,12 +543,12 @@ impl Style {
             justify_content: justify_content.get(),
 
             position: position.get(),
-            inset: inset.get(),
+            inset: inset.get().map(Size::to_length_percentage_auto),
 
             flex_direction: flex_direction.get(),
             flex_wrap: flex_wrap.get(),
 
-            flex_basis: flex_basis.get(),
+            flex_basis: flex_basis.get().to_dimension(),
             flex_grow: flex_grow.get(),
             flex_shrink: flex_shrink.get(),
 

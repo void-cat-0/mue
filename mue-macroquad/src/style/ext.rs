@@ -1,10 +1,11 @@
 use mue_core::signal::Signal;
 use paste::paste;
-use taffy::{AlignContent, AlignItems, Dimension, FlexDirection, Position};
+use taffy::{AlignContent, AlignItems, FlexDirection, Position};
 
 use crate::event::pointer::{PointerAction, PointerId};
 
-use super::Styleable;
+use super::{Size, Styleable};
+use mue_core::prop::Prop;
 
 macro_rules! impl_align_content {
     ($prefix:ident, $fn:ident) => {
@@ -55,7 +56,7 @@ macro_rules! impl_align_items {
 /// Shortcuts for common layout styles and pointer interactions.
 pub trait StyleableExt: Styleable {
     /// Set equal row and column spacing.
-    fn gap(self, value: impl Into<mue_core::prop::Prop<taffy::LengthPercentage>>) -> Self {
+    fn gap(self, value: impl Into<Prop<Size>>) -> Self {
         let value = value.into();
         self.column_gap(value).row_gap(value)
     }
@@ -70,22 +71,21 @@ pub trait StyleableExt: Styleable {
         self.on_activate(move || state.toggle())
     }
     fn w_full(self) -> Self {
-        self.width(Dimension::percent(1.))
+        self.width(Size::Percent(100.))
     }
     fn w_auto(self) -> Self {
-        self.width(Dimension::auto())
+        self.width(Size::Auto)
     }
 
     fn h_full(self) -> Self {
-        self.height(Dimension::percent(1.))
+        self.height(Size::Percent(100.))
     }
     fn h_auto(self) -> Self {
-        self.height(Dimension::auto())
+        self.height(Size::Auto)
     }
 
     fn size_full(self) -> Self {
-        self.width(Dimension::percent(1.))
-            .height(Dimension::percent(1.))
+        self.width(Size::Percent(100.)).height(Size::Percent(100.))
     }
 
     fn relative(self) -> Self {

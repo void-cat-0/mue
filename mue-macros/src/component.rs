@@ -85,10 +85,11 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
                     }
                 } else {
                     *pat_type.ty = syn::parse_quote! { #prop<#inner_ty> };
+                    let default = default.map(|d| quote! { #prop::Static(#d) });
                     Arg::Arg {
                         ident: ident.clone(),
                         ty: quote! { #prop<#inner_ty> },
-                        default: default.map(|d| quote! { #prop::Static(#d) }),
+                        default,
                     }
                 }
             }
@@ -104,7 +105,9 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
         Arg::Style(ty) => {
             quote! { style: #ty }
         }
-        Arg::Arg { ident, ty, default } => {
+        Arg::Arg {
+            ident, ty, default, ..
+        } => {
             if default.is_some() {
                 quote! { #ident: #option<#ty> }
             } else {
@@ -114,12 +117,13 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
     });
     let setters = fields.iter().filter_map(|arg| match arg {
         Arg::Arg { ident, ty, default } => {
+            let bound = quote! { #into<#ty> };
             let mut value = quote! { #into::into(value) };
             if default.is_some() {
                 value = quote! { Some(#value) };
             }
             Some(quote! {
-                pub fn #ident(mut self, value: impl #into<#ty>) -> Self {
+                pub fn #ident(mut self, value: impl #bound) -> Self {
                     self.#ident = #value;
                     self
                 }
@@ -133,7 +137,8 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
         .filter_map(|arg| match arg {
             Arg::Arg { ident, ty, default } => {
                 if default.is_none() {
-                    Some(quote! { #ident: impl #into<#ty> })
+                    let bound = quote! { #into<#ty> };
+                    Some(quote! { #ident: impl #bound })
                 } else {
                     None
                 }

@@ -1,9 +1,9 @@
-use super::controls::*;
+use super::{controls::*, responsive};
 use mue_macroquad::{
     color::Color,
     factory::factory,
     node::*,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, vh, vw},
     theme::{provide_theme, theme},
 };
 #[derive(Clone)]
@@ -12,9 +12,20 @@ struct Options {
 }
 pub fn page() -> Node {
     let (dark, control) = toggle("Theme");
-    let tile = factory(|label: &'static str| center().children(text(label).font_size(22.)))
-        .defaults(Options { accent: false })
-        .style(|s, _| s.padding((22.,)).radius(14.));
+    let tile = factory(|label: &'static str| {
+        center().children(
+            text(label)
+                .font_size(responsive::font(22.))
+                .line_height(responsive::ui(32.)),
+        )
+    })
+    .defaults(Options { accent: false })
+    .style(|s, _| {
+        s.w_full()
+            .min_width(0.)
+            .padding((vw(2.75), vh(2.75)))
+            .radius(14.)
+    });
     let first = theme!(|c, s| match c {
         tile(o) if o.accent => s.background(CORAL),
         tile => s.background(BLUE),
@@ -30,11 +41,13 @@ pub fn page() -> Node {
         _ => s,
     });
     stack()
-        .gap(20.)
+        .w_full()
+        .min_width(0.)
+        .gap(vh(2.5))
         .children((
             control,
             provide_theme(dark.select(second, first), move || {
-                stack().gap(16.).children((
+                stack().w_full().min_width(0.).gap(vh(2.)).children((
                     tile.create("Default").animation(SPRING),
                     tile.create("Accent")
                         .options(|o| o.accent = true)

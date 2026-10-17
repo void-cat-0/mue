@@ -1,10 +1,9 @@
 use super::flexbox::render_container;
 use crate::{
     color::Color,
-    style::{Style, Styleable, StyleableExt},
+    style::{Size, Style, Styleable, StyleableExt},
 };
 use mue_core::prop::PropValue;
-use taffy::Dimension;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Orientation {
@@ -19,27 +18,35 @@ impl PropValue for Orientation {}
 pub fn separator(
     style: &mut Style,
     #[default] orientation: Orientation,
-    #[default(1.)] thickness: f32,
+    #[default(Size::Px(1.))] thickness: Size,
 ) {
     style.provide_defaults(
         Style::new()
             .flex_none()
             .width(mue_core::effect::computed(move |_| {
                 let axis = mue_core::signal::Access::get(&orientation);
-                let thickness = mue_core::signal::Access::get(&thickness).max(0.);
+                let thickness = mue_core::signal::Access::get(&thickness);
+                let thickness = match thickness {
+                    Size::Px(value) => Size::Px(value.max(0.)),
+                    value => value,
+                };
                 if axis == Orientation::Horizontal {
-                    Dimension::percent(1.)
+                    Size::Percent(100.)
                 } else {
-                    Dimension::length(thickness)
+                    thickness
                 }
             }))
             .height(mue_core::effect::computed(move |_| {
                 let axis = mue_core::signal::Access::get(&orientation);
-                let thickness = mue_core::signal::Access::get(&thickness).max(0.);
+                let thickness = mue_core::signal::Access::get(&thickness);
+                let thickness = match thickness {
+                    Size::Px(value) => Size::Px(value.max(0.)),
+                    value => value,
+                };
                 if axis == Orientation::Vertical {
-                    Dimension::percent(1.)
+                    Size::Percent(100.)
                 } else {
-                    Dimension::length(thickness)
+                    thickness
                 }
             }))
             .background(Color::from_rgba(128, 128, 128, 96)),

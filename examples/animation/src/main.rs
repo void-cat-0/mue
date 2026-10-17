@@ -1,5 +1,7 @@
 //! Implicit style animation and explicit state transactions.
 //! Run with `cargo run -p animation`.
+#[path = "../../shared/responsive.rs"]
+mod responsive;
 use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -8,7 +10,7 @@ use mue_macroquad::{
     color::Color as UiColor,
     node::*,
     shader::Brush,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 
 const ACTIVE: UiColor = UiColor::from_rgba(70, 95, 130, 255);
@@ -34,32 +36,63 @@ async fn run() {
     let expanded = signal(false);
     let spring = signal(true);
     let hovered = signal(false);
+    responsive::sync();
     let mut app = App::new(
         stack()
             .size_full()
-            .padding((40.,))
+            .font_size(responsive::root_font())
+            .padding((vw(5.), vh(5.)))
             .background(CANVAS)
             .children((
-                hstack().children((
-                    heading("Motion study").font_size(32.).flex_1(),
-                    flexbox()
-                        .background(SURFACE)
-                        .padding((16., 10.))
-                        .toggle_on_tap(spring)
-                        .children(text(spring.select("Spring", "Ease in out")).font_size(18.)),
-                )),
-                flexbox().flex_1().justify_center().items_center().children(
-                    flexbox()
-                        .width(expanded.select(480., 180.))
-                        .height(expanded.select(240., 180.))
-                        .radius(expanded.select(24., 90.))
-                        .background(expanded.select(Brush::Solid(PLUM), Brush::Solid(BLUE)))
-                        .items_center()
-                        .justify_center()
-                        .children(text(expanded.select("Open", "Closed")).font_size(28.)),
-                ),
+                wrap()
+                    .flex_none()
+                    .column_gap(vw(2.))
+                    .row_gap(vh(1.5))
+                    .children((
+                        heading("Motion study")
+                            .font_size(responsive::font(32.))
+                            .line_height(responsive::ui(44. * 1.45))
+                            .min_width(0.)
+                            .flex_grow(1.),
+                        flexbox()
+                            .background(SURFACE)
+                            .padding((responsive::ui(16.), responsive::ui(10.)))
+                            .min_width(responsive::ui(44.))
+                            .min_height(responsive::ui(44.))
+                            .max_width(percent(100.))
+                            .toggle_on_tap(spring)
+                            .children(
+                                text(spring.select("Spring", "Ease in out"))
+                                    .font_size(responsive::font(18.))
+                                    .line_height(responsive::ui(44.)),
+                            ),
+                    )),
+                flexbox()
+                    .flex_1()
+                    .min_height(0.)
+                    .padding((0., vh(2.)))
+                    .justify_center()
+                    .items_center()
+                    .children(
+                        flexbox()
+                            .width(expanded.select(percent(64.), percent(24.)))
+                            .max_width(percent(100.))
+                            .max_height(percent(100.))
+                            .aspect_ratio(expanded.select(Some(2.), Some(1.)))
+                            .radius(responsive::ui(expanded.select(24., 90.)))
+                            .background(expanded.select(Brush::Solid(PLUM), Brush::Solid(BLUE)))
+                            .items_center()
+                            .justify_center()
+                            .children(
+                                text(expanded.select("Open", "Closed"))
+                                    .font_size(responsive::font(28.))
+                                    .line_height(responsive::ui(44.)),
+                            ),
+                    ),
                 center()
-                    .height(56.)
+                    .flex_none()
+                    .min_height(responsive::ui(44.))
+                    .padding((responsive::ui(16.), responsive::ui(8.)))
                     .background(hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE)))
                     .animation(Animation::ease_in_out(0.18))
                     .use_hovered(hovered)
@@ -71,11 +104,16 @@ async fn run() {
                         };
                         with_animation(curve, || expanded.toggle());
                     })
-                    .children(text(expanded.select("Close", "Open")).font_size(20.)),
+                    .children(
+                        text(expanded.select("Close", "Open"))
+                            .font_size(responsive::font(20.))
+                            .line_height(responsive::ui(44.)),
+                    ),
             )),
     );
     loop {
         clear_background(CANVAS.into());
+        responsive::sync();
         app.frame();
         next_frame().await;
     }

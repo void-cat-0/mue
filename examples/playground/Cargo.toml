@@ -12,5 +12,8 @@ mue-macroquad.workspace = true
 taffy.workspace = true
 cosmic-text.workspace = true
 
+[dev-dependencies]
+unicode-script = "0.5.8"
+
 [lib]
 crate-type = ["cdylib", "rlib"]

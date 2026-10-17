@@ -1,0 +1,44 @@
+PLAYGROUND BUNDLED FONT NOTICES
+
+The following unmodified font files are embedded in the playground executable.
+They are licensed under the SIL Open Font License, Version 1.1, not the
+application's MIT license. The full applicable license texts follow this notice
+on the playground's Font licenses page and are also stored beside the fonts.
+
+Noto Sans 2.015 (Regular, Bold, Italic, Bold Italic)
+Noto Serif 2.015 (Regular, Bold, Italic, Bold Italic)
+Noto Sans Mono 2.014 (Regular, Bold)
+Copyright 2022 The Noto Project Authors
+https://github.com/notofonts/latin-greek-cyrillic
+License: OFL-NotoLatinGreekCyrillic.txt
+
+Noto Sans CJK SC 2.004 (Regular, Bold)
+© 2014-2021 Adobe (http://www.adobe.com/).
+https://github.com/notofonts/noto-cjk
+License: OFL-NotoCJK.txt
+The SC faces use Simplified Chinese regional glyph forms. Coverage of CJK
+characters does not guarantee locale-specific Japanese, Korean or traditional
+Chinese glyph forms in this example.
+
+Noto Sans Arabic 2.013 (Regular, Bold)
+Copyright 2022 The Noto Project Authors
+https://github.com/notofonts/arabic
+License: OFL-NotoArabic.txt
+
+Noto Sans Symbols 2 2.008 (Regular)
+Copyright 2022 The Noto Project Authors
+https://github.com/notofonts/symbols
+License: OFL-NotoSymbols.txt
+
+Upstream static font binaries: https://notofonts.github.io/
+Exact immutable download URLs, versions, copyright metadata and SHA-256 hashes
+are recorded in sources.json alongside the source assets. No font subsetting,
+conversion or other modification has been performed.
+
+This bundle covers the playground's Latin, Greek, Cyrillic, CJK and Arabic
+samples and common symbols. It does not claim complete Unicode or all-language
+coverage. Cross-script fallback may not preserve serif or monospace styling.
+No color emoji font is embedded.
+
+The pre-existing Space Mono files remain in the source directory with their
+OFL-SpaceMono.txt license, but are not embedded in this playground executable.

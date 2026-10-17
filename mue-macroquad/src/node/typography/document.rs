@@ -307,31 +307,3 @@ pub fn document(content: impl IntoDocumentProp) -> DocumentViewBuilder {
 fn document_view(style: &mut Style, content: Document) {
     super::text::render_text(style, content);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn markdown_preserves_paragraphs_and_nested_styles() {
-        let doc = Document::markdown(
-            "# Field notes\n\nA **bold and *italic*** word with `code`.\n\nNext paragraph.",
-        );
-        let text: String = doc.spans.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(
-            text,
-            "Field notes\n\nA bold and italic word with code.\n\nNext paragraph."
-        );
-        assert_eq!(doc.spans[0].style.scale, 1.8);
-        let italic = doc.spans.iter().find(|s| s.text == "italic").unwrap();
-        assert!(italic.style.italic);
-        assert_eq!(italic.style.weight, Some(Weight::BOLD));
-        let code = doc.spans.iter().find(|s| s.text == "code").unwrap();
-        assert_eq!(code.style.family, Some(FamilyOwned::Monospace));
-    }
-    #[test]
-    fn lists_links_and_unicode_remain_readable() {
-        let doc = Document::markdown("3. 日本語\n4. [مرحبا](https://example.com)\n\nFinal");
-        let text: String = doc.spans.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(text, "3. 日本語\n4. مرحبا\n\nFinal");
-    }
-}

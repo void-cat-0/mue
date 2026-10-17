@@ -24,7 +24,12 @@ pub struct App {
 impl App {
     /// Build and retain a root view.
     pub fn new(root_node: impl IntoNode) -> Self {
+        crate::viewport::set(crate::viewport::Viewport {
+            width: macroquad::window::screen_width(),
+            height: macroquad::window::screen_height(),
+        });
         let root_node = root_node.into_node();
+        root_node.resolve_font_sizes();
         let layout_id = Runtime::with(|rt| rt.node(root_node.id).layout_id);
 
         Self {
@@ -39,7 +44,14 @@ impl App {
     /// Call once per frame before `macroquad::next_frame`.
     pub fn frame(&mut self) {
         let root_node = *self.root_node;
-        animation::advance(macroquad::time::get_frame_time());
+        let viewport = crate::viewport::Viewport {
+            width: macroquad::window::screen_width(),
+            height: macroquad::window::screen_height(),
+        };
+        batch(|| {
+            crate::viewport::set(viewport);
+            animation::advance(macroquad::time::get_frame_time());
+        });
         batch(|| {
             let time = get_time();
             Runtime::with(|rt| {
@@ -61,25 +73,46 @@ impl App {
                     callback();
                 }
             });
-
-            if let Some(layout_id) = self.layout_id {
-                Runtime::with_taffy_mut(|taffy| {
-                    taffy
-                        .compute_layout_with_measure(
-                            layout_id,
-                            Size {
-                                width: AvailableSpace::Definite(macroquad::window::screen_width()),
-                                height: AvailableSpace::Definite(macroquad::window::screen_height()),
-                            },
-                            |known_dimensions, available_space, _node_id, node_context, _style| {
-                                node_context.map_or(Size::ZERO, |f| {
-                                    f.measure(known_dimensions, available_space)
-                                })
-                            },
-                        )
-                        .unwrap();
-                });
+        });
+        self.root_node.resolve_font_sizes();
+        for pass in 0..64 {
+            let mut changed = false;
+            batch(|| {
+                if let Some(layout_id) = self.layout_id {
+                    Runtime::with_taffy_mut(|taffy| {
+                        taffy
+                            .compute_layout_with_measure(
+                                layout_id,
+                                Size {
+                                    width: AvailableSpace::Definite(viewport.width),
+                                    height: AvailableSpace::Definite(viewport.height),
+                                },
+                                |known_dimensions,
+                                 available_space,
+                                 _node_id,
+                                 node_context,
+                                 _style| {
+                                    node_context.map_or(Size::ZERO, |f| {
+                                        f.measure(known_dimensions, available_space)
+                                    })
+                                },
+                            )
+                            .unwrap();
+                    });
+                }
+                changed = self.root_node.sync_layout();
+            });
+            if !changed {
+                break;
             }
+            self.root_node.resolve_font_sizes();
+            assert!(
+                pass < 63,
+                "layout dependencies did not stabilize before rendering"
+            );
+        }
+        Runtime::begin_text_render_pass();
+        batch(|| {
             self.root_node.render(vec2(0., 0.));
             self.pointer_manager.process(root_node);
             crate::event::wheel::check_wheel(root_node);

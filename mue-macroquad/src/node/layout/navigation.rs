@@ -1,6 +1,6 @@
 //! Value-driven navigation with retained screens and interruptible transitions.
 use crate::{
-    animation::Animation,
+    animation::{self, Animation, Driver},
     layout::use_layout,
     math::Vector,
     node::{IntoNode, Node, NodeInner, NodeRef, flexbox},
@@ -9,6 +9,7 @@ use crate::{
 };
 use mue_core::prelude::*;
 use std::{cell::RefCell, rc::Rc};
+const PARALLAX_RATIO: f32 = 0.22;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NavigationTransition {
@@ -64,6 +65,7 @@ impl<T, R, F> NavigationStackBuilder<T, R, F> {
         self.transition = transition;
         self
     }
+    /// Configure timing; slide progress is bounded to keep the viewport covered.
     pub fn transition_animation(mut self, curve: Animation) -> Self {
         self.curve = curve;
         self
@@ -80,37 +82,43 @@ impl<T, R, F> Styleable for NavigationStackBuilder<T, R, F> {
 
 struct Screen {
     node: Node,
-    x: Signal<f32>,
-    y: Signal<f32>,
+    width: Signal<f32>,
+    left: Signal<f32>,
+    position: Signal<Vector>,
 }
 impl Screen {
-    fn new(
-        build: impl FnOnce() -> Node,
-        width: ReadSignal<f32>,
-        left: ReadSignal<f32>,
-    ) -> Rc<Self> {
+    fn new(build: impl FnOnce() -> Node) -> Rc<Self> {
         let scope = Scope::new();
         scope.run(|| {
-            let x = signal(0.);
-            let y = signal(0.);
+            let width = signal(0.);
+            let left = signal(0.);
+            let position = signal(Vector::ZERO);
             let node = flexbox()
                 .absolute()
                 .height(taffy::Dimension::percent(1.))
                 .width(width)
-                .inset_left(computed(move |_| left.get() + x.get()))
-                .inset_top(*y)
+                .inset_left(computed(move |_| left.get() + position.get().x))
+                .inset_top(computed(move |_| position.get().y))
                 .children(build())
                 .into_node();
             node.retain_scope(scope);
-            Rc::new(Self { node, x, y })
+            Rc::new(Self {
+                node,
+                width,
+                left,
+                position,
+            })
         })
     }
     fn position(&self) -> Vector {
-        Vector::new(self.x.get_untracked(), self.y.get_untracked())
+        self.position.get_untracked()
     }
     fn set_position(&self, point: Vector) {
-        self.x.set(point.x);
-        self.y.set(point.y);
+        self.position.set(point);
+    }
+    fn set_geometry(&self, left: f32, width: f32) {
+        self.left.set(left);
+        self.width.set(width);
     }
 }
 struct Motion {
@@ -121,6 +129,210 @@ struct Motion {
 struct Transition {
     elapsed: f32,
     motions: Vec<Motion>,
+}
+
+struct Presentation {
+    root: Rc<Screen>,
+    stack: Vec<Rc<Screen>>,
+    layers: Vec<Rc<Screen>>,
+    visible: Signal<Rc<[NodeRef]>>,
+    interactive: Signal<Rc<[NodeRef]>>,
+    size: Vector,
+    split: Option<(f32, f32)>,
+    transition: NavigationTransition,
+    curve: Animation,
+    motion: Option<Transition>,
+}
+
+impl Presentation {
+    fn wide(&self) -> bool {
+        self.split
+            .is_some_and(|(_, breakpoint)| self.size.x >= breakpoint)
+    }
+
+    fn sidebar(&self) -> f32 {
+        if self.wide() && !self.stack.is_empty() {
+            self.split.unwrap().0
+        } else {
+            0.
+        }
+    }
+
+    fn top(&self) -> Rc<Screen> {
+        self.stack.last().unwrap_or(&self.root).clone()
+    }
+
+    fn next(&self) -> Vec<Rc<Screen>> {
+        let mut next = Vec::new();
+        if self.wide() && !self.stack.is_empty() {
+            next.push(self.root.clone());
+        }
+        next.push(self.top());
+        next
+    }
+
+    fn set_geometry(&self) {
+        let sidebar = self.sidebar();
+        self.root
+            .set_geometry(0., if sidebar > 0. { sidebar } else { self.size.x });
+        if let Some(top) = self.stack.last() {
+            top.set_geometry(sidebar, (self.size.x - sidebar).max(0.));
+        }
+    }
+
+    fn publish(&self) {
+        self.visible
+            .set(self.layers.iter().map(|s| *s.node).collect());
+        self.interactive
+            .set(self.next().iter().map(|s| *s.node).collect());
+    }
+
+    fn settle(&mut self) {
+        self.motion = None;
+        self.set_geometry();
+        self.layers = self.next();
+        for screen in &self.layers {
+            screen.set_position(Vector::ZERO);
+        }
+        self.publish();
+    }
+
+    fn resize(&mut self, size: Vector) -> bool {
+        if self.size == size {
+            return false;
+        }
+        self.size = size;
+        self.settle();
+        true
+    }
+
+    fn navigate(&mut self, stack: Vec<Rc<Screen>>, back: bool) {
+        let old = self.top();
+        self.stack = stack;
+        let top = self.top();
+        if Rc::ptr_eq(&old, &top) {
+            return;
+        }
+        let animate = self.transition != NavigationTransition::None
+            && self.curve.duration().is_finite()
+            && self.curve.duration() > 0.
+            && self.size.x > 0.
+            && self.size.y > 0.;
+        if !animate {
+            self.settle();
+            return;
+        }
+        if Rc::ptr_eq(&top, &self.root) {
+            top.set_geometry(0., self.size.x);
+        } else {
+            let sidebar = self.sidebar();
+            top.set_geometry(sidebar, (self.size.x - sidebar).max(0.));
+        }
+        let wide = self.wide();
+        let distance = if self.transition == NavigationTransition::SlideVertical {
+            self.size.y
+        } else {
+            (self.size.x - self.sidebar()).max(0.)
+        };
+        let vector = |value| {
+            if self.transition == NavigationTransition::SlideVertical {
+                Vector::new(0., value)
+            } else {
+                Vector::new(value, 0.)
+            }
+        };
+        let index = self.layers.iter().position(|s| Rc::ptr_eq(s, &top));
+        if let Some(index) = index {
+            if !back {
+                let screen = self.layers.remove(index);
+                self.layers.push(screen);
+            }
+        } else {
+            top.set_position(if wide && back {
+                Vector::ZERO
+            } else {
+                vector(if back {
+                    -distance * PARALLAX_RATIO
+                } else {
+                    distance
+                })
+            });
+            if back {
+                self.layers.insert(0, top.clone());
+            } else {
+                self.layers.push(top.clone());
+            }
+        }
+        if wide {
+            self.root.set_position(Vector::ZERO);
+            self.layers.retain(|s| !Rc::ptr_eq(s, &self.root));
+            self.layers.insert(0, self.root.clone());
+        }
+        let top_index = self
+            .layers
+            .iter()
+            .position(|s| Rc::ptr_eq(s, &top))
+            .unwrap();
+        let motions = self
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, screen)| {
+                let previous_target = self.motion.as_ref().and_then(|t| {
+                    t.motions
+                        .iter()
+                        .find(|m| Rc::ptr_eq(&m.screen, screen))
+                        .map(|m| m.to)
+                });
+                let to = if Rc::ptr_eq(screen, &top) || (wide && Rc::ptr_eq(screen, &self.root)) {
+                    Vector::ZERO
+                } else if back && index > top_index {
+                    vector(distance)
+                } else if Rc::ptr_eq(screen, &old) {
+                    vector(if wide { 0. } else { -distance * PARALLAX_RATIO })
+                } else {
+                    previous_target.unwrap_or_else(|| {
+                        vector(if wide { 0. } else { -distance * PARALLAX_RATIO })
+                    })
+                };
+                Motion {
+                    screen: screen.clone(),
+                    from: screen.position(),
+                    to,
+                }
+            })
+            .collect();
+        self.motion = Some(Transition {
+            elapsed: 0.,
+            motions,
+        });
+        self.publish();
+    }
+
+    fn advance(&mut self, dt: f32) {
+        let Some(active) = self.motion.as_mut() else {
+            return;
+        };
+        active.elapsed = (active.elapsed + dt).min(self.curve.duration());
+        let progress = active.elapsed / self.curve.duration();
+        if progress >= 1. {
+            self.settle();
+        } else {
+            // Overshooting a viewport-sized slide exposes the canvas at the opposite edge.
+            let sample = self.curve.sample(progress).clamp(0., 1.);
+            for motion in &active.motions {
+                motion
+                    .screen
+                    .set_position(motion.from.lerp(motion.to, sample));
+            }
+        }
+    }
+}
+
+impl Driver for RefCell<Presentation> {
+    fn advance(&self, dt: f32) {
+        self.borrow_mut().advance(dt);
+    }
 }
 
 impl<T, R, F, Root, Destination> IntoNode for NavigationStackBuilder<T, R, F>
@@ -144,149 +356,55 @@ where
         style.provide_defaults(Style::new().size_full());
         Node::build_with_style(style, move |style| {
             let scope = current_scope();
-            let width = signal(0.);
-            let height = signal(0.);
-            let wide = signal(false);
-            let sidebar = computed({
-                let path = path.clone();
-                move |_| {
-                    if wide.get() && !path.get_clone().is_empty() {
-                        split.map_or(0., |s| s.0)
-                    } else {
-                        0.
-                    }
-                }
-            });
-            let root_width = computed(move |_| {
-                if sidebar.get() > 0. {
-                    sidebar.get()
-                } else {
-                    width.get()
-                }
-            });
-            let detail_width = computed(move |_| (width.get() - sidebar.get()).max(0.));
-            let zero = signal(0.);
-            let root = Screen::new(|| root().into_node(), root_width, *zero);
+            let root = Screen::new(|| root().into_node());
             let visible = signal(Rc::<[NodeRef]>::default());
-            let settled = Rc::new(RefCell::new(Vec::<Rc<Screen>>::new()));
-            let motion = Rc::new(RefCell::new(None::<Transition>));
             let interactive = signal(Rc::<[NodeRef]>::default());
-            watch_effect({
-                let settled = settled.clone();
-                let motion = motion.clone();
-                let root = root.clone();
-                let mut screens: Vec<(T, Rc<Screen>)> = Vec::new();
-                let mut previous = Vec::new();
-                let mut previous_wide = false;
-                move || {
-                    let values = path.get_clone();
-                    let is_wide = wide.get();
+            let presentation = Rc::new(RefCell::new(Presentation {
+                root,
+                stack: Vec::new(),
+                layers: Vec::new(),
+                visible,
+                interactive,
+                size: Vector::ZERO,
+                split,
+                transition,
+                curve,
+                motion: None,
+            }));
+            presentation.borrow_mut().settle();
+            let driver: Rc<dyn Driver> = presentation.clone();
+            animation::register_driver(&driver);
+            let mut screens: Vec<(T, Rc<Screen>)> = Vec::new();
+            let mut update = {
+                let presentation = presentation.clone();
+                move |values: Vec<T>| {
                     let common = screens
                         .iter()
                         .zip(&values)
                         .take_while(|((a, _), b)| a == *b)
                         .count();
-                    let old_top = settled.borrow().last().cloned();
+                    let back = values.len() < screens.len() && common == values.len();
                     screens.truncate(common);
                     for value in &values[common..] {
-                        let screen = scope.run(|| {
-                            Screen::new(|| destination(value).into_node(), detail_width, sidebar)
-                        });
+                        let screen = scope.run(|| Screen::new(|| destination(value).into_node()));
                         screens.push((value.clone(), screen));
                     }
-                    let top = screens
-                        .last()
-                        .map_or_else(|| root.clone(), |(_, screen)| screen.clone());
-                    let mut next = Vec::new();
-                    if is_wide && !screens.is_empty() {
-                        next.push(root.clone());
-                    }
-                    next.push(top.clone());
-                    let changed = old_top.as_ref().is_some_and(|old| !Rc::ptr_eq(old, &top));
-                    let animate = changed
-                        && previous_wide == is_wide
-                        && transition != NavigationTransition::None
-                        && curve.duration().is_finite()
-                        && curve.duration() > 0.
-                        && width.get_untracked() > 0.;
-                    if animate {
-                        let back = values.len() < previous.len();
-                        let distance = if transition == NavigationTransition::SlideVertical {
-                            height.get_untracked()
-                        } else {
-                            (width.get_untracked() - sidebar.get_untracked()).max(0.)
-                        };
-                        let vector = |value| {
-                            if transition == NavigationTransition::SlideVertical {
-                                Vector::new(0., value)
-                            } else {
-                                Vector::new(value, 0.)
-                            }
-                        };
-                        let already_visible = motion
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|t| t.motions.iter().any(|m| Rc::ptr_eq(&m.screen, &top)));
-                        if is_wide && back {
-                            top.set_position(Vector::ZERO);
-                        } else if !already_visible {
-                            top.set_position(vector(if back {
-                                -distance * 0.22
-                            } else {
-                                distance
-                            }));
-                        }
-                        let old = old_top.unwrap();
-                        let mut motions = vec![Motion {
-                            screen: top.clone(),
-                            from: top.position(),
-                            to: Vector::ZERO,
-                        }];
-                        // Only the front layer moves in split view. On a push the
-                        // old detail stays behind it; on a pop the revealed page stays still.
-                        if !next.iter().any(|s| Rc::ptr_eq(s, &old)) {
-                            if is_wide && !back {
-                                old.set_position(Vector::ZERO);
-                            }
-                            motions.push(Motion {
-                                screen: old.clone(),
-                                from: old.position(),
-                                to: vector(if back {
-                                    distance
-                                } else if is_wide {
-                                    0.
-                                } else {
-                                    -distance * 0.22
-                                }),
-                            });
-                        }
-                        let mut drawn = next.clone();
-                        if motions.len() > 1 {
-                            if back {
-                                drawn.push(old);
-                            } else {
-                                drawn.insert(drawn.len() - 1, old);
-                            }
-                        }
-                        visible.set(drawn.iter().map(|s| *s.node).collect());
-                        *motion.borrow_mut() = Some(Transition {
-                            elapsed: 0.,
-                            motions,
-                        });
-                    } else {
-                        *motion.borrow_mut() = None;
-                        for screen in &next {
-                            screen.set_position(Vector::ZERO);
-                        }
-                        visible.set(next.iter().map(|s| *s.node).collect());
-                    }
-                    interactive.set(next.iter().map(|s| *s.node).collect());
-                    *settled.borrow_mut() = next;
-                    previous = values;
-                    previous_wide = is_wide;
+                    presentation
+                        .borrow_mut()
+                        .navigate(screens.iter().map(|(_, s)| s.clone()).collect(), back);
                 }
+            };
+            match path {
+                Prop::Static(values) => update(values),
+                Prop::Dynamic(path) => {
+                    watch_immediate(path, move |path| update(path.get_clone_untracked()));
+                }
+            }
+            NodeInner::with_mut(|node| {
+                node.children = (*visible).owned();
+                node.layout_sync =
+                    Some(Rc::new(move |size| presentation.borrow_mut().resize(size)));
             });
-            NodeInner::with_mut(|node| node.children = (*visible).owned());
             let layout = use_layout(style);
             NodeInner::with_mut(|node| {
                 node.clip = Some(layout.rect);
@@ -301,26 +419,6 @@ where
                 }));
             });
             use_background(style, layout.rect);
-            style.on_render.append(move |_| {
-                let rect = layout.rect.get();
-                width.set(rect.w);
-                height.set(rect.h);
-                wide.set(split.is_some_and(|(_, breakpoint)| rect.w >= breakpoint));
-                let mut transition = motion.borrow_mut();
-                if let Some(active) = transition.as_mut() {
-                    active.elapsed += macroquad::time::get_frame_time();
-                    let progress = (active.elapsed / curve.duration()).min(1.);
-                    for motion in &active.motions {
-                        motion
-                            .screen
-                            .set_position(motion.from.lerp(motion.to, curve.sample(progress)));
-                    }
-                    if progress >= 1. {
-                        visible.set(settled.borrow().iter().map(|s| *s.node).collect());
-                        *transition = None;
-                    }
-                }
-            });
         })
     }
 }

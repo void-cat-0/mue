@@ -12,7 +12,7 @@ use mue_core::{
     Disposable, Owned,
     prop::Prop,
     scope::Scope,
-    signal::{Access, ReadSignal},
+    signal::{Access, ReadSignal, Signal, signal},
 };
 use slotmap::{Key, new_key_type};
 
@@ -23,7 +23,7 @@ use crate::{
     layout::OwnedLayout,
     math::{Matrix, Rect, Vector},
     runtime::Runtime,
-    style::{Style, Styleable, StyleableExt},
+    style::{FontSize, FontSizeExt, Style, Styleable, StyleableExt},
 };
 
 new_key_type! {
@@ -42,12 +42,16 @@ pub(crate) struct NodeInner {
 
     pub(crate) layout_id: Option<taffy::NodeId>,
     pub(crate) layout: OwnedLayout,
+    // Return true after changing layout inputs so they are recomputed before paint.
+    pub(crate) layout_sync: Option<Rc<dyn Fn(Vector) -> bool>>,
     pub(crate) hit_test: Option<HitTestFn>,
     pub(crate) gestures: Vec<GestureId>,
     pub(crate) clip: Option<ReadSignal<Rect>>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
     pub(crate) transform: Prop<Matrix>,
+    pub(crate) font_size: Option<Prop<FontSize>>,
+    pub(crate) computed_font_size: Signal<f32>,
 
     pub(crate) children: Owned<Children>,
 }
@@ -61,12 +65,15 @@ impl NodeInner {
 
             layout_id: None,
             layout: OwnedLayout::default(),
+            layout_sync: None,
             hit_test: None,
             gestures: Vec::new(),
             clip: None,
             child_offset: None,
             center_on_layout_origin: false,
             transform: Prop::Static(Matrix::IDENTITY),
+            font_size: None,
+            computed_font_size: Signal::null(),
 
             children,
         }
@@ -93,6 +100,29 @@ pub struct NodeRef {
 impl NodeRef {
     pub(crate) fn null() -> Self {
         Self { id: NodeId::null() }
+    }
+
+    pub(crate) fn sync_layout(&self) -> bool {
+        let (sync, size, children) = Runtime::with(|rt| {
+            let node = rt.node(self.id);
+            let size = node
+                .layout_sync
+                .as_ref()
+                .and_then(|_| node.layout_id)
+                .map(|id| {
+                    let size = rt.taffy.borrow().layout(id).unwrap().size;
+                    Vector::new(size.width, size.height)
+                });
+            (node.layout_sync.clone(), size, *node.children)
+        });
+        let mut changed = match (sync, size) {
+            (Some(sync), Some(size)) => sync(size),
+            _ => false,
+        };
+        for child in children.get_clone_untracked().iter() {
+            changed |= child.sync_layout();
+        }
+        changed
     }
 
     pub(crate) fn render(&self, mut origin: Vector) {
@@ -143,6 +173,46 @@ impl NodeRef {
     }
 }
 
+/// The node's resolved logical-pixel font size, shared by measurement and paint.
+pub fn use_font_size() -> ReadSignal<f32> {
+    NodeInner::with_mut(|node| *node.computed_font_size)
+}
+
+impl NodeRef {
+    pub(crate) fn resolve_font_sizes(&self) {
+        fn visit(node: NodeRef, parent: f32, root: Option<f32>) -> bool {
+            let (declaration, computed, children) = Runtime::with(|rt| {
+                let node = rt.node(node.id);
+                (node.font_size, node.computed_font_size, *node.children)
+            });
+            let size = declaration.map_or(parent, |value| {
+                value
+                    .get()
+                    .resolve(parent, root.unwrap_or(FontSize::DEFAULT_PX))
+            });
+            let mut changed = computed.get_untracked() != size;
+            if changed {
+                computed.set(size);
+            }
+            let root = root.unwrap_or(size);
+            for child in children.get_clone().iter() {
+                changed |= visit(*child, size, Some(root));
+            }
+            changed
+        }
+        // Font subscribers can mount children when the batch flushes. Resolve
+        // those additions before measurement rather than one frame later.
+        for _ in 0..64 {
+            let mut changed = false;
+            mue_core::batch(|| changed = visit(*self, FontSize::DEFAULT_PX, None));
+            if !changed {
+                return;
+            }
+        }
+        panic!("font-size dependencies did not stabilize before layout");
+    }
+}
+
 impl Disposable for NodeRef {
     fn dispose(&self) {
         let _ = Runtime::try_with(|rt| {
@@ -186,11 +256,18 @@ impl Node {
         CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
         scope.run(|| {
             crate::animation::bind_style(&mut style);
+            NodeInner::with_mut(|node| {
+                node.computed_font_size = signal(FontSize::DEFAULT_PX);
+                node.font_size = style.font_size;
+            });
             // Apply once around the whole subtree, including custom draw hooks.
             NodeInner::with_mut(|node| node.transform = style.take_transform());
             f(&mut style);
         });
         let mut node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
+        if let Some(font_size) = style.font_size.take() {
+            node.font_size = Some(font_size);
+        }
         let after_children = std::mem::take(&mut node.hooks.after_children);
         node.hooks = style.build_hooks();
         node.hooks.after_children = after_children;

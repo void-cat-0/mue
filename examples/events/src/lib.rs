@@ -1,3 +1,5 @@
+#[path = "../../shared/responsive.rs"]
+mod responsive;
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -5,7 +7,7 @@ use mue_macroquad::{
     color::Color as UiColor,
     node::*,
     runtime::set_timeout,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 
 const BLUE: UiColor = UiColor::from_rgba(37, 58, 94, 255);
@@ -34,6 +36,8 @@ fn view() -> impl Component {
             wheel.get()
         )
     }))
+    .font_size(responsive::font(32.))
+    .line_height(responsive::ui(44.))
     .use_pressed(pressed)
     .use_hovered(hovered)
     .on_activate(move || count.update(|c| *c += 1))
@@ -49,26 +53,33 @@ fn view() -> impl Component {
 }
 
 pub async fn run() {
+    responsive::sync();
     let mut app = App::new(
-        stack().size_full().padding((28.,)).children((
-            heading("Pointer events")
-                .font_size(32.)
-                .line_height(42.)
-                .margin_bottom(12.),
-            text("Click, hold, hover, or scroll over the panel below.")
-                .font_size(18.)
-                .line_height(28.)
-                .margin_bottom(24.),
-            view()
-                .padding((24.,))
-                .width(440.)
-                .height(240.)
-                .background(BLUE),
-        )),
+        stack()
+            .size_full()
+            .font_size(responsive::root_font())
+            .padding((vw(4.), vh(4.)))
+            .children((
+                heading("Pointer events")
+                    .font_size(responsive::font(32.))
+                    .line_height(responsive::ui(42.))
+                    .margin_bottom(vh(2.)),
+                text("Click, hold, hover, or scroll over the panel below.")
+                    .font_size(responsive::font(18.))
+                    .line_height(responsive::ui(28.))
+                    .margin_bottom(vh(4.)),
+                view()
+                    .padding((responsive::ui(24.),))
+                    .width(percent(100.))
+                    .max_width(responsive::ui(440.))
+                    .min_height(responsive::ui(240.))
+                    .background(BLUE),
+            )),
     );
 
     loop {
         clear_background(CANVAS.into());
+        responsive::sync();
         app.frame();
         next_frame().await;
     }

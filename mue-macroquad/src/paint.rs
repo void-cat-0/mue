@@ -548,7 +548,7 @@ impl ShapesBuilder<'_> {
 /// Add the background before the node's content hooks.
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
-    let radius = style.take_radius();
+    let radius = crate::style::units::resolve_length(style.take_radius(), "radius");
     let paint = use_paint(style);
     style.on_render.append(move |_| {
         let brush = background.get_clone();

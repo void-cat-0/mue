@@ -1,11 +1,11 @@
-use super::controls::*;
+use super::{controls::*, responsive};
 use mue_core::prelude::*;
 use mue_macroquad::{
     animation::Animation,
     math::{Matrix, vec2},
     node::*,
     shader::Brush,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
 
 pub fn page() -> Node {
@@ -36,49 +36,65 @@ pub fn page() -> Node {
     );
     let pulse = signal(false);
     stack()
-        .gap(24.)
+        .w_full()
+        .min_width(0.)
+        .gap(vh(3.))
         .children((
             controls(vec![a, b, c, d, e, f, g, hc, i, j, k, l, m, n, o, p]),
-            center().height(420.).children(
-                stack()
-                    .width(w.select(520., 270.))
-                    .height(h.select(300., 170.))
-                    .radius(radius.select(70., 12.))
-                    .padding((padding.select(35., 12.),))
-                    .margin((margin.select(30., 0.),))
-                    .opacity(opacity.select(0.35, 1.))
-                    .background(color.select(Brush::Solid(CORAL), Brush::Solid(BLUE)))
-                    .inset_left(x.select(60., 0.))
-                    .inset_top(y.select(45., 0.))
-                    .gap(gap.select(28., 8.))
-                    .animation(SPRING)
-                    .transform(computed(move |_| {
-                        Matrix::from_scale_angle_translation(
-                            vec2(1., 1.) * if scale.get() { 1.15 } else { 1. },
-                            if rotate.get() { 0.12 } else { 0. },
-                            vec2(0., 0.),
-                        )
-                    }))
-                    .children((
-                        heading("Spring")
-                            .font_size(font.select(42., 26.))
-                            .line_height(leading.select(64., 38.))
-                            .letter_spacing(letter.select(3., 0.))
-                            .animation(SPRING),
-                        text("Retarget any property")
-                            .font_size(18.)
-                            .line_height(28.),
-                    )),
-            ),
+            center()
+                .w_full()
+                .height(vh(52.5))
+                .min_height(responsive::ui(220.))
+                .children(
+                    stack()
+                        .min_width(0.)
+                        .width(w.select(percent(65.), percent(40.)))
+                        .height(h.select(vh(37.5), vh(21.25)))
+                        .min_height(responsive::ui(140.))
+                        .radius(radius.select(70., 12.))
+                        .padding((
+                            padding.select(vw(4.), vw(1.5)),
+                            padding.select(vh(4.), vh(1.5)),
+                        ))
+                        .margin((margin.select(vw(3.), vw(0.)), margin.select(vh(3.), vh(0.))))
+                        .opacity(opacity.select(0.35, 1.))
+                        .background(color.select(Brush::Solid(CORAL), Brush::Solid(BLUE)))
+                        .inset_left(x.select(percent(6.), percent(0.)))
+                        .inset_top(y.select(percent(6.), percent(0.)))
+                        .gap(gap.select(vh(3.5), vh(1.)))
+                        .animation(SPRING)
+                        .transform(computed(move |_| {
+                            Matrix::from_scale_angle_translation(
+                                vec2(1., 1.) * if scale.get() { 1.15 } else { 1. },
+                                if rotate.get() { 0.12 } else { 0. },
+                                vec2(0., 0.),
+                            )
+                        }))
+                        .children((
+                            heading("Spring")
+                                .font_size(responsive::font(font.select(42., 26.)))
+                                .line_height(responsive::ui(leading.select(64., 38.)))
+                                .letter_spacing(responsive::ui(letter.select(3., 0.)))
+                                .animation(SPRING),
+                            text("Retarget any property")
+                                .font_size(responsive::font(18.))
+                                .line_height(responsive::ui(28.)),
+                        )),
+                ),
             button("Selected curve", move || {
                 mue_macroquad::animation::with_animation(curve.get(), || pulse.toggle())
             }),
             center()
-                .width(pulse.select(700., 180.))
-                .height(65.)
+                .width(pulse.select(percent(90.), percent(30.)))
+                .height(vh(8.125))
+                .min_height(responsive::ui(44.))
                 .radius(16.)
                 .background(CORAL)
-                .children(text("Curve").font_size(22.)),
+                .children(
+                    text("Curve")
+                        .font_size(responsive::font(22.))
+                        .line_height(responsive::ui(32.)),
+                ),
         ))
         .into_node()
 }

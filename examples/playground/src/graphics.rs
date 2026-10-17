@@ -1,11 +1,11 @@
-use super::{controls::*, halftone};
+use super::{controls::*, halftone, responsive};
 use macroquad::texture::Texture2D;
 use mue_macroquad::{
     animation::animated_with,
     math::{Rect, vec2},
     node::*,
     shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
-    style::{Style, Styleable, StyleableExt},
+    style::{Style, Styleable, StyleableExt, percent, vh},
 };
 
 pub fn page() -> Node {
@@ -63,12 +63,14 @@ pub fn page() -> Node {
     );
     let density = animated_with(density.select(0.3, 0.08), SPRING).value;
     stack()
-        .gap(20.)
+        .w_full()
+        .min_width(0.)
+        .gap(vh(2.5))
         .children((
             controls(vec![a, b, c, d, e, f, g, h, i, j]),
             image(photo)
-                .width(wide.select(700., 380.))
-                .height(tall.select(350., 220.))
+                .width(wide.select(percent(90.), percent(50.)))
+                .height(tall.select(vh(43.75), vh(27.5)))
                 .animation(SPRING)
                 .object_fit(fit)
                 .object_position(position)
@@ -78,13 +80,19 @@ pub fn page() -> Node {
                     Brush::Solid(mue_macroquad::color::Color::WHITE),
                 )),
             center()
-                .height(100.)
+                .w_full()
+                .height(vh(12.5))
+                .min_height(responsive::ui(54.))
                 .radius(radius.select(50., 8.))
                 .background(brush)
                 .animation(SPRING)
-                .children(heading("Brush").font_size(28.)),
+                .children(
+                    heading("Brush")
+                        .font_size(responsive::font(28.))
+                        .line_height(responsive::ui(38.)),
+                ),
             halftone::halftone(
-                Style::new().height(180.).w_full().flex_none(),
+                Style::new().height(vh(22.5)).w_full().flex_none(),
                 density,
                 pause.map(|v| !v),
             ),

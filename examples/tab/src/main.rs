@@ -1,6 +1,9 @@
 //! 固定底部 Tab 栏示例。运行：cargo run -p tab
 //! State-driven page transitions, advanced by App::frame.
 
+#[path = "../../shared/responsive.rs"]
+mod responsive;
+
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
@@ -9,9 +12,8 @@ use mue_macroquad::{
     color::Color,
     node::*,
     shader::Brush,
-    style::{Styleable, StyleableExt},
+    style::{Styleable, StyleableExt, percent, vh, vw},
 };
-use taffy::LengthPercentageAuto;
 
 const TRANSITION: f32 = 0.28;
 
@@ -58,13 +60,17 @@ fn page_node(page: Page, target: Signal<Page>) -> Node {
         .absolute()
         .inset_top(0.)
         .inset_left(computed(move |_| {
-            LengthPercentageAuto::percent(page as usize as f32 - target.get() as usize as f32)
+            percent(100. * (page as usize as f32 - target.get() as usize as f32))
         }))
         .size_full()
         .flex_column()
         .items_center()
         .justify_center()
-        .children((text(page.title()).font_size(56.),))
+        .padding((vw(4.),))
+        .children((text(page.title())
+            .font_size(responsive::font(56.))
+            .line_height(responsive::ui(72.))
+            .max_width(percent(100.)),))
         .into_node()
 }
 
@@ -86,8 +92,11 @@ fn pages(#[model] target: Page) -> impl Component {
                     }
                 })
             }))
-            .padding((12.,))
-            .margin((8.,))
+            .padding((responsive::ui(12.), responsive::ui(12.)))
+            .min_height(responsive::ui(44.))
+            .min_width(0.)
+            .max_width(percent(100.))
+            .justify_center()
             .use_hovered(hovered)
             .use_pressed(pressed)
             .on_activate(move || {
@@ -95,20 +104,38 @@ fn pages(#[model] target: Page) -> impl Component {
                     target.set(destination)
                 })
             })
-            .children(text(destination.title()).font_size(22.))
+            .children(
+                text(destination.title())
+                    .font_size(responsive::font(22.))
+                    .line_height(responsive::ui(32.))
+                    .min_width(0.),
+            )
             .into_node()
     });
 
     let children = Page::ALL.map(|page| page_node(page, target));
-    flexbox().size_full().flex_column().children((
-        flexbox().relative().w_full().flex_1().children(children),
-        flexbox()
-            .flex_row()
-            .justify_center()
-            .flex_none()
-            .padding((16.,))
-            .children(buttons),
-    ))
+    flexbox()
+        .size_full()
+        .font_size(responsive::root_font())
+        .flex_column()
+        .children((
+            flexbox()
+                .relative()
+                .w_full()
+                .flex_1()
+                .min_height(0.)
+                .overflow_x(taffy::Overflow::Hidden)
+                .overflow_y(taffy::Overflow::Hidden)
+                .children(children),
+            wrap()
+                .w_full()
+                .justify_center()
+                .flex_none()
+                .padding((vw(2.), vh(2.5)))
+                .column_gap(vw(2.))
+                .row_gap(vh(1.))
+                .children(buttons),
+        ))
 }
 
 fn main() {
@@ -124,10 +151,12 @@ fn main() {
 }
 
 async fn run() {
+    responsive::sync();
     let target = signal(Page::Home);
     let mut app = App::new(pages(target));
 
     loop {
+        responsive::sync();
         clear_background(CANVAS.into());
         app.frame();
         next_frame().await;

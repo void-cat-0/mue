@@ -1,9 +1,9 @@
-use super::controls::*;
+use super::{controls::*, responsive};
 use mue_core::prelude::*;
 use mue_macroquad::{
     math::Vector,
     node::*,
-    style::{Style, Styleable, StyleableExt},
+    style::{Style, Styleable, StyleableExt, vh, vw},
 };
 
 pub fn page() -> Node {
@@ -68,7 +68,7 @@ pub fn page() -> Node {
                 bars,
             ) = options.get();
             scroll_area()
-                .height(310.)
+                .height(vh(38.75))
                 .w_full()
                 .offset(offset)
                 .background(PANEL)
@@ -86,16 +86,20 @@ pub fn page() -> Node {
                     chain: !chain,
                     scrollbars: !bars,
                 })
-                .content_style(Style::new().gap(12.).padding((18.,)))
+                .content_style(Style::new().gap(vh(1.5)).padding((vw(2.), vh(2.))))
                 .children(
                     (0..20)
                         .map(|n| {
                             center()
-                                .width(1200.)
-                                .height(54.)
+                                .width(responsive::ui(1200.))
+                                .height(responsive::ui(54.))
                                 .flex_none()
                                 .background(if n % 2 == 0 { BLUE } else { CORAL })
-                                .children(text(format!("Row {n}")).font_size(22.))
+                                .children(
+                                    text(format!("Row {n}"))
+                                        .font_size(responsive::font(22.))
+                                        .line_height(responsive::ui(32.)),
+                                )
                                 .into_node()
                         })
                         .collect::<Vec<_>>(),
@@ -107,26 +111,41 @@ pub fn page() -> Node {
     let rows = map_keyed(
         page.map(|p| (p * 5..p * 5 + 5).collect::<std::rc::Rc<[usize]>>()),
         |n| *n,
-        |n| text(format!("Item {}", n + 1)).font_size(20.).into_node(),
+        |n| {
+            text(format!("Item {}", n + 1))
+                .font_size(responsive::font(20.))
+                .line_height(responsive::ui(28.))
+                .into_node()
+        },
     );
     stack()
-        .gap(20.)
+        .w_full()
+        .min_width(0.)
+        .gap(vh(2.5))
         .children((
             controls(vec![a, b, c, d, e, f, g, h, i, j, k, l]),
             areas,
-            hstack().children((
+            wrap().w_full().gap(vw(1.)).children((
                 button("Reset", move || offset.set(Vector::ZERO)),
-                text(offset.map(|v| format!("{:.0}, {:.0}", v.x, v.y))).font_size(18.),
+                text(offset.map(|v| format!("{:.0}, {:.0}", v.x, v.y)))
+                    .font_size(responsive::font(18.))
+                    .line_height(responsive::ui(28.)),
             )),
             section(
                 "Pagination",
                 stack().children((
-                    list().children(rows),
-                    hstack().children((
+                    list()
+                        .font_size(responsive::font(20.))
+                        .line_height(responsive::ui(28.))
+                        .gap(responsive::ui(8.))
+                        .children(rows),
+                    wrap().w_full().gap(vw(1.)).children((
                         button("Previous", move || {
                             page.update(|p| *p = p.saturating_sub(1))
                         }),
-                        text(page.map(|p| format!("{} / 8", p + 1))).font_size(18.),
+                        text(page.map(|p| format!("{} / 8", p + 1)))
+                            .font_size(responsive::font(18.))
+                            .line_height(responsive::ui(28.)),
                         button("Next", move || page.update(|p| *p = (*p + 1).min(7))),
                     )),
                 )),

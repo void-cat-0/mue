@@ -1,5 +1,5 @@
 use std::{
-    cell::{Ref, RefCell},
+    cell::{OnceCell, Ref, RefCell},
     collections::BTreeMap,
     mem,
     rc::Rc,
@@ -12,6 +12,7 @@ use slotmap::SlotMap;
 use taffy::TaffyTree;
 
 use crate::{
+    font::{FontsAlreadyInitialized, fontdb},
     gesture::{Gesture, GestureId},
     hook::{HookFn, NodeHooks},
     layout::MeasureFn,
@@ -62,7 +63,7 @@ pub(crate) struct Runtime {
     pub taffy: RefCell<TaffyTree<Box<dyn MeasureFn>>>,
     pub nodes: RefCell<SlotMap<NodeId, NodeInner>>,
 
-    pub fonts: RefCell<FontState>,
+    fonts: OnceCell<RefCell<FontState>>,
 
     pub gestures: RefCell<SlotMap<GestureId, Box<dyn Gesture>>>,
 
@@ -78,7 +79,7 @@ impl Runtime {
             taffy: RefCell::new(taffy),
             nodes: RefCell::new(SlotMap::with_key()),
 
-            fonts: RefCell::new(FontState::default()),
+            fonts: OnceCell::new(),
 
             gestures: RefCell::new(SlotMap::with_key()),
 
@@ -97,7 +98,32 @@ impl Runtime {
         RUNTIME.with(|rt| f(&mut rt.taffy.borrow_mut()))
     }
     pub fn with_fonts_mut<R>(f: impl FnOnce(&mut FontState) -> R) -> R {
-        RUNTIME.with(|rt| f(&mut rt.fonts.borrow_mut()))
+        RUNTIME.with(|rt| {
+            let fonts = rt.fonts.get_or_init(|| RefCell::new(FontState::default()));
+            f(&mut fonts.borrow_mut())
+        })
+    }
+
+    pub(crate) fn begin_text_render_pass() {
+        RUNTIME.with(|rt| {
+            if let Some(fonts) = rt.fonts.get() {
+                fonts.borrow_mut().begin_render_pass();
+            }
+        });
+    }
+
+    pub(crate) fn initialize_fonts(
+        locale: String,
+        db: fontdb::Database,
+    ) -> Result<(), FontsAlreadyInitialized> {
+        RUNTIME.with(|rt| {
+            if rt.fonts.get().is_some() {
+                return Err(FontsAlreadyInitialized);
+            }
+            rt.fonts
+                .set(RefCell::new(FontState::with_locale_and_db(locale, db)))
+                .map_err(|_| FontsAlreadyInitialized)
+        })
     }
 
     pub fn invoke_hook<T: 'static>(

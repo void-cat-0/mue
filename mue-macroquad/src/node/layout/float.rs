@@ -2,7 +2,7 @@ use super::flexbox::render_container;
 use crate::{
     math::Vector,
     node::NodeInner,
-    style::{Style, Styleable, StyleableExt},
+    style::{Size, Style, Styleable, StyleableExt},
 };
 use mue_core::prop::PropValue;
 use taffy::LengthPercentageAuto;
@@ -46,8 +46,8 @@ impl FloatPlacement {
 pub fn float(
     style: &mut Style,
     #[default] placement: FloatPlacement,
-    #[default] offset_x: f32,
-    #[default] offset_y: f32,
+    #[default(Size::Px(0.))] offset_x: Size,
+    #[default(Size::Px(0.))] offset_y: Size,
 ) {
     style.provide_defaults(
         Style::new()

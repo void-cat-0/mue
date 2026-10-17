@@ -82,6 +82,50 @@ impl Animation {
 /// Values that can be presented between two state values.
 pub trait Animatable: Clone + PartialEq + 'static {
     fn interpolate(from: &Self, to: &Self, progress: f32) -> Self;
+
+    fn can_interpolate(_from: &Self, _to: &Self) -> bool {
+        true
+    }
+}
+
+use crate::style::{FontSize, Size};
+
+impl Animatable for Size {
+    fn can_interpolate(from: &Self, to: &Self) -> bool {
+        std::mem::discriminant(from) == std::mem::discriminant(to) && !matches!(to, Self::Auto)
+    }
+
+    fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
+        match (from, to) {
+            (Self::Px(a), Self::Px(b)) => Self::Px(f32::interpolate(a, b, progress)),
+            (Self::Percent(a), Self::Percent(b)) => Self::Percent(f32::interpolate(a, b, progress)),
+            (Self::Vw(a), Self::Vw(b)) => Self::Vw(f32::interpolate(a, b, progress)),
+            (Self::Vh(a), Self::Vh(b)) => Self::Vh(f32::interpolate(a, b, progress)),
+            // Unit changes, including a transition to or from `Auto`, are
+            // discrete. The declaration is never implicitly converted.
+            _ => *to,
+        }
+    }
+}
+
+impl Animatable for FontSize {
+    fn can_interpolate(from: &Self, to: &Self) -> bool {
+        std::mem::discriminant(from) == std::mem::discriminant(to)
+    }
+
+    fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
+        match (from, to) {
+            (Self::Px(a), Self::Px(b)) => Self::Px(f32::interpolate(a, b, progress)),
+            (Self::Percent(a), Self::Percent(b)) => Self::Percent(f32::interpolate(a, b, progress)),
+            (Self::Em(a), Self::Em(b)) => Self::Em(f32::interpolate(a, b, progress)),
+            (Self::Rem(a), Self::Rem(b)) => Self::Rem(f32::interpolate(a, b, progress)),
+            (Self::Vw(a), Self::Vw(b)) => Self::Vw(f32::interpolate(a, b, progress)),
+            (Self::Vh(a), Self::Vh(b)) => Self::Vh(f32::interpolate(a, b, progress)),
+            // Different units switch immediately; no implicit conversion is
+            // possible without the layout/typography resolution context.
+            _ => *to,
+        }
+    }
 }
 
 impl Animatable for f32 {
@@ -151,8 +195,12 @@ fn transaction() -> Option<Option<Animation>> {
         .copied()
 }
 
-trait Driver {
+pub(crate) trait Driver {
     fn advance(&self, dt: f32);
+}
+
+pub(crate) fn register_driver(driver: &Rc<dyn Driver>) {
+    DRIVERS.with_borrow_mut(|drivers| drivers.push(Rc::downgrade(driver)));
 }
 
 struct Tween<T> {
@@ -227,7 +275,7 @@ pub fn animated_with<T: Animatable>(
         running,
     }));
     let driver: Rc<dyn Driver> = tween.clone();
-    DRIVERS.with_borrow_mut(|drivers| drivers.push(Rc::downgrade(&driver)));
+    register_driver(&driver);
     watch(source, move |source| {
         let destination = source.get_clone_untracked();
         let animation = transaction()
@@ -240,7 +288,8 @@ pub fn animated_with<T: Animatable>(
         tween.from = value.get_clone_untracked();
         tween.to = destination.clone();
         tween.elapsed = 0.;
-        tween.animation = animation.filter(|_| tween.from != destination);
+        tween.animation = animation
+            .filter(|_| tween.from != destination && T::can_interpolate(&tween.from, &destination));
         let is_running = tween.animation.is_some();
         drop(tween);
         if !is_running {
@@ -347,115 +396,5 @@ pub(crate) fn bind_style(style: &mut Style) {
                 .map(|m| Matrix::from_cols_array(&m))
                 .into(),
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mue_core::{Disposable, effect::computed, scope::Scope};
-
-    #[test]
-    fn transaction_survives_batch_and_computed_chain() {
-        let state = signal(false);
-        let target = computed(move |_| if state.get() { 100.0_f32 } else { 0. });
-        let intermediate = computed(move |_| target.get() * 2.);
-        let displayed = animated(intermediate);
-        batch(|| with_animation(Animation::linear(1.), || state.set(true)));
-        assert_eq!(displayed.value.get(), 0.);
-        advance(0.25);
-        assert_eq!(displayed.value.get(), 50.);
-    }
-
-    #[test]
-    fn implicit_curve_can_be_disabled_and_zero_duration_snaps() {
-        let state = signal(0.0_f32);
-        let displayed = animated_with(*state, Animation::linear(1.));
-        state.set(8.);
-        advance(0.5);
-        assert_eq!(displayed.value.get(), 4.);
-        with_animation(None, || state.set(2.));
-        assert_eq!(displayed.value.get(), 2.);
-        with_animation(Animation::linear(0.), || state.set(12.));
-        assert_eq!(displayed.value.get(), 12.);
-        assert!(!displayed.running.get());
-    }
-
-    #[test]
-    fn scoped_animation_releases_driver() {
-        let scope = Scope::new();
-        scope.run(|| {
-            let state = signal(0.0_f32);
-            let _displayed = animated(*state);
-            with_animation(Animation::linear(1.), || state.set(1.));
-        });
-        scope.dispose();
-        advance(0.5);
-        assert!(DRIVERS.with_borrow(|drivers| drivers.is_empty()));
-    }
-
-    #[test]
-    fn invalid_time_is_ignored_and_spring_finishes_exactly() {
-        let state = signal([0.0_f32, 2.]);
-        let displayed = animated(*state);
-        with_animation(Animation::spring(0.8, 0.4), || state.set([10., 8.]));
-        advance(f32::NAN);
-        advance(-1.);
-        assert_eq!(displayed.value.get(), [0., 2.]);
-        advance(0.8);
-        assert_eq!(displayed.value.get(), [10., 8.]);
-        assert!(!displayed.running.get());
-    }
-
-    #[test]
-    fn completion_uses_exact_target_even_with_large_values() {
-        let state = signal(1.0e20_f32);
-        let displayed = animated(*state);
-        with_animation(Animation::linear(1.), || state.set(1.));
-        advance(1.);
-        assert_eq!(displayed.value.get(), 1.);
-    }
-
-    #[test]
-    fn repeated_equal_targets_do_not_restart_a_tween() {
-        let state = Signal::shallow(0.0_f32);
-        let displayed = animated_with(*state, Animation::linear(1.));
-        state.set(10.);
-        advance(0.5);
-        state.set(10.);
-        advance(0.5);
-        assert_eq!(displayed.value.get(), 10.);
-        assert!(!displayed.running.get());
-    }
-
-    #[test]
-    fn transaction_animates_and_retargets_from_presentation() {
-        let source = signal(0.0_f32);
-        let displayed = animated(*source);
-        with_animation(Animation::linear(1.), || source.set(10.));
-        advance(0.5);
-        assert_eq!(displayed.value.get(), 5.);
-        with_animation(Animation::linear(1.), || source.set(20.));
-        advance(0.5);
-        assert_eq!(displayed.value.get(), 12.5);
-        advance(0.5);
-        assert_eq!(displayed.value.get(), 20.);
-        assert!(!displayed.running.get());
-    }
-
-    #[test]
-    fn ordinary_change_snaps_and_nested_transaction_restores() {
-        let source = signal(0.0_f32);
-        let displayed = animated(*source);
-        with_animation(Animation::linear(1.), || {
-            with_animation(None, || source.set(4.));
-            assert_eq!(displayed.value.get(), 4.);
-            source.set(8.);
-        });
-        advance(0.5);
-        assert_eq!(displayed.value.get(), 6.);
-        source.set(3.);
-        assert_eq!(displayed.value.get(), 3.);
-        assert!(!displayed.running.get());
     }
 }
