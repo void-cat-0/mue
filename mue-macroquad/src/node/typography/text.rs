@@ -1,8 +1,10 @@
 mod atlas;
 
 use super::document::Document;
-use atlas::Atlas;
-use std::{cell::RefCell, rc::Rc};
+use atlas::{Atlas, DEFAULT_PAGE_SIZE};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
+
+pub use atlas::GlyphAtlasStats;
 
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, SwashCache, Wrap};
 use mue_core::{
@@ -71,12 +73,27 @@ impl FontState {
         }
     }
 
+    /// Uploads the glyph pixels staged during the pass. Must run once after all
+    /// text has been drawn and before macroquad submits the frame geometry.
+    pub(crate) fn end_render_pass(&mut self) {
+        if let Some(atlas) = &mut self.font_atlas {
+            atlas.end_pass();
+        }
+    }
+
+    /// Counter snapshot of the glyph atlas, or `None` before any text renders.
+    pub(crate) fn glyph_atlas_stats(&self) -> Option<GlyphAtlasStats> {
+        self.font_atlas.as_ref().map(Atlas::stats)
+    }
+
     /// Register the faces contained in `data` with the shared font system.
     ///
     /// Returns the family name of every face that was added, de-duplicated and in file
     /// order. The result is empty when the data contains no usable font.
     pub(crate) fn load_font_data(&mut self, data: Vec<u8>) -> Vec<String> {
-        let existing: Vec<_> = self.font_system.db().faces().map(|face| face.id).collect();
+        // A HashSet keeps registering a font linear instead of O(N^2) against the
+        // whole system database.
+        let existing: HashSet<_> = self.font_system.db().faces().map(|face| face.id).collect();
         // `db_mut` also clears cosmic-text's font match cache, so the new faces become
         // visible to the next shaping pass.
         self.font_system.db_mut().load_font_data(data);
@@ -95,6 +112,21 @@ impl FontState {
         }
         families
     }
+}
+
+/// Largest square glyph page the driver accepts, capped at the preferred size.
+///
+/// Queried once, on the rendering thread, when the first glyph needs a page.
+fn device_page_size() -> i32 {
+    let mut size = DEFAULT_PAGE_SIZE;
+    unsafe {
+        let mut queried = 0;
+        miniquad::gl::glGetIntegerv(miniquad::gl::GL_MAX_TEXTURE_SIZE, &mut queried);
+        if queried > 0 {
+            size = size.min(queried);
+        }
+    }
+    size
 }
 
 impl Default for FontState {
@@ -294,6 +326,12 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                     {
                         let origin = bounds.min()
                             + crate::math::vec2(0., y + run.line_i as f32 * spacing.get().max(0.));
+                        // Snap the glyph pen to whole pixels. Fractional layout
+                        // positions would otherwise resample the 1:1 raster through
+                        // the linear filter and soften every stem; cosmic-text keeps
+                        // the subpixel offset inside the cache key, so nothing is lost.
+                        let pen =
+                            crate::math::vec2(origin.x.round(), (origin.y + run.line_y).round());
                         if strike.get() {
                             let left = run
                                 .glyphs
@@ -303,8 +341,8 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                                 .unwrap_or(0.);
                             p.fill_rect(
                                 Rect::new(
-                                    origin.x + left,
-                                    origin.y + run.line_y - font_size.get() * 0.3,
+                                    pen.x + left,
+                                    pen.y - font_size.get() * 0.3,
                                     run.line_w,
                                     (font_size.get() / 16.).max(1.),
                                 ),
@@ -319,8 +357,8 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                                 .reduce(f32::min)
                                 .unwrap_or(0.);
                             let underline = Rect::new(
-                                origin.x + left,
-                                origin.y + run.line_y + 2.,
+                                pen.x + left,
+                                pen.y + 2.,
                                 run.line_w,
                                 (font_size.get() / 16.).max(1.),
                             );
@@ -328,7 +366,9 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                         }
                         for glyph in run.glyphs.iter() {
                             let physical_glyph = glyph.physical((0., 0.), 1.0);
-                            let atlas = fonts.font_atlas.get_or_insert_with(Atlas::new);
+                            let atlas = fonts
+                                .font_atlas
+                                .get_or_insert_with(|| Atlas::new(device_page_size()));
                             let Some(cached) = atlas.cache_glyph(
                                 &mut fonts.font_system,
                                 &mut fonts.swash_cache,
@@ -338,8 +378,8 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                             };
                             let placement = cached.placement;
                             let draw_rect = Rect::new(
-                                (physical_glyph.x + placement.left) as f32 + origin.x,
-                                ((physical_glyph.y - placement.top) as f32 + run.line_y) + origin.y,
+                                (physical_glyph.x + placement.left) as f32 + pen.x,
+                                (physical_glyph.y - placement.top) as f32 + pen.y,
                                 placement.width as f32,
                                 placement.height as f32,
                             );

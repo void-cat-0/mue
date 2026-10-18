@@ -4,6 +4,7 @@ members = [
     "mue-macros",
     "mue-macroquad",
 
+    "examples/atlas",
     "examples/basics",
     "examples/events",
     "examples/gestures",

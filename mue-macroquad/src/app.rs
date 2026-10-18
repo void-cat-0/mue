@@ -117,5 +117,8 @@ impl App {
             self.pointer_manager.process(root_node);
             crate::event::wheel::check_wheel(root_node);
         });
+        // Upload glyph rasters after all text is drawn, before macroquad submits
+        // the frame's geometry, so a frame's new glyphs upload once per page.
+        Runtime::end_text_render_pass();
     }
 }

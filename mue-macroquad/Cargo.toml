@@ -10,10 +10,8 @@ rust-version.workspace = true
 bitflags = "2.11.0"
 cosmic-text = { workspace = true }
 glam = "0.32.1"
-glyph_brush = "0.7.12"
 guillotiere = "0.7.0"
 indexmap = "2.13.0"
-lru = "0.16.3"
 lyon = "1.0.19"
 macroquad = { workspace = true }
 miniquad = { workspace = true }
