@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -232,6 +233,13 @@ impl Shapes {
     }
 }
 
+// These are intentionally below macroquad's default capacities (10,000 vertices and
+// 5,000 indices). Keeping indices triangle-aligned also means every submitted
+// geometry buffer contains complete triangles.
+const MAX_SHAPE_VERTICES: usize = 9_996;
+const MAX_SHAPE_INDICES: usize = 4_998;
+const MAX_TILE_CELLS: usize = MAX_SHAPE_INDICES / 6;
+
 struct Shape {
     buffers: VertexBuffers<Vertex, u16>,
     texture: Option<SharedTexture>,
@@ -296,6 +304,81 @@ struct Inner<'a> {
     alpha: f32,
 }
 
+fn append_mesh(
+    shapes: &mut Shapes,
+    texture: Option<SharedTexture>,
+    buffers: VertexBuffers<Vertex, u32>,
+) {
+    debug_assert_eq!(buffers.indices.len() % 3, 0);
+    if buffers.indices.is_empty() {
+        return;
+    }
+    // Ordinary quads and bounded grid tiles can be appended without remapping.
+    // Keep these meshes whole, including their UVs and shared vertices.
+    if buffers.vertices.len() <= MAX_SHAPE_VERTICES && buffers.indices.len() <= MAX_SHAPE_INDICES {
+        let shape = shapes.shape_for_texture(texture.clone());
+        if shape.buffers.vertices.len() + buffers.vertices.len() > MAX_SHAPE_VERTICES
+            || shape.buffers.indices.len() + buffers.indices.len() > MAX_SHAPE_INDICES
+        {
+            shapes.shapes.push(Shape {
+                texture: texture.clone(),
+                ..Default::default()
+            });
+        }
+        let shape = shapes.shape_for_texture(texture);
+        let offset = shape.buffers.vertices.len() as u32;
+        shape
+            .buffers
+            .indices
+            .extend(buffers.indices.iter().map(|&index| {
+                debug_assert!((index as usize) < buffers.vertices.len());
+                // The bounded vertex count guarantees this sum fits in u16.
+                (offset + index) as u16
+            }));
+        shape.buffers.vertices.extend(buffers.vertices);
+        return;
+    }
+
+    // A single tessellation can exceed either the drawcall limit or u16. Split
+    // only on triangle boundaries, remapping shared vertices for each batch.
+    let mut remap = HashMap::new();
+    for triangle in buffers.indices.as_chunks::<3>().0 {
+        let mut needed = SmallVec::<[u32; 3]>::new();
+        for &index in triangle {
+            assert!((index as usize) < buffers.vertices.len());
+            if !needed.contains(&index) {
+                needed.push(index);
+            }
+        }
+
+        let shape = shapes.shape_for_texture(texture.clone());
+        if shape.buffers.indices.len() + 3 > MAX_SHAPE_INDICES
+            || shape.buffers.vertices.len() + needed.len() > MAX_SHAPE_VERTICES
+        {
+            shapes.shapes.push(Shape {
+                texture: texture.clone(),
+                ..Default::default()
+            });
+            remap.clear();
+        }
+
+        let shape = shapes.shape_for_texture(texture.clone());
+        let mut destination = [0u16; 3];
+        for (slot, &source) in triangle.iter().enumerate() {
+            let target = *remap.entry(source).or_insert_with(|| {
+                let target = shape.buffers.vertices.len() as u16;
+                shape
+                    .buffers
+                    .vertices
+                    .push(buffers.vertices[source as usize]);
+                target
+            });
+            destination[slot] = target;
+        }
+        shape.buffers.indices.extend(destination);
+    }
+}
+
 impl<'a> Inner<'a> {
     fn build<S: Shader>(
         &mut self,
@@ -303,22 +386,22 @@ impl<'a> Inner<'a> {
         shader: S,
         f: impl FnOnce(
             &mut Cache,
-            &mut BuffersBuilder<Vertex, u16, ShaderConstructor<S>>,
+            &mut BuffersBuilder<Vertex, u32, ShaderConstructor<S>>,
         ) -> TessellationResult,
     ) {
         let texture = shader.texture();
-        let shape = shapes.shape_for_texture(texture);
-
         let constructor = ShaderConstructor {
             transform: self.transform,
             shader,
             alpha: self.alpha,
         };
+        let mut buffers = VertexBuffers::<Vertex, u32>::new();
         f(
             self.cache,
-            &mut BuffersBuilder::new(&mut shape.buffers, constructor),
+            &mut BuffersBuilder::new(&mut buffers, constructor),
         )
         .unwrap();
+        append_mesh(shapes, texture, buffers);
     }
 }
 
@@ -376,52 +459,66 @@ impl ShapesBuilder<'_> {
         shader: impl Shader,
     ) {
         let (columns, rows) = shader.subdivisions(rect);
-        let vertices = (columns + 1) * (rows + 1);
-        // Keep batches within macroquad's default geometry buffer limits.
-        if self.shapes.shapes.last().is_some_and(|shape| {
-            shape.buffers.vertices.len() + vertices > 10000
-                || shape.buffers.indices.len() + columns * rows * 6 > 10000
-        }) {
-            self.shapes.shapes.push(Shape {
-                texture: texture.clone(),
-                ..Default::default()
-            });
-        }
-        let shape = self.shapes.shape_for_texture(texture);
-        let offset = shape.buffers.vertices.len() as u16;
-        for y in 0..=rows {
-            let v = y as f32 / rows as f32;
-            let py = rect.h * v;
-            let dy = (radius - py.min(rect.h - py)).max(0.);
-            let inset = if radius > 0. {
-                radius - (radius * radius - dy * dy).max(0.).sqrt()
-            } else {
-                0.
-            };
-            for x in 0..=columns {
-                let u = x as f32 / columns as f32;
-                let point = vec2(rect.x + inset + (rect.w - 2. * inset) * u, rect.y + py);
-                let vertex = if let Some(uv) = uv {
-                    texture_vertex(
-                        &shader,
-                        self.inner.transform,
-                        self.inner.alpha,
-                        point,
-                        vec2(uv.x + uv.w * u, uv.y + uv.h * v),
-                    )
-                } else {
-                    shader.new_vertex(&self.inner.transform, &point, self.inner.alpha)
-                };
-                shape.buffers.vertices.push(vertex);
-            }
-        }
-        for y in 0..rows {
-            for x in 0..columns {
-                let a = offset + (y * (columns + 1) + x) as u16;
-                let b = a + 1;
-                let c = b + (columns + 1) as u16;
-                let d = c - 1;
-                shape.buffers.indices.extend([a, b, c, a, c, d]);
+        let columns = columns.max(1);
+        let rows = rows.max(1);
+        // Each tile fits even when a custom shader requests more than u16 vertices.
+        // Sampling uses the original grid coordinates, including rounded edges/UVs.
+        let tile_width = columns.min(MAX_TILE_CELLS);
+        let tile_height = rows.min(MAX_TILE_CELLS / tile_width);
+        for y0 in (0..rows).step_by(tile_height) {
+            let y1 = y0 + tile_height.min(rows - y0);
+            for x0 in (0..columns).step_by(tile_width) {
+                let x1 = x0 + tile_width.min(columns - x0);
+                let tile_columns = x1 - x0;
+                let tile_rows = y1 - y0;
+                let vertex_count = (tile_columns + 1) * (tile_rows + 1);
+                let index_count = tile_columns * tile_rows * 6;
+                let shape = self.shapes.shape_for_texture(texture.clone());
+                if shape.buffers.vertices.len() + vertex_count > MAX_SHAPE_VERTICES
+                    || shape.buffers.indices.len() + index_count > MAX_SHAPE_INDICES
+                {
+                    self.shapes.shapes.push(Shape {
+                        texture: texture.clone(),
+                        ..Default::default()
+                    });
+                }
+                let shape = self.shapes.shape_for_texture(texture.clone());
+                let offset = shape.buffers.vertices.len() as u16;
+                for y in y0..=y1 {
+                    let v = y as f32 / rows as f32;
+                    let py = rect.h * v;
+                    let dy = (radius - py.min(rect.h - py)).max(0.);
+                    let inset = if radius > 0. {
+                        radius - (radius * radius - dy * dy).max(0.).sqrt()
+                    } else {
+                        0.
+                    };
+                    for x in x0..=x1 {
+                        let u = x as f32 / columns as f32;
+                        let point = vec2(rect.x + inset + (rect.w - 2. * inset) * u, rect.y + py);
+                        let vertex = if let Some(uv) = uv {
+                            texture_vertex(
+                                &shader,
+                                self.inner.transform,
+                                self.inner.alpha,
+                                point,
+                                vec2(uv.x + uv.w * u, uv.y + uv.h * v),
+                            )
+                        } else {
+                            shader.new_vertex(&self.inner.transform, &point, self.inner.alpha)
+                        };
+                        shape.buffers.vertices.push(vertex);
+                    }
+                }
+                for y in 0..tile_rows {
+                    for x in 0..tile_columns {
+                        let a = offset + (y * (tile_columns + 1) + x) as u16;
+                        let b = a + 1;
+                        let c = b + (tile_columns + 1) as u16;
+                        let d = c - 1;
+                        shape.buffers.indices.extend([a, b, c, a, c, d]);
+                    }
+                }
             }
         }
     }
@@ -568,4 +665,220 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        color::Color,
+        shader::{Brush, ColorStop, LinearGradient},
+    };
+
+    fn assert_shape_limits(shapes: &Shapes) {
+        for shape in &shapes.shapes {
+            assert!(shape.buffers.vertices.len() <= MAX_SHAPE_VERTICES);
+            assert!(shape.buffers.indices.len() <= MAX_SHAPE_INDICES);
+            assert_eq!(shape.buffers.indices.len() % 3, 0);
+            assert!(
+                shape
+                    .buffers
+                    .indices
+                    .iter()
+                    .all(|&index| (index as usize) < shape.buffers.vertices.len())
+            );
+        }
+    }
+
+    #[test]
+    fn many_glyph_quads_keep_all_geometry_without_gpu() {
+        let uv = Rect::new(0.25, 0.5, 0.125, 0.25);
+        let shapes = Shapes::build(|builder| {
+            for index in 0..4_000 {
+                // Same path as draw_texture, but None avoids creating a GPU texture.
+                builder.fill_quad(
+                    Rect::new((index % 100) as f32, (index / 100) as f32, 1., 1.),
+                    0.,
+                    None,
+                    Some(uv),
+                    Color::WHITE,
+                );
+            }
+        });
+
+        assert_shape_limits(&shapes);
+        assert_eq!(
+            shapes
+                .shapes
+                .iter()
+                .map(|s| s.buffers.indices.len())
+                .sum::<usize>(),
+            24_000
+        );
+        assert_eq!(
+            shapes
+                .shapes
+                .iter()
+                .map(|s| s.buffers.vertices.len())
+                .sum::<usize>(),
+            16_000
+        );
+        assert!(shapes.shapes.len() > 1);
+        let mut glyph = 0;
+        for shape in &shapes.shapes {
+            for indices in shape.buffers.indices.as_chunks::<6>().0 {
+                let x = (glyph % 100) as f32;
+                let y = (glyph / 100) as f32;
+                let positions = [(x, y), (x + 1., y), (x + 1., y + 1.), (x, y + 1.)];
+                let uvs = [
+                    (uv.x, uv.y),
+                    (uv.x + uv.w, uv.y),
+                    (uv.x + uv.w, uv.y + uv.h),
+                    (uv.x, uv.y + uv.h),
+                ];
+                for (&index, corner) in indices.iter().zip([0, 1, 2, 0, 2, 3]) {
+                    let vertex = &shape.buffers.vertices[index as usize];
+                    assert_eq!((vertex.position.x, vertex.position.y), positions[corner]);
+                    assert_eq!((vertex.uv.x, vertex.uv.y), uvs[corner]);
+                }
+                glyph += 1;
+            }
+        }
+        assert_eq!(glyph, 4_000);
+    }
+
+    #[test]
+    fn tessellated_mesh_is_split_without_loss() {
+        let mut buffers = VertexBuffers::<Vertex, u32>::new();
+        // More than u16::MAX input vertices must still remap without wrapping.
+        for index in 0..22_000u32 {
+            let base = buffers.vertices.len() as u32;
+            buffers.vertices.extend([
+                Vertex::new(index as f32, 0., 0., 0., 0., macroquad::color::WHITE),
+                Vertex::new(index as f32, 1., 0., 0., 0., macroquad::color::WHITE),
+                Vertex::new(index as f32, 0., 1., 0., 0., macroquad::color::WHITE),
+            ]);
+            buffers.indices.extend([base, base + 1, base + 2]);
+        }
+        let mut shapes = Shapes::default();
+        append_mesh(&mut shapes, None, buffers);
+
+        assert_shape_limits(&shapes);
+        assert_eq!(
+            shapes
+                .shapes
+                .iter()
+                .map(|s| s.buffers.indices.len())
+                .sum::<usize>(),
+            66_000
+        );
+        assert!(shapes.shapes.len() > 1);
+        for (triangle, indices) in shapes
+            .shapes
+            .iter()
+            .flat_map(|shape| {
+                shape
+                    .buffers
+                    .indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(move |indices| (shape, indices))
+            })
+            .enumerate()
+        {
+            let (shape, indices) = indices;
+            for &index in indices {
+                assert_eq!(
+                    shape.buffers.vertices[index as usize].position.x,
+                    triangle as f32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn large_fill_and_stroke_paths_use_bounded_batches() {
+        let mut path = lyon::path::Path::builder();
+        for index in 0..2_000 {
+            path.add_rectangle(
+                &lyon::geom::Box2D::from_origin_and_size(
+                    lyon::geom::point(index as f32 * 3., 0.),
+                    lyon::geom::size(1., 1.),
+                ),
+                lyon::path::Winding::Positive,
+            );
+        }
+        let path = path.build();
+        let fill = Shapes::build(|builder| builder.fill_path(path.iter(), Color::WHITE));
+        let stroke = Shapes::build(|builder| builder.stroke_path(path.iter(), Color::WHITE));
+        for shapes in [&fill, &stroke] {
+            assert_shape_limits(shapes);
+            assert!(shapes.shapes.len() > 1);
+        }
+        assert_eq!(
+            fill.shapes
+                .iter()
+                .map(|s| s.buffers.indices.len())
+                .sum::<usize>(),
+            12_000
+        );
+    }
+
+    #[test]
+    fn custom_grid_larger_than_u16_is_tiled() {
+        struct DenseShader;
+        impl Shader for DenseShader {
+            fn subdivisions(&self, _: Rect) -> (usize, usize) {
+                (256, 256)
+            }
+            fn texture(&self) -> Option<SharedTexture> {
+                None
+            }
+            fn new_vertex(&self, mat: &Matrix, point: &Vector, alpha: f32) -> Vertex {
+                Color::WHITE.new_vertex(mat, point, alpha)
+            }
+        }
+        let shapes = Shapes::build(|builder| {
+            builder.fill_rect(Rect::new(0., 0., 256., 256.), DenseShader);
+        });
+        assert_shape_limits(&shapes);
+        assert_eq!(
+            shapes
+                .shapes
+                .iter()
+                .map(|s| s.buffers.indices.len())
+                .sum::<usize>(),
+            256 * 256 * 6
+        );
+    }
+
+    #[test]
+    fn maximum_gradient_subdivision_is_split_without_loss() {
+        let brush = Brush::LinearGradient(LinearGradient::new(
+            vec2(0., 0.),
+            vec2(1., 1.),
+            [
+                ColorStop::new(0., Color::BLACK),
+                ColorStop::new(1., Color::WHITE),
+            ],
+        ));
+        let shapes = Shapes::build(|builder| {
+            builder.fill_rect(
+                Rect::new(0., 0., 192., 192.),
+                brush.shader(Rect::new(0., 0., 192., 192.)),
+            );
+        });
+
+        assert_shape_limits(&shapes);
+        assert_eq!(
+            shapes
+                .shapes
+                .iter()
+                .map(|s| s.buffers.indices.len())
+                .sum::<usize>(),
+            32 * 32 * 6
+        );
+        assert!(shapes.shapes.len() > 1);
+    }
 }

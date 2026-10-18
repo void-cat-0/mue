@@ -76,13 +76,17 @@ struct Page {
     side: usize,
     allocator: AtlasAllocator,
     texture: Option<SharedTexture>,
-    /// CPU mirror of the page. Every write is staged here and flushed in
-    /// end_pass, so a frame that adds many adjacent glyphs pays one texture
-    /// upload per page instead of one per glyph. The mirror also keeps
+    /// CPU mirror of the page. Every write is staged here and flushed by
+    /// end_pass for the current text batch, so adjacent glyphs pay one
+    /// texture upload per page instead of one per glyph. The mirror also keeps
     /// untouched texels correct inside a coalesced upload.
     staging: Option<Vec<u8>>,
     /// Rectangles written since the last flush.
     pending: Vec<DirtyRect>,
+    /// Any allocation or cache hit pins the entire page against resets.
+    last_used: u64,
+    /// Payloads on this page when the pass's eviction queue was built.
+    candidates: Vec<Key>,
 }
 
 impl Page {
@@ -93,6 +97,8 @@ impl Page {
             texture: None,
             staging: None,
             pending: Vec::new(),
+            last_used: 0,
+            candidates: Vec::new(),
         }
     }
 
@@ -202,6 +208,13 @@ pub(super) struct Atlas {
     pass: u64,
     pages: Vec<Page>,
     glyphs: HashMap<Key, Glyph>,
+    /// Candidates are built lazily on the first allocation miss in a pass.
+    /// The queue is intentionally left allocated between passes: invalidating
+    /// it is just a generation change, not an O(n) clear/drop operation.
+    candidates: Vec<(u64, Key)>,
+    candidates_pass: Option<u64>,
+    #[cfg(test)]
+    candidate_builds: u64,
     stats: GlyphAtlasStats,
 }
 
@@ -213,6 +226,10 @@ impl Atlas {
             pass: 1,
             pages: Vec::new(),
             glyphs: HashMap::new(),
+            candidates: Vec::new(),
+            candidates_pass: None,
+            #[cfg(test)]
+            candidate_builds: 0,
             stats: GlyphAtlasStats::default(),
         }
     }
@@ -229,10 +246,15 @@ impl Atlas {
     /// because a later allocation may overwrite pixels a queued draw reads.
     pub(super) fn begin_pass(&mut self) {
         self.pass = self.pass.wrapping_add(1);
+        // Candidate keys are only meaningful for the pass in which they were
+        // built. Leave the allocation in place and invalidate by generation;
+        // the next miss rebuilds it once, without scanning on every frame.
+        self.candidates_pass = None;
     }
 
-    /// Uploads every staged write. The caller must call this after all glyphs
-    /// for the pass have been drawn and before the GPU geometry is submitted.
+    /// Uploads every staged write for the current text batch. The caller must
+    /// call this after that batch's glyphs have been drawn and before its GPU
+    /// geometry is submitted; a later call is a no-op when nothing is staged.
     pub(super) fn end_pass(&mut self) {
         let (pages, stats) = (&mut self.pages, &mut self.stats);
         for page in pages {
@@ -248,7 +270,9 @@ impl Atlas {
     ) -> Option<CachedGlyph> {
         if let Some(glyph) = self.glyphs.get_mut(&key) {
             glyph.last_used = self.pass;
-            let texture = self.pages[glyph.page].texture.as_ref()?.clone();
+            let page = &mut self.pages[glyph.page];
+            page.last_used = self.pass;
+            let texture = page.texture.as_ref()?.clone();
             return Some(CachedGlyph {
                 texture,
                 uv: glyph.uv,
@@ -260,14 +284,38 @@ impl Atlas {
         // lifetime of this raster and cache churn must not grow unboundedly.
         let image = cache.get_image_uncached(font_system, key)?;
         let placement = image.placement;
-        let width = i32::try_from(placement.width).ok()?;
-        let height = i32::try_from(placement.height).ok()?;
+        let width = match i32::try_from(placement.width) {
+            Ok(width) => width,
+            Err(_) => {
+                self.stats.rejected_oversized += 1;
+                return None;
+            }
+        };
+        let height = match i32::try_from(placement.height) {
+            Ok(height) => height,
+            Err(_) => {
+                self.stats.rejected_oversized += 1;
+                return None;
+            }
+        };
         if width <= 0 || height <= 0 {
             // Whitespace and other empty glyphs have nothing to upload.
             return None;
         }
-        let padded_width = width.checked_add(PADDING * 2)?;
-        let padded_height = height.checked_add(PADDING * 2)?;
+        let padded_width = match width.checked_add(PADDING * 2) {
+            Some(width) => width,
+            None => {
+                self.stats.rejected_oversized += 1;
+                return None;
+            }
+        };
+        let padded_height = match height.checked_add(PADDING * 2) {
+            Some(height) => height,
+            None => {
+                self.stats.rejected_oversized += 1;
+                return None;
+            }
+        };
         if padded_width > self.page_size || padded_height > self.page_size {
             self.stats.rejected_oversized += 1;
             if self.stats.rejected_oversized == 1 {
@@ -276,6 +324,10 @@ impl Atlas {
                     padded_width, padded_height, self.page_size
                 );
             }
+            return None;
+        }
+        if !raster_data_valid(image.content, &image.data, width as usize, height as usize) {
+            self.stats.rejected_raster += 1;
             return None;
         }
 
@@ -350,23 +402,46 @@ impl Atlas {
     }
 
     fn allocate(&mut self, width: i32, height: i32) -> Option<(usize, AllocId)> {
+        if width <= 0 || height <= 0 || width > self.page_size || height > self.page_size {
+            return None;
+        }
         let requested = size2(width, height);
         if let Some(slot) = self.allocate_in_existing_pages(requested) {
             return Some(slot);
         }
 
-        // Only pay for ordering once space is actually needed. Sorting the
-        // evictable glyphs here is cheaper than unpinning and re-queueing every
-        // entry on every frame, and it is skipped entirely until the atlas
-        // fills up.
-        let mut candidates: Vec<(u64, Key)> = self
-            .glyphs
+        self.build_candidates();
+        // Do not seed a new pass into old fragmented holes on every page.
+        // Repack into one wholly unpinned page before falling back to partial
+        // eviction on pages whose current-pass survivors cannot move.
+        if let Some(page) = self
+            .pages
             .iter()
-            .filter(|(_, glyph)| glyph.last_used < self.pass)
-            .map(|(key, glyph)| (glyph.last_used, *key))
-            .collect();
-        candidates.sort_unstable_by_key(|(last_used, _)| *last_used);
-        for (_, key) in candidates {
+            .position(|page| page.last_used != self.pass)
+        {
+            for key in self.pages[page].candidates.drain(..) {
+                if self.glyphs.remove(&key).is_some() {
+                    self.stats.evicted += 1;
+                }
+            }
+            let data = &mut self.pages[page];
+            data.allocator.clear();
+            // No current-pass allocations/hits means no current staged writes.
+            data.pending.clear();
+            let allocation = data.allocator.allocate(requested)?;
+            data.last_used = self.pass;
+            return Some((page, allocation.id));
+        }
+        while let Some((_, key)) = self.candidates.pop() {
+            // A candidate can have been requested after the queue was built.
+            // Re-check the live entry so a touched glyph is never evicted.
+            let evictable = self
+                .glyphs
+                .get(&key)
+                .is_some_and(|glyph| glyph.last_used < self.pass);
+            if !evictable {
+                continue;
+            }
             if self.evict(&key) {
                 self.stats.evicted += 1;
                 // Retry after every individual deallocation so fragmented free
@@ -382,10 +457,36 @@ impl Atlas {
             let page = self.pages.len();
             self.pages.push(Page::new(self.page_size));
             if let Some(allocation) = self.pages[page].allocator.allocate(requested) {
+                self.pages[page].last_used = self.pass;
                 return Some((page, allocation.id));
             }
         }
         None
+    }
+
+    fn build_candidates(&mut self) {
+        if self.candidates_pass == Some(self.pass) {
+            return;
+        }
+        self.candidates.clear();
+        for page in &mut self.pages {
+            page.candidates.clear();
+        }
+        for (key, glyph) in &self.glyphs {
+            if glyph.last_used == self.pass {
+                self.pages[glyph.page].last_used = self.pass;
+            } else if glyph.last_used < self.pass {
+                self.candidates.push((glyph.last_used, *key));
+                self.pages[glyph.page].candidates.push(*key);
+            }
+        }
+        // Descending order makes Vec::pop return the oldest entry first.
+        self.candidates.sort_unstable_by(|(a, _), (b, _)| b.cmp(a));
+        self.candidates_pass = Some(self.pass);
+        #[cfg(test)]
+        {
+            self.candidate_builds += 1;
+        }
     }
 
     fn allocate_in_existing_pages(
@@ -393,6 +494,11 @@ impl Atlas {
         requested: Size2D<i32, UnknownUnit>,
     ) -> Option<(usize, AllocId)> {
         self.pages.iter_mut().enumerate().find_map(|(page, data)| {
+            // Untouched pages are reclaimed wholesale on pressure instead of
+            // pinning scattered survivors into last pass's fragmented layout.
+            if data.last_used != self.pass {
+                return None;
+            }
             data.allocator
                 .allocate(requested)
                 .map(|allocation| (page, allocation.id))
@@ -418,11 +524,26 @@ struct Raster<'a> {
     height: usize,
 }
 
+fn raster_data_valid(content: SwashContent, data: &[u8], width: usize, height: usize) -> bool {
+    let Some(pixels) = width.checked_mul(height) else {
+        return false;
+    };
+    match content {
+        SwashContent::Mask => data.len() == pixels,
+        SwashContent::Color | SwashContent::SubpixelMask => {
+            pixels.checked_mul(4).is_some_and(|len| data.len() == len)
+        }
+    }
+}
+
 /// Writes one padded glyph raster into the CPU page mirror.
 ///
 /// The one-pixel border is cleared first: a reused slot still holds the
 /// previous glyph's texels, and the border must not inherit them.
 fn blit_glyph(staging: &mut [u8], side: usize, x: i32, y: i32, raster: Raster<'_>) -> bool {
+    if !raster_data_valid(raster.content, raster.data, raster.width, raster.height) {
+        return false;
+    }
     let w = raster.width;
     let h = raster.height;
     let stride = side * 4;
@@ -492,5 +613,340 @@ fn blit_glyph(staging: &mut [u8], side: usize, x: i32, y: i32, raster: Raster<'_
             }
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmic_text::CacheKeyFlags;
+    use cosmic_text::fontdb::Weight;
+
+    fn key(glyph_id: u16) -> Key {
+        CacheKey {
+            font_id: cosmic_text::fontdb::ID::dummy(),
+            glyph_id,
+            font_size_bits: 16.0f32.to_bits(),
+            x_bin: cosmic_text::SubpixelBin::Zero,
+            y_bin: cosmic_text::SubpixelBin::Zero,
+            font_weight: Weight::NORMAL,
+            flags: CacheKeyFlags::empty(),
+        }
+    }
+
+    fn add_glyph(atlas: &mut Atlas, id: u16, width: i32, height: i32, last_used: u64) {
+        let page = 0;
+        let allocation = atlas.pages[page]
+            .allocator
+            .allocate(size2(width, height))
+            .expect("test allocation")
+            .id;
+        atlas.glyphs.insert(
+            key(id),
+            Glyph {
+                page,
+                allocation,
+                uv: Rect::default(),
+                placement: Placement::default(),
+                last_used,
+            },
+        );
+    }
+
+    #[test]
+    fn page_allocations_stay_in_bounds_and_do_not_overlap() {
+        let mut page = Page::new(32);
+        let mut rectangles = Vec::new();
+        for size in [(3, 5), (7, 2), (4, 4), (9, 3), (2, 8), (6, 6)] {
+            let allocation = page
+                .allocator
+                .allocate(size2(size.0, size.1))
+                .expect("allocation");
+            let rect = allocation.rectangle;
+            assert!(rect.min.x >= 0 && rect.min.y >= 0);
+            assert!(rect.max.x <= 32 && rect.max.y <= 32);
+            rectangles.push(rect);
+        }
+        for (index, a) in rectangles.iter().enumerate() {
+            for b in rectangles.iter().skip(index + 1) {
+                assert!(
+                    a.max.x <= b.min.x
+                        || b.max.x <= a.min.x
+                        || a.max.y <= b.min.y
+                        || b.max.y <= a.min.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zero_and_oversized_requests_are_rejected_without_pages() {
+        let mut atlas = Atlas::new(8);
+        assert!(atlas.allocate(0, 1).is_none());
+        assert!(atlas.allocate(1, 0).is_none());
+        assert!(atlas.allocate(9, 1).is_none());
+        assert!(atlas.allocate(1, 9).is_none());
+        assert!(atlas.pages.is_empty());
+    }
+
+    #[test]
+    fn max_pages_is_bounded() {
+        let mut atlas = Atlas::new(4);
+        atlas.max_pages = 2;
+        for _ in 0..2 {
+            assert!(atlas.allocate(4, 4).is_some());
+        }
+        assert!(atlas.allocate(1, 1).is_none());
+        assert_eq!(atlas.pages.len(), 2);
+    }
+
+    #[test]
+    fn touched_after_candidate_build_is_not_evicted() {
+        let mut atlas = Atlas::new(32);
+        atlas.max_pages = 0;
+        atlas.pages.push(Page::new(32));
+        for id in 1..=64 {
+            add_glyph(&mut atlas, id, 4, 4, 1);
+        }
+        atlas.begin_pass();
+        atlas.build_candidates();
+        let touched = atlas.candidates.last().unwrap().1;
+        let mut fonts = FontSystem::new_with_locale_and_db(
+            "en-US".into(),
+            cosmic_text::fontdb::Database::new(),
+        );
+        // The real cache-hit path pins the page even though this no-GPU
+        // fixture has no texture to return.
+        assert!(
+            atlas
+                .cache_glyph(&mut fonts, &mut SwashCache::new(), touched)
+                .is_none()
+        );
+        atlas.pages[0].mark_dirty(0, 0, 1, 1);
+        assert!(atlas.allocate(4, 4).is_some());
+        assert!(atlas.glyphs.contains_key(&touched));
+        assert_eq!(atlas.pages[0].pending.len(), 1);
+        assert_eq!(atlas.stats.evicted, 1);
+        assert_eq!(atlas.candidate_builds, 1);
+    }
+
+    #[test]
+    fn more_than_32_old_entries_are_evicted_without_rebuilding_queue() {
+        let mut atlas = Atlas::new(32);
+        atlas.max_pages = 0;
+        atlas.pages.push(Page::new(32));
+        for id in 0..64 {
+            add_glyph(&mut atlas, id, 4, 4, 1);
+        }
+        atlas.begin_pass();
+        // A current-pass survivor forbids whole-page reclamation, so this
+        // exercises the individual candidate queue, including >32 retries.
+        atlas.glyphs.get_mut(&key(0)).unwrap().last_used = atlas.pass;
+        atlas.pages[0].last_used = atlas.pass;
+        for id in 64..104 {
+            let (page, allocation) = atlas.allocate(4, 4).expect("eviction allocation");
+            atlas.glyphs.insert(
+                key(id),
+                Glyph {
+                    page,
+                    allocation,
+                    uv: Rect::default(),
+                    placement: Placement::default(),
+                    last_used: atlas.pass,
+                },
+            );
+        }
+        assert_eq!(atlas.stats.evicted, 40);
+        assert_eq!(atlas.candidate_builds, 1);
+    }
+
+    #[test]
+    fn candidate_build_is_bounded_to_once_per_pass_under_churn() {
+        let mut atlas = Atlas::new(16);
+        atlas.max_pages = 0;
+        atlas.pages.push(Page::new(16));
+        for id in 0..16 {
+            add_glyph(&mut atlas, id, 4, 4, 1);
+        }
+        for pass in 0..1000 {
+            atlas.begin_pass();
+            for id in 1000 + pass * 10..1000 + pass * 10 + 10 {
+                let id = id as u16;
+                let (page, allocation) = atlas.allocate(4, 4).expect("churn allocation");
+                atlas.glyphs.insert(
+                    key(id),
+                    Glyph {
+                        page,
+                        allocation,
+                        uv: Rect::default(),
+                        placement: Placement::default(),
+                        last_used: atlas.pass,
+                    },
+                );
+            }
+        }
+        assert_eq!(atlas.candidate_builds, 1000);
+    }
+
+    #[test]
+    fn pressure_resets_only_untouched_page_and_retains_staging() {
+        let mut atlas = Atlas::new(8);
+        atlas.max_pages = 1;
+        atlas.pages.push(Page::new(8));
+        for id in 0..4 {
+            add_glyph(&mut atlas, id, 4, 4, 1);
+        }
+        let page = &mut atlas.pages[0];
+        page.last_used = atlas.pass;
+        page.staging = Some(vec![77; 8 * 8 * 4]);
+        page.mark_dirty(0, 0, 4, 4);
+        let staging_ptr = page.staging.as_ref().unwrap().as_ptr();
+
+        atlas.begin_pass();
+        // Merely beginning a pass never resets or evicts anything.
+        assert_eq!(atlas.glyphs.len(), 4);
+        assert_eq!(atlas.stats.evicted, 0);
+        assert_eq!(atlas.pages[0].pending.len(), 1);
+        assert!(atlas.allocate(8, 8).is_some());
+        assert!(atlas.glyphs.is_empty());
+        assert_eq!(atlas.stats.evicted, 4);
+        assert_eq!(atlas.pages.len(), 1);
+        assert!(atlas.pages[0].pending.is_empty());
+        assert_eq!(
+            atlas.pages[0].staging.as_ref().unwrap().as_ptr(),
+            staging_ptr
+        );
+        assert!(
+            atlas.pages[0]
+                .staging
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|&b| b == 77)
+        );
+        // The newly allocated slot pins this page even before insertion.
+        assert!(atlas.allocate(1, 1).is_none());
+        assert_eq!(atlas.stats.evicted, 4);
+    }
+
+    #[test]
+    fn varying_sizes_turn_over_pages_without_evicting_current_pass() {
+        let mut atlas = Atlas::new(512);
+        for pass in 0..12u32 {
+            atlas.begin_pass();
+            // A few cache hits survive from the previous layout. Those pages
+            // must never be reset, even after the candidate queue is built.
+            let mut pins: Vec<_> = atlas
+                .glyphs
+                .iter()
+                .map(|(key, glyph)| (*key, glyph.page, glyph.allocation))
+                .collect();
+            pins.sort_unstable_by_key(|(key, _, _)| *key);
+            pins.truncate(32);
+            for (key, page, _) in &pins {
+                atlas.glyphs.get_mut(key).unwrap().last_used = atlas.pass;
+                atlas.pages[*page].last_used = atlas.pass;
+            }
+            for id in 0..4000u16 {
+                let width = 4 + ((u32::from(id) * 17 + pass * 7) % 20) as i32;
+                let height = 4 + ((u32::from(id) * 13 + pass * 11) % 20) as i32;
+                let (page, allocation) = atlas
+                    .allocate(width, height)
+                    .unwrap_or_else(|| panic!("pass {pass}, glyph {id}, {width}x{height}"));
+                let mut key = key(id);
+                key.font_size_bits = pass;
+                atlas.glyphs.insert(
+                    key,
+                    Glyph {
+                        page,
+                        allocation,
+                        uv: Rect::default(),
+                        placement: Placement::default(),
+                        last_used: atlas.pass,
+                    },
+                );
+            }
+            for (key, page, allocation) in &pins {
+                let glyph = atlas.glyphs.get(key).expect("current-pass glyph evicted");
+                assert_eq!((glyph.page, glyph.allocation), (*page, *allocation));
+            }
+            if pass % 4 == 0 {
+                let mut occupied = vec![vec![false; 512 * 512]; atlas.pages.len()];
+                for glyph in atlas.glyphs.values() {
+                    let rect = atlas.pages[glyph.page].allocator[glyph.allocation];
+                    assert!(rect.min.x >= 0 && rect.min.y >= 0);
+                    assert!(rect.max.x <= 512 && rect.max.y <= 512);
+                    for y in rect.min.y..rect.max.y {
+                        for x in rect.min.x..rect.max.x {
+                            let cell = &mut occupied[glyph.page][(y * 512 + x) as usize];
+                            assert!(!*cell, "live allocation overlap");
+                            *cell = true;
+                        }
+                    }
+                }
+            }
+            assert!(atlas.pages.len() <= MAX_PAGES);
+            assert!(atlas.candidate_builds <= u64::from(pass) + 1);
+        }
+        assert!(atlas.stats.evicted > 4000);
+        assert!(
+            atlas
+                .pages
+                .iter()
+                .all(|page| page.texture.is_none() && page.staging.is_none())
+        );
+    }
+
+    #[test]
+    fn malformed_raster_is_rejected_before_staging() {
+        let mut staging = vec![0; 4 * 4 * 4];
+        assert!(!blit_glyph(
+            &mut staging,
+            4,
+            1,
+            1,
+            Raster {
+                content: SwashContent::Mask,
+                data: &[255; 3],
+                width: 2,
+                height: 2,
+            },
+        ));
+        assert_eq!(staging, vec![0; 4 * 4 * 4]);
+    }
+
+    #[test]
+    fn blit_clears_transparent_border_and_validates_data_lengths() {
+        let mut staging = vec![77; 6 * 6 * 4];
+        assert!(blit_glyph(
+            &mut staging,
+            6,
+            2,
+            2,
+            Raster {
+                content: SwashContent::Mask,
+                data: &[255],
+                width: 1,
+                height: 1,
+            },
+        ));
+        for row in 1..=3 {
+            for col in 1..=3 {
+                let pixel = &staging[(row * 6 + col) * 4..(row * 6 + col + 1) * 4];
+                if row == 2 && col == 2 {
+                    assert_eq!(pixel, &[255, 255, 255, 255]);
+                } else {
+                    assert_eq!(pixel, &[0, 0, 0, 0]);
+                }
+            }
+        }
+        assert!(!raster_data_valid(SwashContent::Color, &[0; 3], 1, 1));
+        assert!(!raster_data_valid(
+            SwashContent::SubpixelMask,
+            &[0; 3],
+            1,
+            1
+        ));
+        assert!(raster_data_valid(SwashContent::Color, &[0; 4], 1, 1));
     }
 }

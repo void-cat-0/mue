@@ -67,14 +67,14 @@ impl FontState {
 
     pub(crate) fn begin_render_pass(&mut self) {
         if let Some(atlas) = &mut self.font_atlas {
-            // Macroquad queues UVs, so all prior draws must be submitted before slot reuse.
+            // Submit staged pixels and queued UVs before allowing slot reuse.
+            atlas.end_pass();
             unsafe { macroquad::window::get_internal_gl() }.flush();
             atlas.begin_pass();
         }
     }
 
-    /// Uploads the glyph pixels staged during the pass. Must run once after all
-    /// text has been drawn and before macroquad submits the frame geometry.
+    /// Flush any staged pixels left at the end of a render pass.
     pub(crate) fn end_render_pass(&mut self) {
         if let Some(atlas) = &mut self.font_atlas {
             atlas.end_pass();
@@ -405,6 +405,10 @@ pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
                                     .shader(bounds),
                             );
                         }
+                    }
+                    // Paint::draw submits geometry after this closure; later render hooks may flush it.
+                    if let Some(atlas) = &mut fonts.font_atlas {
+                        atlas.end_pass();
                     }
                 })
             };
