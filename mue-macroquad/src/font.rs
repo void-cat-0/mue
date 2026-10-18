@@ -44,6 +44,8 @@ use cosmic_text::Family;
 
 use crate::runtime::Runtime;
 
+pub use crate::node::typography::GlyphAtlasStats;
+
 // The `text` node speaks in cosmic-text types (`font_family`, `font_weight`), so re-export the
 // ones a caller has to name instead of forcing every caller to add a cosmic-text dependency.
 pub use cosmic_text::{FamilyOwned, Weight, fontdb};
@@ -90,4 +92,13 @@ pub fn load_font(data: Vec<u8>) -> Vec<FamilyOwned> {
 
 pub fn load_font_file(path: impl AsRef<Path>) -> std::io::Result<Vec<FamilyOwned>> {
     Ok(load_font(std::fs::read(path)?))
+}
+
+/// Counter snapshot of the thread's glyph atlas, or `None` until text renders.
+///
+/// Useful for spotting thrash: an `evicted` count that keeps climbing means the
+/// visible glyph set no longer fits the atlas and rasters are recreated every
+/// frame.
+pub fn glyph_atlas_stats() -> Option<GlyphAtlasStats> {
+    Runtime::with_fonts(|fonts| fonts.glyph_atlas_stats()).flatten()
 }

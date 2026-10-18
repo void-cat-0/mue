@@ -104,10 +104,23 @@ impl Runtime {
         })
     }
 
+    /// Reads an already initialized font state without creating one.
+    pub(crate) fn with_fonts<R>(f: impl FnOnce(&FontState) -> R) -> Option<R> {
+        RUNTIME.with(|rt| rt.fonts.get().map(|fonts| f(&fonts.borrow())))
+    }
+
     pub(crate) fn begin_text_render_pass() {
         RUNTIME.with(|rt| {
             if let Some(fonts) = rt.fonts.get() {
                 fonts.borrow_mut().begin_render_pass();
+            }
+        });
+    }
+
+    pub(crate) fn end_text_render_pass() {
+        RUNTIME.with(|rt| {
+            if let Some(fonts) = rt.fonts.get() {
+                fonts.borrow_mut().end_render_pass();
             }
         });
     }

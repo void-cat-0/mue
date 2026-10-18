@@ -296,11 +296,15 @@ cargo run -p map
 ```bash
 cargo check --workspace
 cargo clippy -p events -p gestures -p map --all-targets --no-deps
-# 需要图形环境；连续切换字号/字体/字重并验证同帧多次 App 绘制
-cargo run -p mue-macroquad --example glyph_atlas_stress -- 600
+# 需要图形环境；校验新字形在同帧提前 flush 时可见
+cargo run -p atlas -- --verify-upload
+# 内置 Noto，不依赖系统字体；限时压力测试并检查图集拒绝计数
+cargo run -p atlas -- --frames 120 --glyphs 4000 --max-size 28 --verify
+# 交互模式；可切换到超预算场景观察拒绝计数
+cargo run -p atlas
 ```
 
-字形图集按需创建 1024² RGBA 页面，最多 8 页（约 32 MiB，不包含字体源数据及驱动开销）。本轮已引用的字形在下一轮提交已有绘制后才允许回收，旧条目逐步淘汰；单个字形超出页面或单轮工作集超过预算时跳过该字形，不覆盖已排队内容，也不因缓存压力 panic。连续字号动画仍按原始精度栅格化，本版本没有字号量化。
+字形图集按需创建 1024² RGBA 页面，最多 8 页，满载时约占 32 MiB GPU 图集和 32 MiB 常驻 CPU 镜像，另有上传临时缓冲、字体源数据及驱动开销。每个文本节点先合并上传新字形，再提交几何，后续自定义节点提前 flush 也能读取正确像素；本轮已引用的字形在下一轮提交已有绘制后才允许回收。淘汰候选在发生压力时每轮只排序一次，并逐步回收。单个字形超出页面或单轮工作集超过预算时跳过该字形，不覆盖已排队内容，也不因缓存压力 panic；交互模式中的 4000 字形、大字号组合可能刻意超出此预算。连续字号动画仍按原始精度栅格化，本版本没有字号量化。
 
 ## 备注
 

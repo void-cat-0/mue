@@ -117,5 +117,6 @@ impl App {
             self.pointer_manager.process(root_node);
             crate::event::wheel::check_wheel(root_node);
         });
+        Runtime::end_text_render_pass();
     }
 }
