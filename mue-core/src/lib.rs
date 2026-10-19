@@ -11,3 +11,6 @@ pub use runtime::batch;
 pub mod units;
 pub mod update_context;
 pub use units::{FontSize, Size};
+
+#[cfg(test)]
+mod runtime_tests;

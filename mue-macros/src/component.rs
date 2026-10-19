@@ -203,9 +203,11 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
         }
     } else {
         quote! {
-            let mut result = #ident(#( #invoke_args ),*);
-            result.style_mut().provide_defaults(self.style);
-            #macroquad::node::IntoNode::into_node(result)
+            #macroquad::node::Node::build_component(move || {
+                let mut result = #ident(#( #invoke_args ),*);
+                result.style_mut().provide_defaults(self.style);
+                #macroquad::node::IntoNode::into_node(result)
+            })
         }
     };
     let into_node_self = if node {

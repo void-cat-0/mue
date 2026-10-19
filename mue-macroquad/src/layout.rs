@@ -44,7 +44,8 @@ impl Layout {
                         .expect("failed to mark layout dirty");
                 });
             }
-        });
+        })
+        .owned();
         Runtime::with_taffy_mut(move |taffy| {
             taffy
                 .set_node_context(
@@ -120,4 +121,100 @@ pub fn use_layout(style: &mut Style) -> Layout {
             rect: *node.layout.rect,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::Node;
+
+    fn headless_node() -> (Node, Layout) {
+        let mut layout = None;
+        let node = Node::build_with_style(Style::default(), |style| {
+            layout = Some(use_layout(style));
+        });
+        (node, layout.unwrap())
+    }
+
+    fn compute_layout(layout: &Layout) {
+        Runtime::with_taffy_mut(|taffy| {
+            taffy
+                .compute_layout_with_measure(
+                    layout.layout_id,
+                    Size {
+                        width: AvailableSpace::MaxContent,
+                        height: AvailableSpace::MaxContent,
+                    },
+                    |known, available, _, context, _| {
+                        context.map_or(Size::ZERO, |measure| measure.measure(known, available))
+                    },
+                )
+                .unwrap();
+        });
+        assert!(!is_dirty(layout));
+    }
+
+    fn is_dirty(layout: &Layout) -> bool {
+        Runtime::with_taffy_mut(|taffy| taffy.dirty(layout.layout_id).unwrap())
+    }
+
+    #[test]
+    fn replacing_measure_fn_unsubscribes_the_old_reaction() {
+        let owner = Scope::new().owned();
+        let (old_width, new_width) = owner.run(|| (signal(10.), signal(20.)));
+        let (node, layout) = headless_node();
+        // Install outside the Node's scope so closure ownership, rather than
+        // eventual scope disposal, must release the replaced reaction.
+        layout.set_measure_fn(move |_, _| Size {
+            width: old_width.get(),
+            height: 1.,
+        });
+        compute_layout(&layout);
+        old_width.set(11.);
+        assert!(is_dirty(&layout));
+        compute_layout(&layout);
+
+        layout.set_measure_fn(move |_, _| Size {
+            width: new_width.get(),
+            height: 1.,
+        });
+        compute_layout(&layout);
+        old_width.set(12.);
+        assert!(!is_dirty(&layout));
+        new_width.set(21.);
+        assert!(is_dirty(&layout));
+        compute_layout(&layout);
+        Runtime::with_taffy_mut(|taffy| {
+            assert_eq!(taffy.layout(layout.layout_id).unwrap().size.width, 21.);
+        });
+        drop(node);
+    }
+
+    #[test]
+    fn dropping_node_unsubscribes_its_measure_reaction() {
+        let owner = Scope::new().owned();
+        let width = owner.run(|| signal(10.));
+        let (node, layout) = headless_node();
+        // This reaction is not registered with the Node's scope: removing the
+        // Taffy measurement closure must dispose it even in this case.
+        layout.set_measure_fn(move |_, _| Size {
+            width: width.get(),
+            height: 1.,
+        });
+        compute_layout(&layout);
+        width.set(11.);
+        assert!(is_dirty(&layout));
+        // Re-track after invalidation so a live subscription exists at drop.
+        compute_layout(&layout);
+        let count = Runtime::with_taffy_mut(|taffy| taffy.total_node_count());
+        drop(node);
+        Runtime::with_taffy_mut(|taffy| {
+            assert_eq!(taffy.total_node_count(), count - 1);
+        });
+        assert!(!width.is_disposed());
+        // A leaked reaction would call mark_dirty on the removed Taffy node
+        // and panic here. The external signal must remain usable instead.
+        width.set(12.);
+        assert_eq!(width.get(), 12.);
+    }
 }

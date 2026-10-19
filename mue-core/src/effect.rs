@@ -29,6 +29,7 @@ pub(crate) enum EffectState {
 
 pub(crate) type DependencyList = SmallVec<[SignalId; 2]>;
 
+#[derive(Clone)]
 pub(crate) enum Dependencies {
     Dynamic(DependencyList),
     Static(SignalId),
@@ -52,6 +53,9 @@ impl Deref for Dependencies {
 }
 
 pub(crate) struct EffectInner {
+    pub owner: crate::scope::Scope,
+    pub running: bool,
+    pub rerun: bool,
     pub update_context: crate::update_context::UpdateContext,
     pub callback: Option<EffectCallback>,
     pub cleanups: Vec<CleanupCallback>,
@@ -73,6 +77,9 @@ impl EffectInner {
         #[cfg(debug_assertions)] location: &'static std::panic::Location<'static>,
     ) -> Self {
         Self {
+            owner: crate::scope::current_scope(),
+            running: false,
+            rerun: false,
             update_context: Default::default(),
             callback: Some(callback),
             cleanups: Vec::new(),
@@ -81,12 +88,6 @@ impl EffectInner {
             state,
             #[cfg(debug_assertions)]
             location,
-        }
-    }
-
-    pub fn cleanup(&mut self) {
-        for cleanup in self.cleanups.drain(..) {
-            cleanup();
         }
     }
 
@@ -186,6 +187,10 @@ pub fn watch_immediate<T: 'static>(
 
 #[track_caller]
 /// Run an effect immediately and rerun it when any tracked read changes.
+///
+/// Runs in its creation scope, which also stops it on disposal. Writes during a
+/// callback are flushed after it returns; self-invalidations schedule another run.
+/// Repeated updates of one effect are limited to 100 executions per flush.
 pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
@@ -202,13 +207,19 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
             location,
         )
         .register(rt);
+        let effect = Effect::new(effect_id);
         rt.update(effect_id);
-        Effect::new(effect_id)
+        effect
     })
 }
 
 /// Register a cleanup function to be called when the current effect is re-run or disposed.
 /// This function should only be called within an effect callback.
+///
+/// Cleanups do not collect dependencies and run without holding the effect arena
+/// borrow. All registered cleanups are attempted before propagating the first
+/// panic. A disposed owner is replaced by the null scope during cleanup; resources
+/// created there require explicit disposal.
 ///
 /// # Example
 /// ```
@@ -255,8 +266,10 @@ fn create_computed<T: 'static>(callback: EffectCallback) -> ReadSignal<T> {
         )
         .register(rt);
         rt.signal_mut(signal_id).effect = Some(effect_id);
+        let signal = ReadSignal::new(signal_id);
+        Effect::new(effect_id);
         rt.update(effect_id);
-        ReadSignal::new(signal_id)
+        signal
     })
 }
 
@@ -290,14 +303,23 @@ pub fn computed_always<T: 'static>(mut f: impl FnMut(Option<&T>) -> T + 'static)
     }))
 }
 
+/// An explicitly tracked subscription owned by its creation scope.
+/// Use `dispose` or `owned` to stop it before that scope is disposed.
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Reaction {
     pub(crate) effect_id: EffectId,
 }
 
+impl Disposable for Reaction {
+    fn dispose(&self) {
+        let _ = Runtime::try_with(|rt| rt.dispose_effect(self.effect_id));
+    }
+}
+
 impl Reaction {
     fn new(effect_id: EffectId) -> Self {
+        Effect::new(effect_id);
         Self { effect_id }
     }
 
