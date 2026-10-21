@@ -10,4 +10,5 @@ rust-version.workspace = true
 macroquad = { workspace = true }
 mue-core = { workspace = true }
 mue-macroquad = { workspace = true }
+mue-components = { workspace = true }
 taffy = { workspace = true }

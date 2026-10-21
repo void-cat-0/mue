@@ -1,59 +1,82 @@
 use super::{controls::*, responsive};
+use mue_components::*;
+use mue_core::{Owned, prop::Prop};
 use mue_macroquad::{
     color::Color,
     factory::factory,
-    node::*,
-    style::{Styleable, StyleableExt, vh, vw},
+    style::Styleable,
     theme::{provide_theme, theme},
 };
+use std::rc::Rc;
+
 #[derive(Clone)]
 struct Options {
     accent: bool,
 }
+
+fn build_tile(caption: Prop<Rc<str>>) -> CenterBuilder {
+    center().children(text(caption).style(style! {
+        font-size: {responsive::font(22.)};
+        line-height: {responsive::ui(32.)};
+    }))
+}
+
 pub fn page() -> Node {
     let (dark, control) = toggle("Theme");
-    let tile = factory(|label: &'static str| {
-        center().children(
-            text(label)
-                .font_size(responsive::font(22.))
-                .line_height(responsive::ui(32.)),
-        )
-    })
-    .defaults(Options { accent: false })
-    .style(|s, _| {
-        s.w_full()
-            .min_width(0.)
-            .padding((vw(2.75), vh(2.75)))
-            .radius(14.)
-    });
-    let first = theme!(|c, s| match c {
-        tile(o) if o.accent => s.background(CORAL),
-        tile => s.background(BLUE),
-        _ => s,
-    });
-    let second = theme!(|c, s| match c {
-        tile(o) if o.accent => s.background(BLUE),
-        tile => s.background(PANEL),
-        _ => s,
-    });
-    let nested = theme!(|c, s| match c {
-        tile => s.background(Color::from_rgba(70, 140, 100, 255)),
-        _ => s,
-    });
+    let tile = factory(build_tile).defaults(Options { accent: false });
+    let panel = factory(|build: Rc<dyn Fn() -> Owned<Children>>| container().children(build()));
+    let first = theme! {
+        tile[accent] { background: { CORAL }; }
+        tile { background: { BLUE }; }
+        panel > tile + tile { opacity: 82%; }
+        panel > tile ~ tile { transform: translateX(4px); }
+    };
+    let second = theme! {
+        tile[accent] { background: { BLUE }; }
+        tile { background: { PANEL }; }
+    };
+    let nested = theme! {
+        tile { background: { Color::from_rgba(70, 140, 100, 255) }; }
+    };
     stack()
-        .w_full()
-        .min_width(0.)
-        .gap(vh(2.5))
+        .style(style! {
+            width: 100%;
+            min-width: 0px;
+            gap: {responsive::ui(20.)};
+        })
         .children((
             control,
             provide_theme(dark.select(second, first), move || {
-                stack().w_full().min_width(0.).gap(vh(2.)).children((
-                    tile.create("Default").animation(SPRING),
-                    tile.create("Accent")
-                        .options(|o| o.accent = true)
-                        .animation(SPRING),
-                    provide_theme(nested, move || tile.create("Nested").animation(SPRING)),
-                ))
+                stack()
+                    .style(style! {
+                        width: 100%;
+                        min-width: 0px;
+                        gap: {responsive::ui(16.)};
+                    })
+                    .children((
+                        tile.create("Default")
+                            .style(style! { transition: 300ms ease-in-out; }),
+                        tile.create("Accent")
+                            .options(|options| options.accent = true)
+                            .style(style! { transition: 300ms ease-in-out; }),
+                        {
+                            let build: Rc<dyn Fn() -> Owned<Children>> = Rc::new({
+                                let tile = tile.clone();
+                                move || {
+                                    (tile.create("First sibling"), tile.create("Later sibling"))
+                                        .into_children()
+                                }
+                            });
+                            panel.create(build).style(style! {
+                                width: 100%;
+                                gap: {responsive::ui(8.)};
+                            })
+                        },
+                        provide_theme(nested, move || {
+                            tile.create("Nested")
+                                .style(style! { transition: 300ms ease-in-out; })
+                        }),
+                    ))
             }),
         ))
         .into_node()

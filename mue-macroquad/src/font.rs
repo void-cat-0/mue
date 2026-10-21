@@ -10,10 +10,10 @@
 //! does not initialize fonts.
 //!
 //! ```no_run
-//! use mue_macroquad::{font::load_font_file, node::*, style::Styleable};
+//! use mue_macroquad::{font::load_font_file, style::{Style, Styleable}};
 //!
 //! let family = load_font_file("assets/Inter.ttf").unwrap().remove(0);
-//! let _label = text("hello").font_family(family);
+//! let _label = Style::new().font_family(family);
 //! ```
 //!
 //! A family can also be named without loading anything: either a name the system font database
@@ -21,21 +21,21 @@
 //! from mue-core's `impl-cosmic-text` feature.
 //!
 //! ```no_run
-//! use mue_macroquad::{font::FamilyOwned, node::*, style::Styleable};
+//! use mue_macroquad::{font::FamilyOwned, style::{Style, Styleable}};
 //!
-//! let _by_str = text("hello").font_family("Microsoft YaHei");
-//! let _by_name = text("hello").font_family(FamilyOwned::Name("Microsoft YaHei".into()));
-//! let _generic = text("hello").font_family(FamilyOwned::Monospace);
+//! let _by_str = Style::new().font_family("Microsoft YaHei");
+//! let _by_name = Style::new().font_family(FamilyOwned::Name("Microsoft YaHei".into()));
+//! let _generic = Style::new().font_family(FamilyOwned::Monospace);
 //! ```
 //!
 //! The parameter is reactive, so a family can follow a signal:
 //!
 //! ```no_run
 //! use mue_core::prelude::*;
-//! use mue_macroquad::{font::FamilyOwned, node::*, style::Styleable};
+//! use mue_macroquad::{font::FamilyOwned, style::{Style, Styleable}};
 //!
 //! let family = signal(FamilyOwned::Monospace);
-//! let _reactive = text("hello").font_family(computed(move |_| family.get_clone()));
+//! let _reactive = Style::new().font_family(computed(move |_| family.get_clone()));
 //! ```
 
 use std::path::Path;
@@ -44,7 +44,7 @@ use cosmic_text::Family;
 
 use crate::runtime::Runtime;
 
-pub use crate::node::typography::GlyphAtlasStats;
+pub use crate::node::atlas::GlyphAtlasStats;
 
 // The `text` node speaks in cosmic-text types (`font_family`, `font_weight`), so re-export the
 // ones a caller has to name instead of forcing every caller to add a cosmic-text dependency.

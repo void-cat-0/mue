@@ -1,11 +1,10 @@
 use super::{controls::*, halftone, responsive};
 use macroquad::texture::Texture2D;
+use mue_components::*;
 use mue_macroquad::{
-    animation::animated_with,
     math::{Rect, vec2},
-    node::*,
     shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
-    style::{Style, Styleable, StyleableExt, percent, vh},
+    style::{Style, Styleable, percent, vh},
 };
 
 pub fn page() -> Node {
@@ -61,38 +60,47 @@ pub fn page() -> Node {
             ),
         ],
     );
-    let density = animated_with(density.select(0.3, 0.08), SPRING).value;
+    let density = density.select(0.3, 0.08);
     stack()
-        .w_full()
-        .min_width(0.)
-        .gap(vh(2.5))
+        .style(mue_macroquad::style! {
+        width: 100%;
+        min-width: 0px;
+        gap: {vh(2.5)};
+        })
         .children((
             controls(vec![a, b, c, d, e, f, g, h, i, j]),
             image(photo)
-                .width(wide.select(percent(90.), percent(50.)))
-                .height(tall.select(vh(43.75), vh(27.5)))
-                .animation(SPRING)
+                .style(mue_macroquad::style! {
+                width: {wide.select(percent(90.), percent(50.))};
+                height: {tall.select(vh(43.75), vh(27.5))};
+                transition: {SPRING};
+                })
                 .object_fit(fit)
                 .object_position(position)
                 .region(crop.map(|on| on.then_some(Rect::new(100., 100., 400., 300.))))
-                .color(tint.select(
+                .style(mue_macroquad::style! { color: {tint.select(
                     Brush::Solid(CORAL),
                     Brush::Solid(mue_macroquad::color::Color::WHITE),
-                )),
+                )}; }),
             center()
-                .w_full()
-                .height(vh(12.5))
-                .min_height(responsive::ui(54.))
-                .radius(radius.select(50., 8.))
-                .background(brush)
-                .animation(SPRING)
-                .children(
-                    heading("Brush")
-                        .font_size(responsive::font(28.))
-                        .line_height(responsive::ui(38.)),
-                ),
+                .style(mue_macroquad::style! {
+                width: 100%;
+                height: {vh(12.5)};
+                min-height: {responsive::ui(54.)};
+                border-radius: {radius.select(50., 8.)};
+                background: {brush};
+                transition: {SPRING};
+                })
+                .children(heading("Brush").style(mue_macroquad::style! {
+                font-size: {responsive::font(28.)};
+                line-height: {responsive::ui(38.)};
+                })),
             halftone::halftone(
-                Style::new().height(vh(22.5)).w_full().flex_none(),
+                Style::new().style(mue_macroquad::style! {
+                height: {vh(22.5)};
+                width: 100%;
+                flex: none;
+                }),
                 density,
                 pause.map(|v| !v),
             ),
@@ -103,7 +111,7 @@ pub fn page() -> Node {
                     p.stroke_rect(Rect::new(110., 15., 120., 70.), CORAL);
                 }),
             ))
-            .height(100.),
+            .style(mue_macroquad::style! { height: 100px; }),
         ))
         .into_node()
 }

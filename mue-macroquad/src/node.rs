@@ -1,10 +1,13 @@
-pub mod graphics;
-pub mod layout;
-pub mod typography;
-
-pub use graphics::*;
-pub use layout::*;
-pub use typography::*;
+pub mod atlas;
+pub mod children;
+pub mod flexbox;
+pub mod shape;
+pub mod text;
+pub use atlas::GlyphAtlasStats;
+pub use children::*;
+pub use flexbox::{FlexboxBuilder, flexbox};
+pub use shape::{ShapeBuilder, shape};
+pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
 
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
@@ -23,7 +26,7 @@ use crate::{
     layout::OwnedLayout,
     math::{Matrix, Rect, Vector},
     runtime::Runtime,
-    style::{FontSize, FontSizeExt, Style, Styleable, StyleableExt},
+    style::{FontSize, FontSizeExt, Style, Styleable, StyleableExt, Transform, TransformOrigin},
 };
 
 new_key_type! {
@@ -49,7 +52,9 @@ pub(crate) struct NodeInner {
     pub(crate) clip: Option<ReadSignal<Rect>>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
-    pub(crate) transform: Prop<Matrix>,
+    pub(crate) matrix_transform: Prop<Matrix>,
+    transform_list: Prop<Transform>,
+    transform_origin: Prop<TransformOrigin>,
     pub(crate) font_size: Option<Prop<FontSize>>,
     pub(crate) computed_font_size: Signal<f32>,
 
@@ -57,6 +62,19 @@ pub(crate) struct NodeInner {
 }
 
 impl NodeInner {
+    pub(crate) fn effective_transform(&self) -> Matrix {
+        let bounds = if self.layout.rect.is_null() {
+            Rect::default()
+        } else {
+            self.layout.rect.get()
+        };
+        self.matrix_transform.get()
+            * self
+                .transform_list
+                .get_clone()
+                .resolve(bounds, self.transform_origin.get())
+    }
+
     pub fn new(children: Owned<Children>) -> Self {
         Self {
             scope: Scope::new(),
@@ -71,7 +89,9 @@ impl NodeInner {
             clip: None,
             child_offset: None,
             center_on_layout_origin: false,
-            transform: Prop::Static(Matrix::IDENTITY),
+            matrix_transform: Prop::Static(Matrix::IDENTITY),
+            transform_list: Prop::default(),
+            transform_origin: Prop::default(),
             font_size: None,
             computed_font_size: Signal::null(),
 
@@ -143,7 +163,7 @@ impl NodeRef {
                     .set(Rect::new(origin.x, origin.y, size.width, size.height));
             }
 
-            let transform = node.transform.get();
+            let transform = node.effective_transform();
             drop(node);
             crate::paint::with_transform(transform, || {
                 rt.invoke_hook(self.id, |hooks| &mut hooks.render, &());
@@ -241,7 +261,7 @@ impl Disposable for NodeRef {
 pub struct Node(Owned<NodeRef>);
 
 impl Node {
-    pub(crate) fn retain_scope(&self, scope: Scope) {
+    pub fn retain_scope(&self, scope: Scope) {
         Runtime::with(|rt| rt.nodes.borrow_mut()[self.id].retained_scopes.push(scope));
     }
     /// Build a custom node within its own reactive scope.
@@ -255,13 +275,17 @@ impl Node {
         let scope = node.scope;
         CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
         scope.run(|| {
-            crate::animation::bind_style(&mut style);
+            crate::transition::bind_style(&mut style);
             NodeInner::with_mut(|node| {
                 node.computed_font_size = signal(FontSize::DEFAULT_PX);
                 node.font_size = style.font_size;
             });
             // Apply once around the whole subtree, including custom draw hooks.
-            NodeInner::with_mut(|node| node.transform = style.take_transform());
+            NodeInner::with_mut(|node| {
+                node.matrix_transform = style.take_matrix_transform();
+                node.transform_list = style.take_transform_list();
+                node.transform_origin = style.take_transform_origin();
+            });
             f(&mut style);
         });
         let mut node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
@@ -336,6 +360,10 @@ impl Deref for Node {
 pub trait IntoNode {
     fn into_node(self) -> Node;
 
+    fn factory_identity(&self) -> Option<usize> {
+        None
+    }
+
     fn show_if(self, condition: impl Into<Prop<bool>>) -> Owned<Children>
     where
         Self: Sized,
@@ -352,3 +380,54 @@ impl IntoNode for Node {
 
 pub trait Component: IntoNode + Styleable + StyleableExt {}
 impl<T: IntoNode + Styleable + StyleableExt> Component for T {}
+
+/// Take the current node's children so a component can wrap or reorder them.
+pub fn take_children() -> Owned<Children> {
+    NodeInner::with_mut(|node| std::mem::replace(&mut node.children, ().into_children()))
+}
+
+/// Set children while building a custom node, before calling `use_layout`.
+pub fn set_children(children: Owned<Children>) {
+    NodeInner::with_mut(|node| node.children = children);
+}
+
+/// Read the current node's bounds after its layout has been created.
+pub fn use_rect() -> ReadSignal<Rect> {
+    NodeInner::with_mut(|node| *node.layout.rect)
+}
+
+pub fn set_clip(rect: ReadSignal<Rect>) {
+    NodeInner::with_mut(|node| node.clip = Some(rect));
+}
+
+pub fn set_child_offset(offset: ReadSignal<Vector>) {
+    NodeInner::with_mut(|node| node.child_offset = Some(offset));
+}
+
+pub fn center_on_layout_origin() {
+    NodeInner::with_mut(|node| node.center_on_layout_origin = true);
+}
+
+/// Return true when the callback changes layout inputs after receiving its size.
+pub fn set_layout_sync(sync: impl Fn(Vector) -> bool + 'static) {
+    NodeInner::with_mut(|node| node.layout_sync = Some(Rc::new(sync)));
+}
+
+pub fn after_children(hook: impl FnMut(&()) + 'static) {
+    NodeInner::with_mut(|node| node.hooks.after_children.append(hook));
+}
+
+pub fn add_gesture(gesture: impl crate::gesture::Gesture + 'static) {
+    let id = Runtime::with(|rt| rt.gestures.borrow_mut().insert(Box::new(gesture)));
+    NodeInner::with_mut(|node| node.gestures.push(id));
+}
+
+impl NodeRef {
+    pub fn layout_id(&self) -> Option<taffy::NodeId> {
+        Runtime::with(|rt| rt.node(self.id).layout_id)
+    }
+
+    pub fn children(&self) -> Children {
+        Runtime::with(|rt| *rt.node(self.id).children)
+    }
+}

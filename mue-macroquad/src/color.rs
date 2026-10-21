@@ -1,4 +1,4 @@
-use crate::animation::Animatable;
+use crate::transition::Interpolatable;
 use mue_core::prop::PropValue;
 
 /// An sRGB color with channels in the 0..=1 range.
@@ -12,7 +12,7 @@ pub struct Color {
 
 impl PropValue for Color {}
 
-impl Animatable for Color {
+impl Interpolatable for Color {
     fn interpolate(from: &Self, to: &Self, progress: f32) -> Self {
         from.lerp(*to, progress)
     }

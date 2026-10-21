@@ -1,0 +1,16 @@
+[package]
+name = "mue-components"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mue-core.workspace = true
+mue-macroquad.workspace = true
+mue-macros.workspace = true
+macroquad.workspace = true
+cosmic-text.workspace = true
+taffy.workspace = true
+pulldown-cmark = { version = "0.13", default-features = false }

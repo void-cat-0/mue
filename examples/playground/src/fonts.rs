@@ -1,10 +1,10 @@
 use super::responsive;
+use mue_components::*;
 use std::sync::Arc;
 
 use mue_macroquad::{
     font::{self, fontdb},
-    node::*,
-    style::{Styleable, StyleableExt, vh},
+    style::{Styleable, vh},
 };
 
 const FONTS: &[(&str, &[u8])] = &[
@@ -105,18 +105,22 @@ pub fn initialize() {
 
 pub fn licenses() -> Node {
     stack()
-        .w_full()
-        .min_width(0.)
-        .gap(vh(3.))
+        .style(mue_macroquad::style! {
+        width: 100%;
+        min-width: 0px;
+        gap: {vh(3.)};
+        })
         .children(
             NOTICES
                 .iter()
                 .map(|notice| {
                     text(*notice)
-                        .w_full()
-                        .font_size(responsive::font(14.))
-                        .line_height(responsive::ui(21.))
-                        .flex_none()
+                        .style(mue_macroquad::style! {
+                        width: 100%;
+                        font-size: {responsive::font(14.)};
+                        line-height: {responsive::ui(21.)};
+                        flex: none;
+                        })
                         .into_node()
                 })
                 .collect::<Vec<_>>(),

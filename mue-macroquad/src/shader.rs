@@ -142,7 +142,7 @@ pub enum Brush {
 
 impl PropValue for Brush {}
 
-impl crate::animation::Animatable for Brush {
+impl crate::transition::Interpolatable for Brush {
     fn interpolate(from: &Self, to: &Self, t: f32) -> Self {
         let stops = |a: &[ColorStop], b: &[ColorStop]| {
             a.iter()

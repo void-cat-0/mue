@@ -3,6 +3,7 @@ members = [
     "mue-core",
     "mue-macros",
     "mue-macroquad",
+    "mue-components",
 
     "examples/atlas",
     "examples/basics",
@@ -12,6 +13,7 @@ members = [
     "examples/pages",
     "examples/tab",
     "examples/theme",
+    "examples/style",
     "examples/color",
     "examples/document",
     "examples/animation",
@@ -38,3 +40,4 @@ taffy = "0.9.2"
 mue-core = { path = "mue-core" }
 mue-macros = { path = "mue-macros" }
 mue-macroquad = { path = "mue-macroquad" }
+mue-components = { path = "mue-components" }

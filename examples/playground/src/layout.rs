@@ -1,8 +1,6 @@
 use super::{controls::*, responsive};
-use mue_macroquad::{
-    node::*,
-    style::{Styleable, StyleableExt, percent, vh, vw},
-};
+use mue_components::*;
+use mue_macroquad::style::{Styleable, vh, vw};
 use taffy::{AlignItems, FlexDirection, FlexWrap, JustifyContent};
 
 pub fn page() -> Node {
@@ -75,104 +73,137 @@ pub fn page() -> Node {
         |n| *n,
         |n| {
             center()
-                .width(percent(18.))
-                .height(vh(6.25))
-                .min_height(responsive::ui(44.))
-                .min_width(0.)
-                .background(if n % 2 == 0 { BLUE } else { CORAL })
-                .radius(8.)
-                .children(
-                    text(format!("{n}"))
-                        .font_size(responsive::font(20.))
-                        .line_height(responsive::ui(28.)),
+                .style(mue_macroquad::style! {
+                width: 18%;
+                height: {vh(6.25)};
+                min-height: {responsive::ui(44.)};
+                min-width: 0px;
+                })
+                .style(
+                    mue_macroquad::style! { background: {if n % 2 == 0 { BLUE } else { CORAL }}; },
                 )
+                .style(mue_macroquad::style! { border-radius: {8.}; })
+                .children(text(format!("{n}")).style(mue_macroquad::style! {
+                font-size: {responsive::font(20.)};
+                line-height: {responsive::ui(28.)};
+                }))
                 .into_node()
         },
     );
     stack()
-        .w_full()
-        .min_width(0.)
-        .gap(vh(3.))
+        .style(mue_macroquad::style! {
+width: 100%;
+min-width: 0px;
+gap: {vh(3.)};
+})
         .children((
             controls(vec![a, b, c, d, e, f, g, h, i, j, k]),
             flexbox()
-                .height(vh(31.25))
-                .min_height(responsive::ui(180.))
-                .w_full()
-                .background(PANEL)
-                .padding((vw(2.), vh(2.)))
-                .flex_direction(direction)
-                .flex_wrap(wrapping)
-                .align_items(align)
-                .justify_content(justify)
-                .gap(gap.select(vw(3.), vw(1.)))
-                .animation(SPRING)
+                .style(mue_macroquad::style! {
+height: {vh(31.25)};
+min-height: {responsive::ui(180.)};
+width: 100%;
+background: {PANEL};
+padding: {(vw(2.), vh(2.))};
+flex-direction: {direction};
+                    flex-wrap: {wrapping};
+align-items: {align};
+justify-content: {justify};
+gap: {gap.select(vw(3.), vw(1.))};
+transition: {SPRING};
+})
                 .children(children),
             aspect_ratio()
                 .ratio(ratio.select(4., 2.))
-                .w_full()
-                .min_height(responsive::ui(64.))
-                .background(PANEL)
+                .style(mue_macroquad::style! {
+width: 100%;
+min-height: {responsive::ui(64.)};
+background: {PANEL};
+})
                 .children((
-                    center().size_full().children(
+                    center().style(mue_macroquad::style! { width: 100%; height: 100%; }).children(
                         text("Aspect ratio")
-                            .font_size(responsive::font(22.))
-                            .line_height(responsive::ui(32.)),
+                            .style(mue_macroquad::style! {
+font-size: {responsive::font(22.)};
+line-height: {responsive::ui(32.)};
+}),
                     ),
                     float()
                         .placement(placement)
                         .offset_x(offset.select(-20., 0.))
                         .offset_y(offset.select(20., 0.))
-                        .children(circle().width(36.).height(36.).background(CORAL)),
+                        .children(circle().style(mue_macroquad::style! {
+width: {36.};
+height: {36.};
+background: {CORAL};
+})),
                 )),
             center()
-                .w_full()
-                .height(vh(6.25))
-                .min_height(responsive::ui(44.))
+                .style(mue_macroquad::style! {
+width: 100%;
+height: {vh(6.25)};
+min-height: {responsive::ui(44.)};
+})
                 .children(
                     separator()
                         .orientation(orientation)
                         .thickness(thick.select(6., 1.))
-                        .background(BLUE),
+                        .style(mue_macroquad::style! { background: {BLUE}; }),
                 ),
             section(
                 "Stack / wrap / div",
-                wrap().w_full().items_start().gap(vw(2.)).children((
+                wrap()
+                    .style(mue_macroquad::style! { width: 100%; align-items: flex-start; gap: {vw(2.)}; })
+                    .children((
                     vstack()
-                        .flex_1()
-                        .flex_basis(percent(30.))
-                        .min_width(0.)
+                        .style(mue_macroquad::style! {
+flex: 1;
+flex-basis: 30%;
+min-width: 0px;
+})
                         .children(["stack", "vstack"].map(|label| {
                             code(label)
-                                .font_size(responsive::font(32.))
-                                .line_height(responsive::ui(44.))
-                                .padding((responsive::ui(6.), responsive::ui(2.)))
-                                .radius(responsive::ui(4.))
+                                .style(mue_macroquad::style! {
+font-size: {responsive::font(32.)};
+line-height: {responsive::ui(44.)};
+padding: {(responsive::ui(6.), responsive::ui(2.))};
+border-radius: {responsive::ui(4.)};
+})
                                 .into_node()
                         })),
                     wrap()
-                        .flex_1()
-                        .flex_basis(percent(30.))
-                        .min_width(0.)
+                        .style(mue_macroquad::style! {
+flex: 1;
+flex-basis: 30%;
+min-width: 0px;
+})
                         .children(["wrap", "hstack"].map(|label| {
                             code(label)
-                                .font_size(responsive::font(32.))
-                                .line_height(responsive::ui(44.))
-                                .padding((responsive::ui(6.), responsive::ui(2.)))
-                                .radius(responsive::ui(4.))
+                                .style(mue_macroquad::style! {
+font-size: {responsive::font(32.)};
+line-height: {responsive::ui(44.)};
+padding: {(responsive::ui(6.), responsive::ui(2.))};
+border-radius: {responsive::ui(4.)};
+})
                                 .into_node()
                         })),
                     div()
-                        .flex_1()
-                        .flex_basis(percent(30.))
-                        .min_width(0.)
+                        .style(mue_macroquad::style! {
+flex: 1;
+flex-basis: 30%;
+min-width: 0px;
+})
                         .children((
                             text("block A")
-                                .font_size(responsive::font(20.))
-                                .line_height(responsive::ui(28.)),
+                                .style(mue_macroquad::style! {
+font-size: {responsive::font(20.)};
+line-height: {responsive::ui(28.)};
+}),
                             text("block B")
-                                .font_size(responsive::font(20.))
-                                .line_height(responsive::ui(28.)),
+                                .style(mue_macroquad::style! {
+font-size: {responsive::font(20.)};
+line-height: {responsive::ui(28.)};
+}),
                         )),
                 )),
             ),

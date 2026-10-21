@@ -1,5 +1,6 @@
 //! 固定底部 Tab 栏示例。运行：cargo run -p tab
 //! State-driven page transitions, advanced by App::frame.
+use mue_components::*;
 
 #[path = "../../shared/responsive.rs"]
 mod responsive;
@@ -8,11 +9,10 @@ use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    animation::{Animation, with_animation},
     color::Color,
-    node::*,
     shader::Brush,
     style::{Styleable, StyleableExt, percent, vh, vw},
+    transition::Transition,
 };
 
 const TRANSITION: f32 = 0.28;
@@ -56,21 +56,27 @@ impl Page {
 
 fn page_node(page: Page, target: Signal<Page>) -> Node {
     flexbox()
-        .background(page.color())
+        .style(mue_macroquad::style! {
+        background: {page.color()};
+        transition: {Transition::ease_in_out(TRANSITION)};
+        })
         .absolute()
-        .inset_top(0.)
-        .inset_left(computed(move |_| {
-            percent(100. * (page as usize as f32 - target.get() as usize as f32))
-        }))
-        .size_full()
-        .flex_column()
-        .items_center()
-        .justify_center()
-        .padding((vw(4.),))
-        .children((text(page.title())
-            .font_size(responsive::font(56.))
-            .line_height(responsive::ui(72.))
-            .max_width(percent(100.)),))
+        .style(mue_macroquad::style! {
+        top: 0px;
+        left: {computed(move |_| {
+                    percent(100. * (page as usize as f32 - target.get() as usize as f32))
+                })};
+        width: 100%; height: 100%;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: {(vw(4.),)};
+        })
+        .children((text(page.title()).style(mue_macroquad::style! {
+        font-size: {responsive::font(56.)};
+        line-height: {responsive::ui(72.)};
+        max-width: 100%;
+        }),))
         .into_node()
 }
 
@@ -80,60 +86,64 @@ fn pages(#[model] target: Page) -> impl Component {
         let hovered = signal(false);
         let pressed = signal(false);
         flexbox()
-            .background(computed(move |_| {
-                Brush::Solid(if pressed.get() {
-                    PRESSED
-                } else {
-                    match (destination == target.get(), hovered.get()) {
-                        (true, true) => HIGHLIGHT,
-                        (true, false) => ACTIVE,
-                        (false, true) => HOVER,
-                        (false, false) => SURFACE,
-                    }
-                })
-            }))
-            .padding((responsive::ui(12.), responsive::ui(12.)))
-            .min_height(responsive::ui(44.))
-            .min_width(0.)
-            .max_width(percent(100.))
-            .justify_center()
+            .style(mue_macroquad::style! {
+            background: {computed(move |_| {
+                            Brush::Solid(if pressed.get() {
+                                PRESSED
+                            } else {
+                                match (destination == target.get(), hovered.get()) {
+                                    (true, true) => HIGHLIGHT,
+                                    (true, false) => ACTIVE,
+                                    (false, true) => HOVER,
+                                    (false, false) => SURFACE,
+                                }
+                            })
+                        })};
+            padding: {(responsive::ui(12.), responsive::ui(12.))};
+            min-height: {responsive::ui(44.)};
+            min-width: 0px;
+            max-width: 100%;
+            transition: {Transition::ease_in_out(TRANSITION)};
+            justify-content: center;
+            })
             .use_hovered(hovered)
             .use_pressed(pressed)
-            .on_activate(move || {
-                with_animation(Animation::ease_in_out(TRANSITION), || {
-                    target.set(destination)
-                })
-            })
-            .children(
-                text(destination.title())
-                    .font_size(responsive::font(22.))
-                    .line_height(responsive::ui(32.))
-                    .min_width(0.),
-            )
+            .on_activate(move || target.set(destination))
+            .children(text(destination.title()).style(mue_macroquad::style! {
+            font-size: {responsive::font(22.)};
+            line-height: {responsive::ui(32.)};
+            min-width: 0px;
+            }))
             .into_node()
     });
 
     let children = Page::ALL.map(|page| page_node(page, target));
     flexbox()
-        .size_full()
-        .font_size(responsive::root_font())
-        .flex_column()
+        .style(mue_macroquad::style! {
+        width: 100%; height: 100%;
+        font-size: {responsive::root_font()};
+        flex-direction: column;
+        })
         .children((
             flexbox()
                 .relative()
-                .w_full()
-                .flex_1()
-                .min_height(0.)
-                .overflow_x(taffy::Overflow::Hidden)
-                .overflow_y(taffy::Overflow::Hidden)
+                .style(mue_macroquad::style! {
+                width: 100%;
+                flex: 1;
+                min-height: 0px;
+                overflow-x: {taffy::Overflow::Hidden};
+                overflow-y: {taffy::Overflow::Hidden};
+                })
                 .children(children),
             wrap()
-                .w_full()
-                .justify_center()
-                .flex_none()
-                .padding((vw(2.), vh(2.5)))
-                .column_gap(vw(2.))
-                .row_gap(vh(1.))
+                .style(mue_macroquad::style! {
+                width: 100%;
+                justify-content: center;
+                flex: none;
+                padding: {(vw(2.), vh(2.5))};
+                column-gap: {vw(2.)};
+                row-gap: {vh(1.)};
+                })
                 .children(buttons),
         ))
 }

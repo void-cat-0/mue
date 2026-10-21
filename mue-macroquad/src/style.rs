@@ -1,4 +1,6 @@
 mod ext;
+mod transform;
+pub use transform::{IntoTransformProp, Transform, TransformOp, TransformOrigin, TransformProp};
 pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
@@ -80,6 +82,46 @@ where
 }
 
 macro_rules! define_style {
+    (@setter $(#[$doc:meta])* transform, $ty:ty) => {
+        $(#[$doc])*
+        fn transform(mut self, value: impl IntoTransformProp) -> Self {
+            match value.into_transform_prop() {
+                TransformProp::Matrix(value) => {
+                    self.style_mut().matrix_transform = Some(value);
+                    self.style_mut().transform_list = Some(Prop::Static(Transform::default()));
+                }
+                TransformProp::Functions(value) => {
+                    self.style_mut().transform_list = Some(value);
+                    self.style_mut().matrix_transform = Some(Prop::Static(Matrix::IDENTITY));
+                }
+            }
+            self
+        }
+    };
+    (@setter $(#[$doc:meta])* transform_list, $ty:ty) => {
+        $(#[$doc])*
+        fn transform_list(mut self, value: impl Into<Prop<Transform>>) -> Self {
+            self.style_mut().transform_list = Some(value.into());
+            self.style_mut().matrix_transform = Some(Prop::Static(Matrix::IDENTITY));
+            self
+        }
+    };
+    (@setter $(#[$doc:meta])* line_height, $ty:ty) => {
+        $(#[$doc])*
+        fn line_height(mut self, value: impl Into<Prop<Size>>) -> Self {
+            self.style_mut().line_height = Some(value.into());
+            self.style_mut().line_height_multiplier = Some(Prop::Static(None));
+            self
+        }
+    };
+    (@setter $(#[$doc:meta])* $name:ident, $ty:ty) => {
+        $(#[$doc])*
+        fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
+            self.style_mut().$name = Some(value.into());
+            self
+        }
+    };
+
     (@themed_property $result:ident, $theme:ident, $defaults:ident, font_size, $ty:ty, $($default:expr)?) => {
         let fallback = $defaults.font_size.take();
         $result.font_size = Some(computed_always(move |_| {
@@ -132,7 +174,7 @@ macro_rules! define_style {
             #[derive(Default)]
             /// Optional layout, paint, font, and event properties for a node.
             pub struct Style {
-                pub(crate) animation: Option<crate::animation::Animation>,
+
                 $(pub(crate) $name: Option<Prop<$ty>>,)*
                 $(
                     pub(crate) [<$rect_name _left>]: Option<Prop<$rect_ty>>,
@@ -149,18 +191,31 @@ macro_rules! define_style {
             pub trait Styleable: Sized {
                 fn style_mut(&mut self) -> &mut Style;
 
-                /// Animate changes to this node's interpolatable visual properties.
-                fn animation(mut self, animation: crate::animation::Animation) -> Self {
-                    self.style_mut().animation = Some(animation);
+                /// Set a matrix or transform list, including 3D operations projected to the canvas plane.
+                fn transform(mut self, value: impl IntoTransformProp) -> Self {
+                    match value.into_transform_prop() {
+                        TransformProp::Matrix(value) => {
+                            self.style_mut().matrix_transform = Some(value);
+                            self.style_mut().transform_list = Some(Prop::Static(Transform::default()));
+                        }
+                        TransformProp::Functions(value) => {
+                            self.style_mut().transform_list = Some(value);
+                            self.style_mut().matrix_transform = Some(Prop::Static(Matrix::IDENTITY));
+                        }
+                    }
+                    self
+                }
+
+                /// Apply a style, replacing properties explicitly set by it.
+                fn style(mut self, mut style: Style) -> Self {
+                    let previous = std::mem::take(self.style_mut());
+                    style.provide_defaults(previous);
+                    *self.style_mut() = style;
                     self
                 }
 
                 $(
-                    $(#[$property_doc])*
-                    fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
-                        self.style_mut().$name = Some(value.into());
-                        self
-                    }
+                    define_style!(@setter $(#[$property_doc])* $name, $ty);
                 )*
 
                 $(
@@ -239,7 +294,7 @@ macro_rules! define_style {
                 }
                 /// Fill missing properties from `other` and append its event hooks.
                 pub fn merge(mut self, other: Self) -> Self {
-                    self.animation = self.animation.or(other.animation);
+
                     $(
                         self.$name = self.$name.or(other.$name);
                     )*
@@ -255,7 +310,7 @@ macro_rules! define_style {
 
                 /// Fill missing properties and prepend default event hooks.
                 pub fn provide_defaults(&mut self, mut default: Self) {
-                    self.animation = self.animation.or(default.animation);
+
                     $(
                         if self.$name.is_none() {
                             self.$name = default.$name;
@@ -279,15 +334,19 @@ macro_rules! define_style {
                 }
 
                 $(
+                    /// Return the declared value without applying a default.
+                    pub fn [<declared_ $name>](&self) -> Option<Prop<$ty>> {
+                        self.$name.clone()
+                    }
                     #[allow(dead_code)]
-                    pub(crate) fn [<take_ $name>](&mut self) -> Prop<$ty> {
+                    pub fn [<take_ $name>](&mut self) -> Prop<$ty> {
                         self.$name.take().unwrap_or_else(|| define_style!(@extract_default ($ty, $($default)?)))
                     }
                 )*
 
                 $(
                     #[allow(dead_code)]
-                    pub(crate) fn [<take_ $rect_name>](&mut self) -> Prop<taffy::Rect<$rect_ty>> {
+                    pub fn [<take_ $rect_name>](&mut self) -> Prop<taffy::Rect<$rect_ty>> {
                         if self.[<$rect_name _left>].is_none()
                             && self.[<$rect_name _right>].is_none()
                             && self.[<$rect_name _top>].is_none()
@@ -380,9 +439,14 @@ define_style! {
     /// Set how much this node shrinks when flex children exceed available space.
     flex_shrink: f32 = 1.0;
 
+    transition: crate::transition::Transition = crate::transition::Transition::Instant;
+
     // Paint
       /// Transform this node and its descendants without changing layout size.
-    transform: Matrix = Matrix::IDENTITY;
+    matrix_transform: Matrix = Matrix::IDENTITY;
+    /// Transform functions, applied in order around the border-box origin.
+    transform_list: Transform;
+    transform_origin: TransformOrigin;
     /// Multiply painted alpha; 0 is transparent and 1 is opaque.
     opacity: f32 = 1.0;
     /// Paint the background with a solid color, gradient, or texture brush.
@@ -400,6 +464,7 @@ define_style! {
     font_size: FontSize = FontSize::Em(1.);
     /// Set baseline spacing in pixels.
     line_height: Size = Size::Px(44.);
+    line_height_multiplier: Option<f32>;
     /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
@@ -411,11 +476,11 @@ define_style! {
     /// Underline each shaped line with the foreground brush.
     text_underline: bool = false;
     text_strikethrough: bool = false;
-    text_wrap_mode: crate::node::TextWrap;
-    text_overflow: crate::node::TextOverflow;
+    text_wrap_mode: crate::node::text::TextWrap;
+    text_overflow: crate::node::text::TextOverflow;
     /// Maximum visual lines. None displays the whole document.
     text_max_lines: Option<usize>;
-    text_vertical_align: crate::node::TextVerticalAlign;
+    text_vertical_align: crate::node::text::TextVerticalAlign;
     /// Extra space between newline-delimited paragraphs, in logical pixels.
     paragraph_spacing: Size = Size::Px(0.);
     letter_spacing: Size = Size::Px(0.);
@@ -555,4 +620,12 @@ impl Style {
             ..Default::default()
         })
     }
+}
+
+/// Enumerations used by style declarations without requiring direct Taffy dependencies.
+pub mod values {
+    pub use cosmic_text::Align as TextAlign;
+    pub use taffy::{
+        AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, Overflow, Position,
+    };
 }

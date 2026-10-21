@@ -1,4 +1,5 @@
-//! Reactive themes, factory variants, and a nested theme scope.
+//! Selector-based themes, factory options, classes, and direct constructors.
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 
@@ -6,11 +7,10 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::{Owned, prelude::*, prop::Prop};
 use mue_macroquad::{
     App,
-    animation::{Animation, with_animation},
     color::Color,
     factory::factory,
-    node::*,
-    style::{Styleable, StyleableExt, percent, vh, vw},
+    node::TextBuilder,
+    style::{Styleable, StyleableExt, vh, vw},
     theme::{provide_theme, theme},
 };
 use std::rc::Rc;
@@ -26,6 +26,27 @@ const WHITE: Color = Color::WHITE;
 #[derive(Clone)]
 struct ButtonOptions {
     primary: bool,
+    progress: i32,
+}
+
+fn build_label(caption: Prop<Rc<str>>) -> TextBuilder {
+    text(caption)
+}
+
+fn build_canvas(children: Owned<Children>) -> ScrollAreaBuilder {
+    scroll_area()
+        .style(mue_macroquad::style! {
+        width: 100%; height: 100%;
+        font-size: {responsive::root_font()};
+        })
+        .children(
+            stack()
+                .style(mue_macroquad::style! {
+                width: 100%;
+                padding: {(vw(6.), vh(6.))};
+                })
+                .children(children),
+        )
 }
 
 fn main() {
@@ -42,91 +63,119 @@ fn main() {
 
 async fn run() {
     responsive::sync();
+    let label = factory(build_label);
+    let button_label = label.clone();
+    let button = factory(move |caption: Prop<Rc<str>>| {
+        flexbox()
+            .style(mue_macroquad::style! {
+            align-items: center;
+            justify-content: center;
+            })
+            .children(button_label.create(caption).style(style! {
+                font-size: {responsive::font(18.)};
+                line-height: {responsive::ui(26.)};
+                color: {WHITE};
+                min-width: 0px;
+            }))
+    })
+    .defaults(ButtonOptions {
+        primary: false,
+        progress: 0,
+    });
+    let canvas = factory(build_canvas);
     let dark = signal(false);
     let count = signal(0);
-    let label = factory(|caption: Prop<Rc<str>>| text(caption)).style(|s, _| {
-        s.font_size(responsive::font(22.))
-            .line_height(responsive::ui(32.))
-    });
-    let button = factory(|caption: Prop<Rc<str>>| {
-        flexbox().items_center().justify_center().children(
-            text(caption)
-                .font_size(responsive::font(18.))
-                .line_height(responsive::ui(26.))
-                .color(WHITE)
-                .min_width(0.),
-        )
-    })
-    .defaults(ButtonOptions { primary: true })
-    .style(|s, _| {
-        s.padding((responsive::ui(19.2), responsive::ui(12.)))
-            .min_height(responsive::ui(44.))
-            .min_width(0.)
-            .max_width(percent(100.))
-            .flex_shrink(0.)
-            .radius(responsive::ui(12.))
-    });
-    let canvas = factory(|children: Owned<Children>| {
-        scroll_area()
-            .size_full()
-            .font_size(responsive::root_font())
-            .children(
-                stack()
-                    .w_full()
-                    .padding((vw(6.), vh(6.)))
-                    .children(children),
-            )
-    });
-
-    let make_theme = |paper, ink| {
-        theme!(|c, s| match c {
-            canvas => s.background(paper),
-            label => s.color(ink),
-            button(o) if o.primary => s.background(BLUE),
-            button => s.background(MUTED),
-            _ => s,
-        })
+    let primary_active = signal(true);
+    let base = theme! {
+        canvas {
+            background: { if dark.get() { NIGHT } else { PAPER } };
+        }
+        label {
+            color: { if dark.get() { WHITE } else { INK } };
+            font-size: 22px;
+            line-height: 1.45;
+        }
+        button[primary] {
+            background: { if dark.get() { GREEN } else { BLUE } };
+        }
+        button[progress < 32] {
+            opacity: 96%;
+        }
+        button {
+            background: { if dark.get() { MUTED } else { Color::from_rgba(175, 185, 198, 255) } };
+        }
+        button:hover {
+            opacity: 82%;
+        }
+        * {
+            transition: 280ms ease-in-out;
+        }
     };
-    let active = dark.select(make_theme(NIGHT, WHITE), make_theme(PAPER, INK));
-    let success = theme!(|c, s| match c {
-        button => s.background(GREEN),
-        _ => s,
-    });
 
-    let mut app = App::new(provide_theme(active, move || {
-        canvas.create(
-            (
-                label
-                    .create("Daily practice")
-                    .font_size(responsive::font(32.))
-                    .line_height(responsive::ui(44.)),
-                label
-                    .create(count.map(|n| format!("{n} sessions complete")))
-                    .margin_top(vh(5.))
-                    .margin_bottom(vh(6.5)),
-                wrap().column_gap(vw(2.)).row_gap(vh(2.)).children((
-                    provide_theme(success, {
-                        let button = button.clone();
-                        move || {
+    let accent = theme! {
+        button[primary] {
+            background: { if dark.get() { BLUE } else { GREEN } };
+        }
+    };
+
+    let mut app = App::new(provide_theme(base, move || {
+        canvas
+            .create(
+                (
+                    label
+                        .create("Daily practice")
+                        .style(style! { font-size: 32px; line-height: 1.4; }),
+                    label
+                        .create(count.map(|n| format!("{n} sessions complete")))
+                        .style(style! { margin-top: 5vh; margin-bottom: 6.5vh; }),
+                    wrap()
+                        .style(mue_macroquad::style! { gap: {vw(2.)}; })
+                        .children((
+                            provide_theme(accent, {
+                                let button = button.clone();
+                                let primary_active = primary_active;
+                                move || {
+                                    button
+                                        .create("Complete session")
+                                        .options(|options| {
+                                            options.primary = true;
+                                            options.progress = count.get();
+                                        })
+                                        .class("primary", primary_active)
+                                        .style(style! {
+                                            min-height: 44px;
+                                            padding: 12px 20px;
+                                            border-radius: 12px;
+                                        })
+                                        .on_activate(move || count.update(|n| *n += 1))
+                                }
+                            }),
                             button
-                                .create("Complete session")
-                                .on_activate(move || count.update(|n| *n += 1))
-                        }
-                    }),
+                                .create("Reset")
+                                .options(|options| options.primary = false)
+                                .style(style! {
+                                    min-height: 44px;
+                                    padding: 12px 20px;
+                                    border-radius: 12px;
+                                })
+                                .on_activate(move || count.set(0)),
+                        )),
                     button
-                        .create("Reset")
-                        .options(|o| o.primary = false)
-                        .on_activate(move || count.set(0)),
-                )),
-                button
-                    .create(dark.select("Light theme", "Dark theme"))
-                    .margin_top(vh(6.5))
-                    .on_activate(move || {
-                        with_animation(Animation::ease_in_out(0.3), || dark.toggle());
-                    }),
+                        .create(dark.select("Light theme", "Dark theme"))
+                        .style(style! {
+                            margin-top: 6.5vh;
+                            min-height: 44px;
+                            padding: 12px 20px;
+                            border-radius: 12px;
+                        })
+                        .on_activate(move || {
+                            dark.toggle();
+                            primary_active.toggle();
+                        }),
+                )
+                    .into_children(),
             )
-                .into_children(),
-        )
+            .style(style! { width: 100%; height: 100%; })
     }));
 
     loop {

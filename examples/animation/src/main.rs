@@ -1,16 +1,16 @@
 //! Implicit style animation and explicit state transactions.
 //! Run with `cargo run -p animation`.
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    animation::{Animation, with_animation},
     color::Color as UiColor,
-    node::*,
     shader::Brush,
     style::{Styleable, StyleableExt, percent, vh, vw},
+    transition::Transition,
 };
 
 const ACTIVE: UiColor = UiColor::from_rgba(70, 95, 130, 255);
@@ -39,76 +39,91 @@ async fn run() {
     responsive::sync();
     let mut app = App::new(
         stack()
-            .size_full()
-            .font_size(responsive::root_font())
-            .padding((vw(5.), vh(5.)))
-            .background(CANVAS)
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            padding: {(vw(5.), vh(5.))};
+            background: {CANVAS};
+            })
             .children((
                 wrap()
-                    .flex_none()
-                    .column_gap(vw(2.))
-                    .row_gap(vh(1.5))
+                    .style(mue_macroquad::style! {
+                    flex: none;
+                    column-gap: {vw(2.)};
+                    row-gap: {vh(1.5)};
+                    })
                     .children((
-                        heading("Motion study")
-                            .font_size(responsive::font(32.))
-                            .line_height(responsive::ui(44. * 1.45))
-                            .min_width(0.)
-                            .flex_grow(1.),
+                        heading("Motion study").style(mue_macroquad::style! {
+                        font-size: {responsive::font(32.)};
+                        line-height: {responsive::ui(44. * 1.45)};
+                        min-width: 0px;
+                        flex-grow: {1.};
+                        }),
                         flexbox()
-                            .background(SURFACE)
-                            .padding((responsive::ui(16.), responsive::ui(10.)))
-                            .min_width(responsive::ui(44.))
-                            .min_height(responsive::ui(44.))
-                            .max_width(percent(100.))
+                            .style(mue_macroquad::style! {
+                            background: {SURFACE};
+                            padding: {(responsive::ui(16.), responsive::ui(10.))};
+                            min-width: {responsive::ui(44.)};
+                            min-height: {responsive::ui(44.)};
+                            max-width: 100%;
+                            })
                             .toggle_on_tap(spring)
-                            .children(
-                                text(spring.select("Spring", "Ease in out"))
-                                    .font_size(responsive::font(18.))
-                                    .line_height(responsive::ui(44.)),
-                            ),
+                            .children(text(spring.select("Spring", "Ease in out")).style(
+                                mue_macroquad::style! {
+                                font-size: {responsive::font(18.)};
+                                line-height: {responsive::ui(44.)};
+                                },
+                            )),
                     )),
                 flexbox()
-                    .flex_1()
-                    .min_height(0.)
-                    .padding((0., vh(2.)))
-                    .justify_center()
-                    .items_center()
-                    .children(
-                        flexbox()
-                            .width(expanded.select(percent(64.), percent(24.)))
-                            .max_width(percent(100.))
-                            .max_height(percent(100.))
-                            .aspect_ratio(expanded.select(Some(2.), Some(1.)))
-                            .radius(responsive::ui(expanded.select(24., 90.)))
-                            .background(expanded.select(Brush::Solid(PLUM), Brush::Solid(BLUE)))
-                            .items_center()
-                            .justify_center()
-                            .children(
-                                text(expanded.select("Open", "Closed"))
-                                    .font_size(responsive::font(28.))
-                                    .line_height(responsive::ui(44.)),
-                            ),
-                    ),
-                center()
-                    .flex_none()
-                    .min_height(responsive::ui(44.))
-                    .padding((responsive::ui(16.), responsive::ui(8.)))
-                    .background(hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE)))
-                    .animation(Animation::ease_in_out(0.18))
-                    .use_hovered(hovered)
-                    .on_activate(move || {
-                        let curve = if spring.get() {
-                            Animation::spring(0.8, 0.35)
-                        } else {
-                            Animation::ease_in_out(0.65)
-                        };
-                        with_animation(curve, || expanded.toggle());
+                    .style(mue_macroquad::style! {
+                    flex: 1;
+                    min-height: 0px;
+                    padding: {(0., vh(2.))};
+                    justify-content: center;
+                    align-items: center;
                     })
                     .children(
-                        text(expanded.select("Close", "Open"))
-                            .font_size(responsive::font(20.))
-                            .line_height(responsive::ui(44.)),
+                        flexbox()
+                            .style(mue_macroquad::style! {
+                            width: {expanded.select(percent(64.), percent(24.))};
+                            max-width: 100%;
+                            max-height: 100%;
+                            aspect-ratio: {expanded.select(Some(2.), Some(1.))};
+                            border-radius: {responsive::ui(expanded.select(24., 90.))};
+                            background: {expanded.select(Brush::Solid(PLUM), Brush::Solid(BLUE))};
+                            align-items: center;
+                            justify-content: center;
+                            })
+                            .children(text(expanded.select("Open", "Closed")).style(
+                                mue_macroquad::style! {
+                                font-size: {responsive::font(28.)};
+                                line-height: {responsive::ui(44.)};
+                                },
+                            )),
                     ),
+                center()
+                    .style(mue_macroquad::style! {
+                    flex: none;
+                    min-height: {responsive::ui(44.)};
+                    padding: {(responsive::ui(16.), responsive::ui(8.))};
+                    background: {hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE))};
+                    transition: {computed(move |_| {
+                                            if spring.get() {
+                                                Transition::spring(0.8, 0.35)
+                                            } else {
+                                                Transition::ease_in_out(0.65)
+                                            }
+                                        })};
+                    })
+                    .use_hovered(hovered)
+                    .on_activate(move || expanded.toggle())
+                    .children(text(expanded.select("Close", "Open")).style(
+                        mue_macroquad::style! {
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(44.)};
+                        },
+                    )),
             )),
     );
     loop {

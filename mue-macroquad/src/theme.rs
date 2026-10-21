@@ -4,6 +4,7 @@ use crate::{
     style::Style,
 };
 use mue_core::{
+    prop::Prop,
     scope::{Scope, inject},
     signal::{Access, ReadSignal, Signal},
 };
@@ -16,8 +17,93 @@ pub use mue_macros::theme;
 pub struct ComponentRef<'a> {
     id: usize,
     options: &'a dyn Any,
+    classes: &'a [String],
+    hovered: ReadSignal<bool>,
+    ancestors: &'a [usize],
+    siblings: &'a [Option<usize>],
+    sibling_index: usize,
+    ancestor_locations: &'a [(Vec<Option<usize>>, usize)],
 }
 impl<'a> ComponentRef<'a> {
+    /// Check whether this instance is currently hovered.
+    pub fn is_hovered(&self) -> bool {
+        self.hovered.get()
+    }
+
+    /// Match a selector chain against this component and its factory ancestors.
+    /// Relations use 0 for descendant, 1 for child, 2 for adjacent sibling, and 3 for sibling.
+    pub fn matches_chain(&self, factories: &[usize], relations: &[u8]) -> bool {
+        if factories.is_empty()
+            || relations.len() + 1 != factories.len()
+            || (*factories.last().unwrap() != 0 && *factories.last().unwrap() != self.id)
+        {
+            return false;
+        }
+        let mut current = self.ancestors.len();
+        let mut sibling_ids = self.siblings;
+        let mut sibling_index = self.sibling_index;
+        for index in (0..relations.len()).rev() {
+            let target = factories[index];
+            match relations[index] {
+                0 | 1 => {
+                    if relations[index] == 1 {
+                        if current == 0 || (target != 0 && self.ancestors[current - 1] != target) {
+                            return false;
+                        }
+                        current -= 1;
+                    } else {
+                        let Some(found) = self.ancestors[..current]
+                            .iter()
+                            .rposition(|id| target == 0 || *id == target)
+                        else {
+                            return false;
+                        };
+                        current = found;
+                        sibling_ids = &self.ancestor_locations[found].0;
+                        sibling_index = self.ancestor_locations[found].1;
+                    }
+                    if relations[index] == 1 {
+                        sibling_ids = &self.ancestor_locations[current].0;
+                        sibling_index = self.ancestor_locations[current].1;
+                    }
+                }
+                2 => {
+                    if sibling_index == 0 {
+                        return false;
+                    }
+                    sibling_index -= 1;
+                    if !sibling_ids
+                        .get(sibling_index)
+                        .is_some_and(|id| id.is_some_and(|id| target == 0 || id == target))
+                    {
+                        return false;
+                    }
+                }
+                3 => {
+                    let Some(found) = sibling_ids[..sibling_index]
+                        .iter()
+                        .rposition(|id| id.is_some_and(|id| target == 0 || id == target))
+                    else {
+                        return false;
+                    };
+                    sibling_index = found;
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Check whether this instance was created by a named factory.
+    pub fn is<B, O: 'static>(&self, target: &Factory<B, O>) -> bool {
+        self.id == target.id
+    }
+
+    /// Check a dynamic class flag attached to this factory instance.
+    pub fn has_class(&self, name: &str) -> bool {
+        self.classes.iter().any(|class| class == name)
+    }
+
     /// Return this instance's options if it belongs to the target factory.
     pub fn options<B, O: 'static>(&self, target: &Factory<B, O>) -> Option<&'a O> {
         if self.id == target.id {
@@ -79,8 +165,28 @@ impl From<Signal<Theme>> for ThemeSource {
 #[derive(Clone, Default)]
 pub(crate) struct ThemeChain(pub(crate) Vec<ThemeSource>);
 impl ThemeChain {
-    pub(crate) fn resolve(&self, id: usize, options: &dyn Any) -> Rc<Style> {
-        let reference = ComponentRef { id, options };
+    pub(crate) fn resolve(
+        &self,
+        id: usize,
+        options: &dyn Any,
+        classes: Prop<Rc<[String]>>,
+        hovered: ReadSignal<bool>,
+        ancestors: Vec<usize>,
+        siblings: Vec<Option<usize>>,
+        sibling_index: usize,
+        ancestor_locations: Vec<(Vec<Option<usize>>, usize)>,
+    ) -> Rc<Style> {
+        let classes = classes.get_clone();
+        let reference = ComponentRef {
+            id,
+            options,
+            classes: &classes,
+            hovered,
+            ancestors: &ancestors,
+            siblings: &siblings,
+            sibling_index,
+            ancestor_locations: &ancestor_locations,
+        };
         let mut combined = Style::new();
         for source in &self.0 {
             let layer = (source.get().0)(reference, Style::new());
@@ -122,5 +228,30 @@ where
         let node = scope.run(|| (self.view)().into_node());
         node.retain_scope(scope);
         node
+    }
+}
+
+/// Match static and reactive boolean option values in a selector.
+pub trait SelectorValue {
+    fn is_set(&self) -> bool;
+}
+impl SelectorValue for bool {
+    fn is_set(&self) -> bool {
+        *self
+    }
+}
+impl SelectorValue for Prop<bool> {
+    fn is_set(&self) -> bool {
+        self.get()
+    }
+}
+impl SelectorValue for ReadSignal<bool> {
+    fn is_set(&self) -> bool {
+        self.get()
+    }
+}
+impl SelectorValue for Signal<bool> {
+    fn is_set(&self) -> bool {
+        self.get()
     }
 }

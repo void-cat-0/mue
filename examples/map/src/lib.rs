@@ -1,3 +1,4 @@
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 
@@ -10,8 +11,7 @@ use mue_macroquad::{
     color::Color as UiColor,
     event::pointer::{PointerAction, PointerId},
     layout::use_layout,
-    node::Node,
-    style::{Style, Styleable, StyleableExt},
+    style::{Style, Styleable},
 };
 
 const CELL: f32 = 160.;
@@ -182,10 +182,11 @@ fn apply_control(state: &mut MapState, control: Control) {
 
 fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> Node {
     Node::build_with_style(
-        Style::new()
-            .w_full()
-            .h_full()
-            .font_size(responsive::root_font()),
+        Style::new().style(mue_macroquad::style! {
+        width: 100%;
+        height: 100%;
+        font-size: {responsive::root_font()};
+        }),
         move |style| {
             let rect = use_layout(style).rect;
             let input = state.clone();
