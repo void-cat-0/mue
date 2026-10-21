@@ -103,7 +103,7 @@ gap: {vh(3.)};
 height: {vh(31.25)};
 min-height: {responsive::ui(180.)};
 width: 100%;
-background: {PANEL};
+background: {panel_brush()};
 padding: {(vw(2.), vh(2.))};
 flex-direction: {direction};
                     flex-wrap: {wrapping};
@@ -118,7 +118,7 @@ transition: {SPRING};
                 .style(mue_macroquad::style! {
 width: 100%;
 min-height: {responsive::ui(64.)};
-background: {PANEL};
+background: {panel_brush()};
 })
                 .children((
                     center().style(mue_macroquad::style! { width: 100%; height: 100%; }).children(

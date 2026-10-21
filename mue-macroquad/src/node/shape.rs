@@ -16,11 +16,7 @@ pub fn shape(style: &mut Style, shapes: Rc<Shapes>) {
     style.on_render.append(move |_| {
         let translation = Matrix::from_translation(rect.get().min());
         let transform = paint.transform.get() * translation;
-        let columns = transform.to_cols_array();
-        let matrix = macroquad::math::Mat4::from_cols_array(&[
-            columns[0], columns[1], 0., 0., columns[3], columns[4], 0., 0., 0., 0., 1., 0.,
-            columns[6], columns[7], 0., 1.,
-        ]);
+        let matrix = crate::math::model_matrix(transform);
         let gl = unsafe { macroquad::window::get_internal_gl() }.quad_gl;
         gl.push_model_matrix(matrix);
         shapes.get_clone().draw();

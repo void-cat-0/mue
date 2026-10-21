@@ -96,6 +96,16 @@ min-width: 0px;
 gap: {vh(2.75)};
 }).children((
         controls(vec![a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r]),
+        text("مرحبا بالعالم — هذا سطر عربي لاختبار الكتابة من اليمين إلى اليسار")
+            .style(mue_macroquad::style! {
+                width: 100%;
+                min-width: 0px;
+                padding: {(vw(2.), vh(1.5))};
+                background: {panel_brush()};
+                text-align: right;
+                font-size: {responsive::font(20.)};
+                line-height: {responsive::ui(32.)};
+            }),
         text("The quick brown fox jumps over the lazy dog. 你好，世界。 مرحبا بالعالم.\nA second paragraph with supercalifragilisticexpialidocious and room for a little more text.")
             .style(mue_macroquad::style! {
 width: 100%;
@@ -103,7 +113,7 @@ min-width: 0px;
 height: {vh(32.5)};
 min-height: {responsive::ui(leading.select(144., 102.))};
 padding: {(vw(2.), vh(2.))};
-background: {PANEL};
+background: {panel_brush()};
 transition: {SPRING};
 text-wrap-mode: {wrap_mode};
 }).text_overflow(overflow).style(mue_macroquad::style! {

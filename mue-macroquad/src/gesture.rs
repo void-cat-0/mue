@@ -8,7 +8,9 @@ pub use long_press::LongPressGesture;
 pub use pan::{PanEvent, PanGesture};
 pub use swipe::{SwipeDirection, SwipeEvent, SwipeGesture};
 pub use tap::TapGesture;
-pub use transform::{PinchEvent, PinchGesture, RotateEvent, RotateGesture};
+pub use transform::{
+    PinchEvent, PinchGesture, RotateEvent, RotateGesture, TransformEvent, TransformGesture,
+};
 
 /// Lifecycle of a continuous gesture. End and Cancel are emitted only after Start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -26,7 +26,9 @@ use crate::{
     layout::OwnedLayout,
     math::{Matrix, Rect, Vector},
     runtime::Runtime,
-    style::{FontSize, FontSizeExt, Style, Styleable, StyleableExt, Transform, TransformOrigin},
+    style::{
+        FontSize, FontSizeExt, SizeExt, Style, Styleable, StyleableExt, Transform, TransformOrigin,
+    },
 };
 
 new_key_type! {
@@ -68,7 +70,22 @@ impl NodeInner {
         } else {
             self.layout.rect.get()
         };
-        self.matrix_transform.get()
+        let transform_origin = self.transform_origin.get();
+        let origin = bounds.min()
+            + crate::math::Vector::new(
+                match transform_origin.0 {
+                    crate::style::Size::Percent(value) => bounds.w * value / 100.,
+                    value => value.resolve("transform-origin"),
+                },
+                match transform_origin.1 {
+                    crate::style::Size::Percent(value) => bounds.h * value / 100.,
+                    value => value.resolve("transform-origin"),
+                },
+            );
+        let around_origin = Matrix::from_translation(origin)
+            * self.matrix_transform.get()
+            * Matrix::from_translation(-origin);
+        around_origin
             * self
                 .transform_list
                 .get_clone()
@@ -332,6 +349,12 @@ fn append_hooks(node: &mut NodeInner, style: &mut Style) {
         if !style.on_rotate.is_empty() {
             let mut gesture = Box::new(gesture::RotateGesture::default());
             gesture.on_rotate = style.take_on_rotate();
+            insert(gesture);
+        }
+
+        if !style.on_transform.is_empty() {
+            let mut gesture = Box::new(gesture::TransformGesture::default());
+            gesture.on_transform = style.take_on_transform();
             insert(gesture);
         }
 

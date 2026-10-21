@@ -13,6 +13,7 @@ pub fn blockquote(style: &mut Style, text: Rc<str>) {
     style.provide_defaults(Style::new().font_italic(true).padding_left(18.));
     let color = style
         .declared_color()
+        .or_else(mue_macroquad::theme::inherited_foreground)
         .unwrap_or_else(|| mue_macroquad::color::Color::WHITE.into());
     let paint = use_paint(style);
     render_text(style, text.map(|text| Document::plain(text.to_string())));
