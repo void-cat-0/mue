@@ -10,20 +10,20 @@ use crate::{
     runtime::Runtime,
 };
 
-pub(crate) type HitTestFn = Rc<dyn Fn(NodeRef, Vector, &mut IndexSet<NodeRef>)>;
+pub type HitTestFn = Rc<dyn Fn(NodeRef, Vector, &mut IndexSet<NodeRef>)>;
 
 pub fn hit_test(node: NodeRef, pos: Vector) -> IndexSet<NodeRef> {
     let mut result = IndexSet::new();
     do_hit_test(node, pos, &mut result);
     result
 }
-pub(crate) fn do_hit_test(node: NodeRef, pos: Vector, result: &mut IndexSet<NodeRef>) {
+pub fn do_hit_test(node: NodeRef, pos: Vector, result: &mut IndexSet<NodeRef>) {
     if node.id.is_null() {
         return;
     }
     Runtime::with(|rt| {
         let n = rt.node(node.id);
-        let transform = n.transform.get();
+        let transform = n.effective_transform();
         if !transform.is_finite() || transform.determinant().abs() < f32::EPSILON {
             return;
         }
@@ -65,7 +65,7 @@ fn default_hit_test(node: NodeRef, pos: Vector, result: &mut IndexSet<NodeRef>) 
 }
 
 #[allow(dead_code)]
-pub(crate) fn set_hit_test_fn(hit_test: HitTestFn) {
+pub fn set_hit_test_fn(hit_test: HitTestFn) {
     NodeInner::with_mut(|node| {
         node.hit_test = Some(hit_test);
     })

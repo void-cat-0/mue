@@ -171,7 +171,7 @@ pub fn use_paint(style: &mut Style) -> Paint {
 
     let transform = extract(
         mue_core::scope::inject::<Transform>().map(|it| it.0),
-        style.transform,
+        style.matrix_transform,
         Matrix::IDENTITY,
         |a, b| a * b,
     );
@@ -197,6 +197,8 @@ pub fn use_paint(style: &mut Style) -> Paint {
 pub struct Shapes {
     shapes: SmallVec<[Shape; 1]>,
 }
+
+impl mue_core::prop::PropValue for Shapes {}
 
 impl Shapes {
     /// Build reusable geometry in local coordinates for a `shape` node.

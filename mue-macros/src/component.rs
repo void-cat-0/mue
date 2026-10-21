@@ -1,20 +1,16 @@
 use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
-use proc_macro_crate::{FoundCrate, crate_name};
 use quote::quote;
 use syn::{FnArg, ItemFn, Meta, Pat, Type, parse_macro_input, parse_quote};
 
 pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
-    let macroquad = match crate_name("mue-macroquad").expect("mue-macroquad not found") {
-        FoundCrate::Itself => quote! { crate },
-        FoundCrate::Name(name) => {
-            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-            quote! { ::#ident }
-        }
+    let macroquad = match crate::paths::host() {
+        Ok(path) => path,
+        Err(error) => return error.into_compile_error().into(),
     };
     let option = quote! { ::std::option::Option };
-    let signal = quote! { ::mue_core::signal::Signal };
-    let prop = quote! { ::mue_core::prop::Prop };
+    let signal = quote! { #macroquad::__private::core::signal::Signal };
+    let prop = quote! { #macroquad::__private::core::prop::Prop };
     let into = quote! { ::std::convert::Into };
 
     let mut input = parse_macro_input!(input as ItemFn);
@@ -81,7 +77,8 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
                     Arg::Arg {
                         ident: ident.clone(),
                         ty: quote! { #signal<#inner_ty> },
-                        default: default.map(|d| quote! { ::mue_core::signal::signal(#d) }),
+                        default: default
+                            .map(|d| quote! { #macroquad::__private::core::signal::signal(#d) }),
                     }
                 } else {
                     *pat_type.ty = syn::parse_quote! { #prop<#inner_ty> };
@@ -198,7 +195,7 @@ pub(crate) fn expand(input: TokenStream, node: bool) -> TokenStream {
             }
         } else {
             quote! {
-                #macroquad::node::Node::build(move || #ident(#( #invoke_args ),*))
+                #macroquad::node::Node::build_with_style(self.style, move |_| #ident(#( #invoke_args ),*))
             }
         }
     } else {

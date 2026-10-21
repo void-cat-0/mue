@@ -12,21 +12,23 @@
 - **自定义字体**：按字面（family / weight）注册 `ttf` / `otf`，字重本身也能是响应式的。
 - **Factory 与主题**：具名参数、实例级覆盖、按身份匹配的 `theme!` 分支、局部 Provider 和响应式换肤。
 - **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
-- **状态动画**：`with_animation` 事务、节点 `.animation(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
+- **样式过渡**：节点 `.transition(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
 
 ## 工作区结构
 
 | crate | 说明 |
 | --- | --- |
 | `mue-core` | 与渲染无关的响应式内核：signal、effect、scope、prop。可通过 feature 接入 taffy / cosmic-text。 |
-| `mue-macros` | `#[component]` / `#[node]` 属性过程宏。 |
-| `mue-macroquad` | 渲染与运行时：节点、样式、布局、事件、手势、字体、shader。核心导出 `App`。 |
+| `mue-macros` | `#[component]` / `#[node]` 属性过程宏与 style 风格的 `style!`。 |
+| `mue-macroquad` | 渲染与运行时：节点生命周期、样式、布局、事件、手势、字体、shader。核心导出 `App`。 |
+| `mue-components` | 布局、排版与图形组件，包括滚动区域、图片、形状、圆和文档；重导出组件宏与 `style!`。 |
 | `examples/basics` | 响应式样式、图片、字体（Space Mono 400/700）示例。 |
 | `examples/events` | 简单的点击、长按、hover、滚轮与 `set_timeout` 示例。 |
 | `examples/gestures` | 八个等大可视化面板：点击、长按、hover、滚轮、拖动、滑动、双指缩放与旋转。 |
 | `examples/map` | 图片网格地图，支持拖动、惯性滑动、双指缩放与旋转。 |
 | `examples/pages` | 页面切换与切换动画。 |
 | `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
+| `examples/style` | style 声明、响应式变换，以及滚动区域、图片、形状、圆和文档组件。 |
 | `examples/theme` | 练习计数、按钮变体、嵌套主题与明暗主题切换。 |
 | `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
 | `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
@@ -47,6 +49,7 @@ cargo run -p map
 cargo run -p pages
 cargo run -p tab
 cargo run -p theme
+cargo run -p style-example
 cargo run -p document
 cargo run -p animation
 cargo run -p navigation
@@ -58,7 +61,8 @@ cargo run -p playground
 `Factory` 复用组件定义；主题只覆盖选中的样式字段。`theme!` 克隆分支里的 Factory 句柄，原句柄仍可用来创建实例：
 
 ```rust
-use mue_macroquad::{App, color::Color, factory::factory, node::text, style::Styleable, theme::{provide_theme, theme}};
+use mue_components::text;
+use mue_macroquad::{App, color::Color, factory::factory, style::Styleable, theme::{provide_theme, theme}};
 
 let label = factory(|caption: String| text(caption));
 let appearance = theme!(|c, s| match c {
@@ -74,7 +78,8 @@ let app = App::new(provide_theme(appearance, move || label.create("Hello")));
 
 ```rust
 use mue_core::prelude::*;
-use mue_macroquad::{node::*, style::{Styleable, StyleableExt}, App};
+use mue_components::prelude::*;
+use mue_macroquad::App;
 
 #[mue_macros::component]
 fn counter() -> impl Component {
@@ -95,12 +100,66 @@ async fn the_main() {
 }
 ```
 
+## style 风格的 `style!`
+
+保留 Rust 组件 builder，通过 `.style(style! { ... })` 应用样式，不引入模板语言。
+属性使用 style 的 kebab-case 名称；同一字段后声明覆盖前声明，也遵循 `.style(...)` 与后续 builder 调用的顺序。
+
+```rust
+use mue_components::prelude::*;
+use mue_core::prelude::*;
+use mue_macroquad::style::Size;
+
+let width = signal(Size::Percent(80.));
+let card = flexbox()
+    .style(style! {
+        display: flex;
+        flex-direction: column;
+        width: {width};
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 16px 24px;
+        gap: 12px;
+        background-color: #eef4ff;
+        border-radius: 12px;
+        transform: translateY(8px) rotate(-2deg);
+        transform-origin: center top;
+    })
+    .children(text("Hello").style(style! {
+        font-size: 1.25rem;
+        line-height: 1.5;
+        color: rgb(20 40 80 / 90%);
+    }));
+width.set(Size::Px(480.));
+```
+
+`{Rust 表达式}` 接受对应属性的原有类型、`Prop` 或 signal，保留响应式更新；每个表达式只求值一次。
+`padding` / `margin` / `inset` / `border-width` 使用 style 的一至四值顺序：上、右、下、左。
+`gap: 8px 16px` 分别设置行、列间距。它们与原 builder 的 tuple 顺序无关。
+
+支持尺寸与定位、flex 布局、overflow、颜色、透明度、字体、行高、字距、文本对齐与装饰，以及二维和有限三维变换。
+长度支持 `px`、`%`、`vw`、`vh`（取决于属性），`font-size` 另支持 `em` / `rem`；零可省略单位。
+颜色支持十六进制、`rgb` / `rgba` 和常用颜色名。`line-height` 的无单位数和百分比按当前字号计算。
+
+`transform` 是节点样式，作用于整个子树，绘制和命中测试使用同一变换。
+支持 `translate` / `translateX` / `translateY`、`translate3d` / `translateZ`、`scale` / `scaleX` / `scaleY` / `scale3d`、`rotate` / `rotateX` / `rotateY`、`skew` / `skewX` / `skewY`、`perspective`、`matrix`、`matrix3d` 和 `none`。
+按 style 顺序组合；translate 百分比相对节点自身 border box，默认变换原点为中心；变换不改变布局占位。
+角度支持 `deg` / `rad` / `turn` / `grad`。`transform: {value}` 和 `.transform(value)` 都接受
+Rust 矩阵、`Transform` 函数列表及其响应式属性，并参与现有动画；
+同类、同单位的列表及 `none` 与列表之间可插值，不兼容列表立即切换。
+
+这是当前画布渲染器支持的 style 声明子集，不包含 `calc()`、grid 或完整的 3D 场景渲染；3D 变换会投影到 2D 画布。
+`background` 当前只接受颜色或 Rust Brush 表达式，圆角只支持统一半径；`white-space` 只控制换行，不实现空白折叠。
+`overflow` 是布局属性，交互滚动使用 `scroll_area` 组件。不支持的属性或值在编译期报错。
+运行 `cargo run -p style-example` 查看组合示例。
+
 ## 长度单位
 
 `mue_macroquad::style` 的长度是纯值 `Size`：`Size::Px`、`Size::Percent`、`Size::Vw`、`Size::Vh` 和 `Size::Auto`。公开百分比以 100 表示整体，不限制为 `0..=100`（例如 `Size::Percent(50.)` 表示 50%），视口单位分别相对逻辑视口宽度和高度。`px`、`percent`、`vw`、`vh` 是对应的纯值构造器，不会把值预先换算成当前视口像素。
 
 ```rust
-use mue_macroquad::{node::text, style::{FontSize, Styleable, percent, px, vw}};
+use mue_components::text;
+use mue_macroquad::style::{FontSize, Styleable, percent, px, vw};
 
 let label = text("Hello")
     .width(percent(80.))
@@ -113,7 +172,8 @@ let label = text("Hello")
 
 ```rust
 use mue_core::prelude::*;
-use mue_macroquad::{node::text, style::{FontSize, Size, Styleable}};
+use mue_components::text;
+use mue_macroquad::style::{FontSize, Size, Styleable};
 
 let width = signal(Size::Percent(50.));
 let font_size = signal(FontSize::Em(1.25));
@@ -139,7 +199,8 @@ font_size.set(FontSize::Rem(1.5));
 `document("第一段\n\n第二段")` 显示纯文本；`markdown(source)` 将 CommonMark 转成 cosmic-text 的富文本 spans。两者都接受响应式属性，使用现有的字体、字号、行高、对齐、颜色及宽度样式。改变内容、宽度或字体会重新排版，自动高度包含全部段落。正文颜色可使用现有的 Brush，span 颜色可单独覆盖。
 
 ```rust
-use mue_macroquad::{node::{document, markdown, Document, Span}, style::Styleable};
+use mue_components::{document, markdown, Document, Span};
+use mue_macroquad::style::Styleable;
 
 let article = markdown("# Field notes\n\nA **quiet** morning by the *sea*.")
     .width(600.).font_size(18.).line_height(28.);
@@ -151,25 +212,27 @@ let signature = document(Document::rich([
 
 Markdown 支持段落、标题、嵌套强调、行内/块代码、引用、列表及软/硬换行。链接和图片只显示标签，HTML 显示为文字；不提供编辑、点击链接、图片加载、表格或代码高亮。cosmic-text 负责字形与双向文本，CommonMark 解析由 pulldown-cmark 完成。
 
-## 动画
+## 过渡
 
 ```rust
 use mue_core::prelude::*;
-use mue_macroquad::{animation::{Animation, with_animation}, node::text, style::{Styleable, StyleableExt}};
+use mue_components::text;
+use mue_macroquad::{transition::Transition, style::{Styleable, StyleableExt}};
 
 let visible = signal(true);
 let label = text("Hello")
     .opacity(visible.select(1., 0.2))
-    .on_activate(move || {
-        with_animation(Animation::ease_in_out(0.3), || visible.toggle());
-    });
+    .transition(Transition::ease_in_out(0.3))
+    .on_activate(move || visible.toggle());
 ```
 
-`with_animation` 让状态修改引起的可插值样式变化使用指定曲线，包括 computed 链、batch 内的事件与 Factory 主题。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`with_animation(None, ...)` 立即切换。节点的 `.animation(Animation::spring(0.8, 0.3))` 为该节点的可插值属性提供默认动画，显式事务优先。
+`.transition(...)` 为节点的可插值属性提供默认动画。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`Transition::Instant` 立即切换。
 
-支持 `Animation::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
+支持 `Transition::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
 
-自定义动画数据可实现 `Animatable`。`animated(*signal)` 返回 `Animated { value, running }`，也可用 `animated_with(*signal, curve)` 指定默认曲线。`value` 可用于 computed 或 Prop，`running` 可用于完成后的响应式逻辑。资源跟随创建它的 scope 释放。`App::frame` 自动在布局前调用 `mue_macroquad::animation::advance(dt)`。动画曲线、插值和帧驱动位于 mue-macroquad，core 仅负责传播通用更新上下文。
+实现 `mue_macroquad::transition::Interpolatable` 可以扩展可过渡值。`App::frame` 会在布局前调用 `mue_macroquad::transition::advance(dt)`。
+
+更完整的主题、factory、组件和示例说明位于 [`docs/`](docs/)。
 
 `pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
 
@@ -179,7 +242,8 @@ let label = text("Hello")
 
 ```rust
 use mue_core::prelude::*;
-use mue_macroquad::{node::{pages, text, PagesTransition}, style::StyleableExt};
+use mue_components::{pages, text, PagesTransition};
+use mue_macroquad::style::StyleableExt;
 
 let selected = signal(0usize);
 let view = pages(selected, [text("Home"), text("Notes"), text("Settings")])
@@ -188,7 +252,7 @@ selected.set(2);
 selected.set(1); // 向右滑动回到 Notes
 ```
 
-`.transition(...)` 支持 `Slide`（默认）、`SlideVertical` 和 `None`；`.transition_animation(...)` 配置曲线。垂直切换时索引增加向上、减少向下。动画中途切换从当前显示位置重新定向，位移限制在起点和终点之间；尺寸变化时立即结束过渡并重新布局。只有视口内页面参与布局与绘制，仅选中的页面参与命中测试。空列表显示空内容；越界索引按最后一页显示，不修改选中信号。
+`.page_transition(...)` 支持 `Slide`（默认）、`SlideVertical` 和 `None`；`.transition_curve(...)` 配置曲线。垂直切换时索引增加向上、减少向下。动画中途切换从当前显示位置重新定向，位移限制在起点和终点之间；尺寸变化时立即结束过渡并重新布局。只有视口内页面参与布局与绘制，仅选中的页面参与命中测试。空列表显示空内容；越界索引按最后一页显示，不修改选中信号。
 
 `pages` 用于同级页面；需要 push/back、详情层级或分栏时使用 `navigation_stack`。
 
@@ -198,7 +262,7 @@ selected.set(1); // 向右滑动回到 Notes
 
 ```rust
 use mue_core::prelude::*;
-use mue_macroquad::node::{navigation_stack, text};
+use mue_components::{navigation_stack, text};
 
 let path = signal(Vec::<String>::new());
 let view = navigation_stack(
@@ -321,18 +385,18 @@ MIT，见 [LICENSE](LICENSE)。
 
 `expanded.select(480., 180.)` 根据布尔状态选择值，可直接传给 `.width(...)`。响应式像素值不需要手动构造 Taffy 尺寸。`text(open.select("Open", "Closed"))` 和 `text(count.map(|n| format!("{n}")))` 自动转换文本类型。
 
-`state.toggle()` 切换布尔状态，`.toggle_on_tap(state)` 绑定点击切换。`.on_activate(move || ...)` 接受没有事件参数的点击回调。`document` / `markdown` 及其内容类型位于 `mue_macroquad::node`。
+`state.toggle()` 切换布尔状态，`.toggle_on_tap(state)` 绑定点击切换。`.on_activate(move || ...)` 接受没有事件参数的点击回调。`document` / `markdown` 及其内容类型位于 `mue_components`。
 
 
 ## 布局与排版节点
 
-节点按 `node::layout`、`node::typography`、`node::graphics` 分组，原来的
-`node::*`、`node::text`、`node::document` 和 `node::image` 导入仍然有效。
-每个文件放一种节点，相关子类型和构建器留在同一文件。
+所有组件的实现与构建器都位于 `mue-components`，按 `layout`、`typography`、`graphics` 分组，
+也可以从 crate 根或 `mue_components::prelude::*` 导入。原来的 `mue_macroquad::node` 组件导入需迁移到这里。
+`mue-macroquad::node` 只保留节点生命周期、自定义节点和 children 树工具；字体排版与 GPU 绘制仍由渲染器负责。
 
 | 分组 | 节点 |
 | --- | --- |
-| 布局 | `pages`、`navigation_stack`、children 工具、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
+| 布局 | `pages`、`navigation_stack`、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
 | 排版 | `blockquote`、`code`、`code_block`、`em`、`heading`、`link`、`link_overlay`、`list` / `list_item`、`text`、`document` / `markdown` |
 | 图形 | `circle`、`shape`、`image` |
 
@@ -356,7 +420,8 @@ Markdown 保持只读：链接显示标签，代码不做语法高亮，引用�
 
 ```rust
 use mue_core::prelude::*;
-use mue_macroquad::{math::Vector, node::*, style::{Style, Styleable, StyleableExt}};
+use mue_components::prelude::*;
+use mue_macroquad::math::Vector;
 
 let offset = signal(Vector::ZERO);
 let view = scroll_area()
@@ -407,7 +472,7 @@ let view = scroll_area()
 行列间距、段落间距、字距与宽高比现已加入样式动画绑定。不同枚举值仍然立即切换。
 
 导航默认使用弹簧横向滑动；`.transition(NavigationTransition::SlideVertical)` 纵向切换，
-`NavigationTransition::None` 立即切换。`.transition_animation(Animation::spring(0.5, 0.2))`
+`NavigationTransition::None` 立即切换。`.transition_curve(Transition::spring(0.5, 0.2))`
 设置动画曲线。退出页面在过渡结束后释放，已保留页面的局部状态不变；过渡中的旧页面不接收输入。
 导航内部驱动过渡，示例不再逐帧维护独立的 offset。
 

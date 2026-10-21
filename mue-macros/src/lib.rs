@@ -22,3 +22,15 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn theme(input: TokenStream) -> TokenStream {
     theme::expand(input)
 }
+
+mod paths;
+mod style;
+
+/// style declarations with typed Rust expressions in braces.
+#[proc_macro]
+pub fn style(input: TokenStream) -> TokenStream {
+    match syn::parse::<style::Declarations>(input).and_then(|style| style.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}

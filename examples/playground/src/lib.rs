@@ -1,4 +1,5 @@
 //! An interactive exercise of node options. Run with `cargo run -p playground`.
+use mue_components::*;
 mod controls;
 mod fonts;
 mod graphics;
@@ -10,6 +11,7 @@ mod motion;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 mod scrolling;
+mod styles;
 mod theming;
 mod typography;
 use controls::*;
@@ -17,11 +19,10 @@ use macroquad::prelude::{clear_background, get_time, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    node::*,
-    style::{Styleable, StyleableExt, percent, vh, vw},
+    style::{Styleable, vh, vw},
 };
 
-const PAGES: [&str; 8] = [
+const PAGES: [&str; 9] = [
     "Layout",
     "Typography",
     "Graphics",
@@ -29,6 +30,7 @@ const PAGES: [&str; 8] = [
     "Scrolling",
     "Input",
     "Theme",
+    "Style declarations",
     "Font licenses",
 ];
 
@@ -41,11 +43,14 @@ fn destination(index: usize) -> Node {
         4 => scrolling::page(),
         5 => input::page(),
         6 => theming::page(),
+        7 => styles::page(),
         _ => fonts::licenses(),
     };
     scroll_area()
-        .size_full()
-        .background(BG)
+        .style(mue_macroquad::style! {
+        width: 100%; height: 100%;
+        background: {BG};
+        })
         // Leave touch drags to the recognizers on the input page; its scrollbar still works.
         .options(ScrollOptions {
             touch: index != 5,
@@ -53,14 +58,17 @@ fn destination(index: usize) -> Node {
         })
         .children(
             container()
-                .max_width(percent(100.))
-                .min_width(0.)
-                .padding((vw(3.), vh(3.)))
-                .gap(vh(2.5))
+                .style(mue_macroquad::style! {
+                max-width: 100%;
+                min-width: 0px;
+                padding: {(vw(3.), vh(3.))};
+                gap: {vh(2.5)};
+                })
                 .children((
-                    heading(PAGES[index])
-                        .font_size(responsive::font(30.))
-                        .line_height(responsive::ui(40.)),
+                    heading(PAGES[index]).style(mue_macroquad::style! {
+                    font-size: {responsive::font(30.)};
+                    line-height: {responsive::ui(40.)};
+                    }),
                     content,
                 )),
         )
@@ -97,23 +105,27 @@ pub async fn run() {
         |value| *value as u8,
         move |value| {
             pages(selected, (0..PAGES.len()).map(destination))
-                .transition(*value)
-                .transition_animation(SPRING)
+                .page_transition(*value)
+                .transition_curve(SPRING)
                 .into_node()
         },
     );
     let mut app = App::new(
         stack()
-            .size_full()
-            .font_size(responsive::root_font())
-            .gap(0.)
-            .background(BG)
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            gap: 0px;
+            background: {BG};
+            })
             .children((
                 wrap()
-                    .w_full()
-                    .flex_none()
-                    .padding((vw(2.), vh(1.5)))
-                    .gap(vw(1.))
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: none;
+                    padding: {(vw(2.), vh(1.5))};
+                    gap: {vw(1.)};
+                    })
                     .children(
                         PAGES
                             .into_iter()
@@ -123,16 +135,20 @@ pub async fn run() {
                     ),
                 separator(),
                 flexbox()
-                    .w_full()
-                    .flex_1()
-                    .min_width(0.)
-                    .min_height(0.)
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: 1;
+                    min-width: 0px;
+                    min-height: 0px;
+                    })
                     .children(page_view),
                 wrap()
-                    .w_full()
-                    .flex_none()
-                    .padding((vw(2.), vh(1.25)))
-                    .gap(vw(1.))
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: none;
+                    padding: {(vw(2.), vh(1.25))};
+                    gap: {vw(1.)};
+                    })
                     .children((
                         button("Previous", move || {
                             selected.update(|index| *index = index.saturating_sub(1));
@@ -141,15 +157,18 @@ pub async fn run() {
                             selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1));
                         }),
                         text(selected.map(|index| format!("Page {} / {}", index + 1, PAGES.len())))
-                            .font_size(responsive::font(16.))
-                            .line_height(responsive::ui(24.))
-                            .flex_1(),
-                        text(fps.map(|fps| format!("{fps} FPS")))
-                            .font_size(responsive::font(16.))
-                            .line_height(responsive::ui(24.))
-                            .min_width(0.)
-                            .flex_none()
-                            .text_wrap(false),
+                            .style(mue_macroquad::style! {
+                            font-size: {responsive::font(16.)};
+                            line-height: {responsive::ui(24.)};
+                            flex: 1;
+                            }),
+                        text(fps.map(|fps| format!("{fps} FPS"))).style(mue_macroquad::style! {
+                        font-size: {responsive::font(16.)};
+                        line-height: {responsive::ui(24.)};
+                        min-width: 0px;
+                        flex: none;
+                        text-wrap: {false};
+                        }),
                         transition_control,
                     )),
             )),

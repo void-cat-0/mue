@@ -121,3 +121,8 @@ pub fn use_layout(style: &mut Style) -> Layout {
         }
     })
 }
+
+/// Inspect computed layout from a component without exposing the host runtime.
+pub fn with_taffy<R>(f: impl FnOnce(&taffy::TaffyTree<Box<dyn MeasureFn>>) -> R) -> R {
+    Runtime::with(|rt| f(&rt.taffy.borrow()))
+}

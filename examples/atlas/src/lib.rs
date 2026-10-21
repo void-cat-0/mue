@@ -7,6 +7,7 @@
 //! The default maximum size is intentionally 56px. At that size, 4000 CJK
 //! glyphs are an intended overload case, not a bounded verification budget;
 //! use the command above to exercise the 8-page/32MiB budget without overload.
+use mue_components::*;
 
 #[path = "../../shared/responsive.rs"]
 mod responsive;
@@ -22,7 +23,6 @@ use mue_core::{prelude::*, prop::Prop};
 use mue_macroquad::{
     App,
     font::{self, GlyphAtlasStats, glyph_atlas_stats},
-    node::*,
     style::{FontSize, Size, Style, Styleable, StyleableExt},
 };
 
@@ -224,44 +224,72 @@ pub async fn run(options: Options) {
     let line_height: Prop<Size> = size_prop.map(|value| Size::Px(value * 1.35));
     let stats_text = stats.map(|value| value.clone());
 
-    let content = scroll_area().size_full().children(
-        container()
-            .max_width(responsive::ui(860.))
-            .padding((responsive::ui(24.),))
-            .gap(responsive::ui(14.))
-            .children((
-                heading("Glyph atlas stress")
-                    .font_size(responsive::font(30.))
-                    .line_height(responsive::ui(40.)),
-                text(stats_text)
-                    .font_size(responsive::font(15.))
-                    .line_height(responsive::ui(22.))
-                    .text_wrap(false),
-                wrap().gap(responsive::ui(12.)).children((
-                    link("600 glyphs")
-                        .font_size(responsive::font(18.))
-                        .line_height(responsive::ui(32.))
-                        .on_activate(move || count.set(600)),
-                    link("2000 glyphs")
-                        .font_size(responsive::font(18.))
-                        .line_height(responsive::ui(32.))
-                        .on_activate(move || count.set(2000)),
-                    link("4000 glyphs")
-                        .font_size(responsive::font(18.))
-                        .line_height(responsive::ui(32.))
-                        .on_activate(move || count.set(4000)),
+    let content = scroll_area()
+        .style(mue_macroquad::style! { width: 100%; height: 100%; })
+        .children(
+            container()
+                .style(mue_macroquad::style! {
+                max-width: {responsive::ui(860.)};
+                padding: {(responsive::ui(24.),)};
+                gap: {responsive::ui(14.)};
+                })
+                .children((
+                    heading("Glyph atlas stress").style(mue_macroquad::style! {
+                    font-size: {responsive::font(30.)};
+                    line-height: {responsive::ui(40.)};
+                    }),
+                    text(stats_text).style(mue_macroquad::style! {
+                    font-size: {responsive::font(15.)};
+                    line-height: {responsive::ui(22.)};
+                    text-wrap: {false};
+                    }),
+                    wrap()
+                        .style(mue_macroquad::style! { gap: {responsive::ui(12.)}; })
+                        .children((
+                            link("600 glyphs")
+                                .style(
+                                    mue_macroquad::style! { font-size: {responsive::font(18.)}; },
+                                )
+                                .style(
+                                    mue_macroquad::style! { line-height: {responsive::ui(32.)}; },
+                                )
+                                .on_activate(move || count.set(600)),
+                            link("2000 glyphs")
+                                .style(
+                                    mue_macroquad::style! { font-size: {responsive::font(18.)}; },
+                                )
+                                .style(
+                                    mue_macroquad::style! { line-height: {responsive::ui(32.)}; },
+                                )
+                                .on_activate(move || count.set(2000)),
+                            link("4000 glyphs")
+                                .style(
+                                    mue_macroquad::style! { font-size: {responsive::font(18.)}; },
+                                )
+                                .style(
+                                    mue_macroquad::style! { line-height: {responsive::ui(32.)}; },
+                                )
+                                .on_activate(move || count.set(4000)),
+                        )),
+                    text(body).style(mue_macroquad::style! {
+                    font-size: {font_size};
+                    line-height: {line_height};
+                    }),
                 )),
-                text(body).font_size(font_size).line_height(line_height),
-            )),
-    );
+        );
     let root = if options.verify_upload {
         // Keep the flush node after text in the same stack, exercising the
         // upload/geometry ordering before get_screen_data reads the framebuffer.
-        stack().size_full().children((content, flush_node()))
+        stack()
+            .style(mue_macroquad::style! { width: 100%; height: 100%; })
+            .children((content, flush_node()))
     } else {
-        stack().size_full().children((content,))
+        stack()
+            .style(mue_macroquad::style! { width: 100%; height: 100%; })
+            .children((content,))
     };
-    let mut app = App::new(root.font_size(responsive::root_font()));
+    let mut app =
+        App::new(root.style(mue_macroquad::style! { font-size: {responsive::root_font()}; }));
     if options.verify_upload && options.frames != 0 {
         assert!(
             options.frames >= 2 && options.frames.is_multiple_of(2),

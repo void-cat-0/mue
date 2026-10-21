@@ -76,7 +76,7 @@ mod private {
     impl Sealed for FontSize {}
 }
 
-/// Lower a `Size` according to the target CSS/Taffy property.
+/// Lower a `Size` according to the target style/Taffy property.
 pub trait SizeExt: private::Sealed {
     fn to_dimension(self) -> Dimension;
     fn to_length_percentage(self, property: &str) -> LengthPercentage;

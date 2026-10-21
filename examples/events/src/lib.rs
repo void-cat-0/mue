@@ -1,3 +1,4 @@
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 use macroquad::prelude::*;
@@ -5,9 +6,8 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     color::Color as UiColor,
-    node::*,
     runtime::set_timeout,
-    style::{Styleable, StyleableExt, percent, vh, vw},
+    style::{Styleable, StyleableExt, vh, vw},
 };
 
 const BLUE: UiColor = UiColor::from_rgba(37, 58, 94, 255);
@@ -36,8 +36,10 @@ fn view() -> impl Component {
             wheel.get()
         )
     }))
-    .font_size(responsive::font(32.))
-    .line_height(responsive::ui(44.))
+    .style(mue_macroquad::style! {
+    font-size: {responsive::font(32.)};
+    line-height: {responsive::ui(44.)};
+    })
     .use_pressed(pressed)
     .use_hovered(hovered)
     .on_activate(move || count.update(|c| *c += 1))
@@ -56,24 +58,31 @@ pub async fn run() {
     responsive::sync();
     let mut app = App::new(
         stack()
-            .size_full()
-            .font_size(responsive::root_font())
-            .padding((vw(4.), vh(4.)))
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            padding: {(vw(4.), vh(4.))};
+            })
             .children((
-                heading("Pointer events")
-                    .font_size(responsive::font(32.))
-                    .line_height(responsive::ui(42.))
-                    .margin_bottom(vh(2.)),
-                text("Click, hold, hover, or scroll over the panel below.")
-                    .font_size(responsive::font(18.))
-                    .line_height(responsive::ui(28.))
-                    .margin_bottom(vh(4.)),
-                view()
-                    .padding((responsive::ui(24.),))
-                    .width(percent(100.))
-                    .max_width(responsive::ui(440.))
-                    .min_height(responsive::ui(240.))
-                    .background(BLUE),
+                heading("Pointer events").style(mue_macroquad::style! {
+                font-size: {responsive::font(32.)};
+                line-height: {responsive::ui(42.)};
+                margin-bottom: {vh(2.)};
+                }),
+                text("Click, hold, hover, or scroll over the panel below.").style(
+                    mue_macroquad::style! {
+                    font-size: {responsive::font(18.)};
+                    line-height: {responsive::ui(28.)};
+                    margin-bottom: {vh(4.)};
+                    },
+                ),
+                view().style(mue_macroquad::style! {
+                padding: {(responsive::ui(24.),)};
+                width: 100%;
+                max-width: {responsive::ui(440.)};
+                min-height: {responsive::ui(240.)};
+                background: {BLUE};
+                }),
             )),
     );
 
