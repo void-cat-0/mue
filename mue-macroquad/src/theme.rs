@@ -1,6 +1,7 @@
 use crate::{
     factory::Factory,
     node::{IntoNode, Node},
+    shader::Brush,
     style::Style,
 };
 use mue_core::{
@@ -212,6 +213,44 @@ pub fn provide_theme<T>(
     ThemeProvider {
         theme: theme.into(),
         view,
+    }
+}
+
+#[derive(Clone)]
+struct Foreground(Prop<Brush>);
+
+/// Build a subtree whose text uses `color` when no local text color is set.
+pub fn provide_foreground<T>(
+    color: impl Into<Prop<Brush>>,
+    view: impl FnOnce() -> T,
+) -> ForegroundProvider<impl FnOnce() -> T> {
+    ForegroundProvider {
+        color: color.into(),
+        view,
+    }
+}
+
+pub struct ForegroundProvider<F> {
+    color: Prop<Brush>,
+    view: F,
+}
+
+/// Return the text color inherited from the nearest foreground provider.
+pub fn inherited_foreground() -> Option<Prop<Brush>> {
+    inject::<Foreground>().map(|foreground| foreground.0)
+}
+
+impl<F, R> IntoNode for ForegroundProvider<F>
+where
+    F: FnOnce() -> R,
+    R: IntoNode,
+{
+    fn into_node(self) -> Node {
+        let scope = Scope::new();
+        scope.provide(Foreground(self.color));
+        let node = scope.run(|| (self.view)().into_node());
+        node.retain_scope(scope);
+        node
     }
 }
 

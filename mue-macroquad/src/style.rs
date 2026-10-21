@@ -22,7 +22,7 @@ use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
     event::{pointer::PointerEvent, wheel::WheelEvent},
-    gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent},
+    gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent, TransformEvent},
     hook::{HookFn, NodeHooks},
     math::Matrix,
     node::{Children, IntoChildren},
@@ -505,6 +505,7 @@ define_style! {
         on_swipe: HookFn<SwipeEvent>;
         on_pinch: HookFn<PinchEvent>;
         on_rotate: HookFn<RotateEvent>;
+        on_transform: HookFn<TransformEvent>;
     }
 }
 

@@ -340,6 +340,9 @@ impl Default for PointerManager {
 
 impl PointerManager {
     pub fn new() -> Self {
+        // Native touch tracks already drive taps, drags and gestures. Otherwise
+        // Macroquad also emits a mouse stream for every finger.
+        macroquad::input::simulate_mouse_with_touch(false);
         Self {
             root_node: NodeRef::null(),
             subscriber_id: register_input_subscriber(),

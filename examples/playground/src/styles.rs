@@ -6,9 +6,20 @@ use mue_macroquad::{
     shader::Brush,
     style::{Styleable, Transform, TransformOp, vh, vw},
 };
+use std::f32::consts::TAU;
+
+thread_local! {
+    static ANIMATION_TIME: Signal<f32> = Scope::null().run(|| signal(0.));
+}
+
+pub fn update_animation_time(time: f32) {
+    ANIMATION_TIME.with(|value| value.set(time));
+}
 
 pub fn page() -> Node {
     let (active, control) = toggle("Accent state");
+    let (three_d, three_d_control) = toggle("3D projection");
+    let animation_time = ANIMATION_TIME.with(|time| time.map(|value| value));
     stack()
         .style(mue_macroquad::style! {
             width: 100%;
@@ -30,7 +41,7 @@ pub fn page() -> Node {
                                 min-height: 88px;
                                 padding: 12px 20px;
                                 border-radius: 10px;
-                                background: {PANEL};
+                                background: {panel_brush()};
                             })
                             .children(text("Padding, radius and responsive flex basis").style(
                                 mue_macroquad::style! {
@@ -79,14 +90,14 @@ pub fn page() -> Node {
                             .style(mue_macroquad::style! {
                                 font-size: {responsive::font(24.)};
                                 line-height: {responsive::ui(32.)};
-                                color: {BG};
+                                color: {foreground()};
                             }),
                         text("Values in braces are Rust expressions, so signals and responsive units stay reactive.")
                             .style(mue_macroquad::style! {
                                 max-width: 620px;
                                 font-size: {responsive::font(16.)};
                                 line-height: {responsive::ui(24.)};
-                                color: {BG};
+                                color: {foreground()};
                             }),
                     )),
             ),
@@ -97,7 +108,7 @@ pub fn page() -> Node {
                         width: 100%;
                         padding: 16px 20px;
                         border-radius: 8px;
-                        background: {PANEL};
+                        background: {panel_brush()};
                         color: {CORAL};
                         font-size: {responsive::font(18.)};
                         font-weight: 600;
@@ -105,6 +116,61 @@ pub fn page() -> Node {
                         text-decoration: underline;
                         line-height: 1.5;
                     }),
+            ),
+            section(
+                "3D transforms",
+                stack()
+                    .style(mue_macroquad::style! {
+                        width: 100%;
+                        min-width: 0px;
+                        gap: {responsive::ui(12.)};
+                    })
+                    .children((
+                        three_d_control,
+                        code("perspective(520px) rotateX(14deg) rotateY(-12deg) translate3d(0, 0, 18px) scale3d(1.05, 1.05, 1)")
+                            .style(mue_macroquad::style! {
+                                font-size: {responsive::font(15.)};
+                                line-height: {responsive::ui(22.)};
+                            }),
+                        center()
+                            .style(mue_macroquad::style! {
+                                width: 100%;
+                                height: {vh(24.)};
+                                min-height: {responsive::ui(120.)};
+                                border-radius: 12px;
+                                background: {panel_brush()};
+                            })
+                            .children(text("Two-dimensional view").style(
+                                mue_macroquad::style! {
+                                    font-size: {responsive::font(22.)};
+                                    line-height: {responsive::ui(32.)};
+                                },
+                            ))
+                            .show_if(three_d.map(|enabled| !enabled)),
+                        center()
+                            .style(mue_macroquad::style! {
+                                width: 100%;
+                                height: {vh(24.)};
+                                min-height: {responsive::ui(120.)};
+                                border-radius: 12px;
+                                background: {panel_brush()};
+                                transform: {computed(move |_| Transform(vec![
+                                    TransformOp::Perspective(1100.),
+                                    TransformOp::RotateX(if three_d.get() { (animation_time.get() * TAU * 0.07).sin() * 0.2 } else { 0. }),
+                                    TransformOp::RotateY(if three_d.get() { (animation_time.get() * TAU * 0.11).sin() * 0.24 } else { 0. }),
+                                    TransformOp::Rotate(if three_d.get() { (animation_time.get() * TAU * 0.05).sin() * 0.12 } else { 0. }),
+                                    TransformOp::TranslateZ(8.),
+                                ]))};
+                                transition: 60ms linear;
+                            })
+                            .children(text("Projected 3D view").style(
+                                mue_macroquad::style! {
+                                    font-size: {responsive::font(22.)};
+                                    line-height: {responsive::ui(32.)};
+                                },
+                            ))
+                            .show_if(three_d),
+                    )),
             ),
         ))
         .into_node()

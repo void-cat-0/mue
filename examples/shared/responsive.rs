@@ -29,11 +29,30 @@ thread_local! {
     // Pages can be constructed in short-lived scopes; shared viewport state must outlive them.
     static METRICS: Signal<Metrics> = Scope::null().run(|| signal(Metrics::for_viewport(480., 800.)));
     static COMPACT: ReadSignal<bool> = Scope::null().run(|| METRICS.with(|metrics| metrics.map(|m| m.compact)));
+    static ZOOM: Signal<f32> = Scope::null().run(|| signal(0.75));
 }
 
 pub fn sync() {
-    let metrics = Metrics::for_viewport(screen_width(), screen_height());
+    let mut metrics = Metrics::for_viewport(screen_width(), screen_height());
+    metrics.scale *= ZOOM.with(|zoom| zoom.get());
     METRICS.with(|state| state.set(metrics));
+}
+
+pub fn zoom() -> ReadSignal<f32> {
+    ZOOM.with(|zoom| zoom.map(|value| value))
+}
+
+pub fn cycle_zoom() {
+    ZOOM.with(|zoom| {
+        const LEVELS: [f32; 5] = [0.5, 0.75, 1., 1.25, 1.5];
+        zoom.update(|value| {
+            let index = LEVELS
+                .iter()
+                .position(|level| (*level - *value).abs() < 0.001)
+                .unwrap_or(0);
+            *value = LEVELS[(index + 1) % LEVELS.len()];
+        })
+    });
 }
 
 pub fn window_config(window: macroquad::window::Conf) -> macroquad::conf::Conf {

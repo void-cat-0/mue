@@ -190,7 +190,10 @@ pub fn render_spans(style: &mut Style, content: Prop<Vec<Span>>) {
     let vertical_align = style.take_text_vertical_align();
     let strike = style.take_text_strikethrough();
     let text_underline = style.take_text_underline();
-    let color = style.take_color();
+    let color = style
+        .declared_color()
+        .or_else(crate::theme::inherited_foreground)
+        .unwrap_or_else(|| style.take_color());
 
     let metrics = computed(move |_| {
         Metrics::new(

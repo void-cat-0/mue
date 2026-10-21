@@ -27,7 +27,10 @@ pub fn do_hit_test(node: NodeRef, pos: Vector, result: &mut IndexSet<NodeRef>) {
         if !transform.is_finite() || transform.determinant().abs() < f32::EPSILON {
             return;
         }
-        let pos = transform.inverse().transform_point2(pos);
+        let pos = crate::math::project_point(transform.inverse(), pos);
+        if !pos.is_finite() {
+            return;
+        }
         let inner = n.hit_test.clone();
         drop(n);
         let inner = inner.as_deref().unwrap_or(&default_hit_test);

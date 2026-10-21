@@ -73,7 +73,7 @@ pub fn page() -> Node {
                 width: 100%;
                 })
                 .offset(offset)
-                .style(mue_macroquad::style! { background: {PANEL}; })
+                .style(mue_macroquad::style! { background: {panel_brush()}; })
                 .options(ScrollOptions {
                     axis,
                     touch: !touch,

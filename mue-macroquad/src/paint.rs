@@ -43,10 +43,7 @@ pub(crate) fn with_transform<R>(transform: Matrix, draw: impl FnOnce() -> R) -> 
         return draw();
     }
     let previous = DRAW_TRANSFORM.replace(DRAW_TRANSFORM.get() * transform);
-    let c = transform.to_cols_array();
-    let matrix = macroquad::math::Mat4::from_cols_array(&[
-        c[0], c[1], 0., 0., c[3], c[4], 0., 0., 0., 0., 1., 0., c[6], c[7], 0., 1.,
-    ]);
+    let matrix = crate::math::model_matrix(transform);
     unsafe { get_internal_gl() }
         .quad_gl
         .push_model_matrix(matrix);
@@ -65,7 +62,7 @@ pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
         vec2(rect.right(), rect.y),
         vec2(rect.x, rect.bottom()),
     ]
-    .map(|point| transform.transform_point2(point));
+    .map(|point| crate::math::project_point(transform, point));
     let min = corners.into_iter().reduce(Vector::min).unwrap();
     let max = corners.into_iter().reduce(Vector::max).unwrap();
     let rect = Rect::new(min.x, min.y, max.x - min.x, max.y - min.y);

@@ -1,6 +1,6 @@
 use super::{Gesture, GesturePhase};
 use crate::{
-    event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId},
+    event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId, PointerType},
     hook::HookFn,
     math::Vector,
 };
@@ -27,6 +27,20 @@ pub struct RotateEvent {
     pub delta: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct TransformEvent {
+    pub phase: GesturePhase,
+    pub center: Vector,
+    /// Midpoint displacement from the initial two-pointer center.
+    pub translation: Vector,
+    /// Midpoint displacement since the previous callback.
+    pub translation_delta: Vector,
+    pub scale: f32,
+    pub scale_delta: f32,
+    pub rotation: f32,
+    pub rotation_delta: f32,
+}
+
 struct Contact {
     token: ClaimToken,
     position: Vector,
@@ -36,8 +50,16 @@ struct Contact {
 struct Sample {
     phase: GesturePhase,
     center: Vector,
+    translation: Vector,
     scale: f32,
     rotation: f32,
+}
+
+#[derive(Clone, Copy)]
+enum Recognition {
+    Pinch(f32),
+    Rotate(f32),
+    Transform { distance: f32, rotation: f32 },
 }
 
 #[derive(Default)]
@@ -45,6 +67,7 @@ struct TwoPointers {
     contacts: Vec<Contact>,
     distance: f32,
     angle: f32,
+    center: Vector,
     rotation: f32,
     started: bool,
     last: Option<Sample>,
@@ -56,6 +79,7 @@ impl TwoPointers {
             contact.token.dismiss();
         }
         self.distance = 0.0;
+        self.center = Vector::ZERO;
         self.rotation = 0.0;
         self.started = false;
         self.last = None;
@@ -77,9 +101,13 @@ impl TwoPointers {
         &mut self,
         event: &PointerEvent,
         token: &ClaimToken,
-        threshold: f32,
-        rotate: bool,
+        recognition: Recognition,
     ) -> Option<Sample> {
+        // A mouse (including an emulated mouse) is never a second finger.
+        if event.pointer_type() != PointerType::Touch {
+            token.dismiss();
+            return None;
+        }
         let index = self
             .contacts
             .iter()
@@ -90,7 +118,12 @@ impl TwoPointers {
             }
             if self.contacts.len() == 2 {
                 token.dismiss();
-                return None;
+                let cancelled = self.last.map(|sample| Sample {
+                    phase: GesturePhase::Cancel,
+                    ..sample
+                });
+                self.clear();
+                return cancelled;
             }
             self.contacts.push(Contact {
                 token: token.clone(),
@@ -100,6 +133,7 @@ impl TwoPointers {
                 let span = self.contacts[1].position - self.contacts[0].position;
                 self.distance = span.length();
                 self.angle = span.y.atan2(span.x);
+                self.center = (self.contacts[0].position + self.contacts[1].position) * 0.5;
                 self.rotation = 0.0;
             }
             return None;
@@ -124,10 +158,18 @@ impl TwoPointers {
                     self.rotation += (angle - self.angle + PI).rem_euclid(TAU) - PI;
                     self.angle = angle;
                 }
-                let crossed = if rotate {
-                    self.rotation.abs() > threshold
-                } else {
-                    (distance - self.distance).abs() > threshold
+                let current_center = (self.contacts[0].position + self.contacts[1].position) * 0.5;
+                let moved = (current_center - self.center).length();
+                let changed_distance = (distance - self.distance).abs();
+                let changed_rotation = self.rotation.abs();
+                let crossed = match recognition {
+                    Recognition::Pinch(threshold) => changed_distance > threshold,
+                    Recognition::Rotate(threshold) => changed_rotation > threshold,
+                    Recognition::Transform { distance, rotation } => {
+                        changed_distance > distance
+                            || changed_rotation > rotation
+                            || moved > distance
+                    }
                 };
                 let phase = if self.started {
                     Some(if ending {
@@ -153,7 +195,8 @@ impl TwoPointers {
                 if let Some(phase) = phase {
                     let sample = Sample {
                         phase,
-                        center: (self.contacts[0].position + self.contacts[1].position) * 0.5,
+                        center: current_center,
+                        translation: current_center - self.center,
                         scale: distance / self.distance,
                         rotation: self.rotation,
                     };
@@ -210,7 +253,10 @@ impl PinchGesture {
 
 impl Gesture for PinchGesture {
     fn on_event(&mut self, event: &PointerEvent, token: &ClaimToken) {
-        if let Some(sample) = self.pointers.event(event, token, self.threshold, false) {
+        if let Some(sample) = self
+            .pointers
+            .event(event, token, Recognition::Pinch(self.threshold))
+        {
             self.emit(sample);
         }
     }
@@ -226,6 +272,74 @@ pub struct RotateGesture {
     pointers: TwoPointers,
     previous: f32,
     pub(crate) on_rotate: HookFn<RotateEvent>,
+}
+
+pub struct TransformGesture {
+    distance_threshold: f32,
+    rotation_threshold: f32,
+    pointers: TwoPointers,
+    previous_scale: f32,
+    previous_rotation: f32,
+    previous_translation: Vector,
+    pub(crate) on_transform: HookFn<TransformEvent>,
+}
+
+impl Default for TransformGesture {
+    fn default() -> Self {
+        Self {
+            distance_threshold: 10.,
+            rotation_threshold: 0.1,
+            pointers: TwoPointers::default(),
+            previous_scale: 1.,
+            previous_rotation: 0.,
+            previous_translation: Vector::ZERO,
+            on_transform: HookFn::default(),
+        }
+    }
+}
+
+impl TransformGesture {
+    fn emit(&mut self, sample: Sample) {
+        if sample.phase == GesturePhase::Start {
+            self.previous_scale = 1.;
+            self.previous_rotation = 0.;
+            self.previous_translation = Vector::ZERO;
+        }
+        self.on_transform.invoke(&TransformEvent {
+            phase: sample.phase,
+            center: sample.center,
+            translation: sample.translation,
+            translation_delta: sample.translation - self.previous_translation,
+            scale: sample.scale,
+            scale_delta: sample.scale - self.previous_scale,
+            rotation: sample.rotation,
+            rotation_delta: sample.rotation - self.previous_rotation,
+        });
+        self.previous_scale = sample.scale;
+        self.previous_rotation = sample.rotation;
+        self.previous_translation = sample.translation;
+    }
+}
+
+impl Gesture for TransformGesture {
+    fn on_event(&mut self, event: &PointerEvent, token: &ClaimToken) {
+        if let Some(sample) = self.pointers.event(
+            event,
+            token,
+            Recognition::Transform {
+                distance: self.distance_threshold,
+                rotation: self.rotation_threshold,
+            },
+        ) {
+            self.emit(sample);
+        }
+    }
+
+    fn on_rejected(&mut self, id: PointerId) {
+        if let Some(sample) = self.pointers.rejected(id) {
+            self.emit(sample);
+        }
+    }
 }
 
 impl Default for RotateGesture {
@@ -262,7 +376,10 @@ impl RotateGesture {
 
 impl Gesture for RotateGesture {
     fn on_event(&mut self, event: &PointerEvent, token: &ClaimToken) {
-        if let Some(sample) = self.pointers.event(event, token, self.threshold, true) {
+        if let Some(sample) = self
+            .pointers
+            .event(event, token, Recognition::Rotate(self.threshold))
+        {
             self.emit(sample);
         }
     }

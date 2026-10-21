@@ -44,7 +44,10 @@ pub fn list(style: &mut Style, #[default] marker: ListMarker) {
     let line_height = style.take_line_height();
     let font_family = style.take_font_family();
     let font_weight = style.take_font_weight();
-    let color = style.take_color();
+    let color = style
+        .declared_color()
+        .or_else(mue_macroquad::theme::inherited_foreground)
+        .unwrap_or_else(|| style.take_color());
     let rows = map_keyed(
         entries,
         |entry| *entry,

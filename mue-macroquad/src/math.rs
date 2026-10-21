@@ -3,6 +3,20 @@ pub use glam::vec2;
 pub type Vector = glam::Vec2;
 pub type Matrix = glam::Mat3;
 
+/// Project a canvas point through a homography, including perspective division.
+pub fn project_point(matrix: Matrix, point: Vector) -> Vector {
+    let point = matrix * point.extend(1.);
+    point.truncate() / point.z
+}
+
+/// Embed a canvas homography without discarding its homogeneous coordinate.
+pub(crate) fn model_matrix(matrix: Matrix) -> macroquad::math::Mat4 {
+    let c = matrix.to_cols_array();
+    macroquad::math::Mat4::from_cols_array(&[
+        c[0], c[1], 0., c[2], c[3], c[4], 0., c[5], 0., 0., 1., 0., c[6], c[7], 0., c[8],
+    ])
+}
+
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,

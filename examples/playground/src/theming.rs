@@ -22,22 +22,54 @@ fn build_tile(caption: Prop<Rc<str>>) -> CenterBuilder {
 }
 
 pub fn page() -> Node {
-    let (dark, control) = toggle("Theme");
+    let dark = dark_theme();
     let tile = factory(build_tile).defaults(Options { accent: false });
-    let panel = factory(|build: Rc<dyn Fn() -> Owned<Children>>| container().children(build()));
+    let panel_factory =
+        factory(|build: Rc<dyn Fn() -> Owned<Children>>| container().children(build()));
     let first = theme! {
-        tile[accent] { background: { CORAL }; }
-        tile { background: { BLUE }; }
-        panel > tile + tile { opacity: 82%; }
-        panel > tile ~ tile { transform: translateX(4px); }
+        tile[accent] { background: { CORAL }; transform: scale(1.04); }
+        tile { background: { BLUE }; transform: scale(1.02); }
+        panel_factory > tile + tile { opacity: 82%; }
+        panel_factory > tile ~ tile { transform: translateX(4px); }
     };
     let second = theme! {
-        tile[accent] { background: { BLUE }; }
-        tile { background: { PANEL }; }
+        tile[accent] { background: { BLUE }; transform: scale(1.); }
+        tile { background: { panel_brush() }; transform: scale(1.); }
     };
     let nested = theme! {
         tile { background: { Color::from_rgba(70, 140, 100, 255) }; }
     };
+    let theme_code = dark.map(|is_dark| {
+        if is_dark {
+            r#"theme! {
+    tile[accent] {
+        background: { BLUE };
+        transform: scale(1.);
+    }
+    tile {
+        background: { panel_brush() };
+        transform: scale(1.);
+    }
+}"#
+        } else {
+            r#"theme! {
+    tile[accent] {
+        background: { CORAL };
+        transform: scale(1.04);
+    }
+    tile {
+        background: { BLUE };
+        transform: scale(1.02);
+    }
+    panel_factory > tile + tile {
+        opacity: 82%;
+    }
+    panel_factory > tile ~ tile {
+        transform: translateX(4px);
+    }
+}"#
+        }
+    });
     stack()
         .style(style! {
             width: 100%;
@@ -45,7 +77,10 @@ pub fn page() -> Node {
             gap: {responsive::ui(20.)};
         })
         .children((
-            control,
+            button(
+                dark.map(|is_dark| format!("Theme: {}", if is_dark { "Dark" } else { "Light" })),
+                toggle_theme,
+            ),
             provide_theme(dark.select(second, first), move || {
                 stack()
                     .style(style! {
@@ -55,10 +90,10 @@ pub fn page() -> Node {
                     })
                     .children((
                         tile.create("Default")
-                            .style(style! { transition: 300ms ease-in-out; }),
+                            .style(style! { transition: 220ms spring; }),
                         tile.create("Accent")
                             .options(|options| options.accent = true)
-                            .style(style! { transition: 300ms ease-in-out; }),
+                            .style(style! { transition: 220ms spring; }),
                         {
                             let build: Rc<dyn Fn() -> Owned<Children>> = Rc::new({
                                 let tile = tile.clone();
@@ -67,16 +102,25 @@ pub fn page() -> Node {
                                         .into_children()
                                 }
                             });
-                            panel.create(build).style(style! {
+                            panel_factory.create(build).style(style! {
                                 width: 100%;
                                 gap: {responsive::ui(8.)};
                             })
                         },
                         provide_theme(nested, move || {
                             tile.create("Nested")
-                                .style(style! { transition: 300ms ease-in-out; })
+                                .style(style! { transition: 220ms spring; })
                         }),
                     ))
+            }),
+            code_block(theme_code).style(style! {
+                width: 100%;
+                min-width: 0px;
+                text-wrap: {true};
+                font-size: {responsive::font(16.)};
+                line-height: {responsive::ui(24.)};
+                padding: {(responsive::ui(16.),)};
+                border-radius: {responsive::ui(6.)};
             }),
         ))
         .into_node()

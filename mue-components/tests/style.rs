@@ -245,6 +245,20 @@ fn transform_uses_border_box_percentages_origin_and_style_order() {
 }
 
 #[test]
+fn perspective_transform_projects_through_homogeneous_coordinate() {
+    use mue_macroquad::style::{Transform, TransformOp};
+
+    let bounds = Rect::new(0., 0., 100., 100.);
+    let transform = Transform(vec![
+        TransformOp::Perspective(100.),
+        TransformOp::TranslateZ(50.),
+    ]);
+    let matrix = transform.resolve(bounds, Default::default());
+    let projected = mue_macroquad::math::project_point(matrix, Vector::new(10., 0.));
+    assert!((projected.x + 30.).abs() < 0.001);
+}
+
+#[test]
 fn applying_style_obeys_call_order_and_keeps_events() {
     let handler = std::cell::Cell::new(false);
     let mut builder = flexbox()
