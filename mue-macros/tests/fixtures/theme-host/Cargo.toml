@@ -1,0 +1,9 @@
+[package]
+name = "mue-macroquad"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+mue-macros = { path = "../../.." }

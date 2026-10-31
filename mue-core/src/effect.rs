@@ -202,8 +202,9 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
             location,
         )
         .register(rt);
+        let effect = Effect::new(effect_id);
         rt.update(effect_id);
-        Effect::new(effect_id)
+        effect
     })
 }
 
@@ -255,8 +256,9 @@ fn create_computed<T: 'static>(callback: EffectCallback) -> ReadSignal<T> {
         )
         .register(rt);
         rt.signal_mut(signal_id).effect = Some(effect_id);
+        let signal = ReadSignal::new(signal_id);
         rt.update(effect_id);
-        ReadSignal::new(signal_id)
+        signal
     })
 }
 

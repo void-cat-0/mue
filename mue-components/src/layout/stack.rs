@@ -1,11 +1,16 @@
-use mue_macroquad::node::flexbox::{FlexboxBuilder, flexbox, render_container};
+use mue_macroquad::node::{
+    NodePlan,
+    flexbox::{FlexboxBuilder, flexbox, render_container},
+};
 use mue_macroquad::style::{Style, StyleableExt};
 
 /// A vertical flex stack with 8 pixels between children.
 #[mue_macros::node]
-pub fn stack(style: &mut Style) {
-    style.provide_defaults(Style::new().flex_column().gap(8.));
-    render_container(style);
+#[theme]
+pub fn stack() -> NodePlan<impl FnOnce(&mut Style)> {
+    NodePlan::new(Style::new().flex_column().gap(8.), move |style| {
+        render_container(style)
+    })
 }
 
 /// A horizontal stack with centered cross-axis alignment.

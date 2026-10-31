@@ -1,421 +1,553 @@
 use proc_macro::TokenStream;
-use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro2::{Span as TokenSpan, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::{Group, Span, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
-use syn::visit_mut::VisitMut;
 use syn::{
-    Expr, Ident, Token, braced, parenthesized,
+    Ident, LitStr, Token, TypePath, braced,
     parse::{Parse, ParseStream},
-    token,
 };
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
-    let tokens: TokenStream2 = input.into();
-    let result = if matches!(tokens.clone().into_iter().next(), Some(TokenTree::Punct(p)) if p.as_char() == '|')
-    {
-        syn::parse2::<ThemeInput>(tokens).and_then(expand_theme)
-    } else {
-        syn::parse2::<SelectorTheme>(tokens).and_then(expand_selectors)
-    };
-    result.unwrap_or_else(syn::Error::into_compile_error).into()
+    syn::parse::<ThemeRules>(input)
+        .and_then(expand_rules)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
-struct ThemeArm {
-    target: Option<proc_macro2::TokenStream>,
-    binding: Option<Ident>,
-    guard: Option<Expr>,
-    body: Expr,
+pub(crate) fn expand_class(input: TokenStream) -> TokenStream {
+    syn::parse::<ClassInput>(input)
+        .and_then(expand_class_name)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
-struct ThemeInput {
-    component: Ident,
-    style: Ident,
-    arms: Vec<ThemeArm>,
-}
+struct ClassInput(LitStr);
 
-impl Parse for ThemeInput {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        input.parse::<Token![|]>()?;
-        let component: Ident = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let style: Ident = input.parse()?;
-        input.parse::<Token![|]>()?;
-        input.parse::<Token![match]>()?;
-        let subject: Ident = input.parse()?;
-        if subject != component {
-            return Err(syn::Error::new(
-                subject.span(),
-                "theme match must use the closure's component parameter",
-            ));
-        }
-        let content;
-        braced!(content in input);
-        let mut arms = Vec::new();
-        while !content.is_empty() {
-            let target = if content.peek(Token![_]) {
-                content.parse::<Token![_]>()?;
-                None
-            } else {
-                let path: syn::Path = content.parse()?;
-                if path
-                    .segments
-                    .iter()
-                    .any(|s| !matches!(s.arguments, syn::PathArguments::None))
-                {
-                    return Err(syn::Error::new_spanned(
-                        path,
-                        "factory selectors cannot have generic arguments",
-                    ));
-                }
-                let mut tokens = quote! { #path };
-                while content.peek(Token![.]) {
-                    content.parse::<Token![.]>()?;
-                    let field: Ident = content.parse()?;
-                    tokens = quote! { #tokens . #field };
-                }
-                Some(tokens)
-            };
-            let binding = if content.peek(token::Paren) {
-                let args;
-                parenthesized!(args in content);
-                let name: Ident = args.parse().map_err(|_| {
-                    syn::Error::new(
-                        args.span(),
-                        "factory parameter binding must be one identifier",
-                    )
-                })?;
-                if !args.is_empty() {
-                    return Err(syn::Error::new(
-                        args.span(),
-                        "factory parameter binding must be one identifier",
-                    ));
-                }
-                Some(name)
-            } else {
-                None
-            };
-            if target.is_none() && binding.is_some() {
-                return Err(syn::Error::new(
-                    content.span(),
-                    "fallback cannot bind options",
-                ));
-            }
-            let guard = if content.peek(Token![if]) {
-                content.parse::<Token![if]>()?;
-                Some(content.parse()?)
-            } else {
-                None
-            };
-            if target.is_none() && guard.is_some() {
-                return Err(syn::Error::new(
-                    content.span(),
-                    "fallback cannot have a guard",
-                ));
-            }
-            content.parse::<Token![=>]>()?;
-            let body: Expr = content.parse()?;
-            arms.push(ThemeArm {
-                target,
-                binding,
-                guard,
-                body,
-            });
-            if !content.is_empty() {
-                content.parse::<Token![,]>()?;
-            }
-        }
-        if arms.last().is_none_or(|arm| arm.target.is_some())
-            || arms[..arms.len().saturating_sub(1)]
-                .iter()
-                .any(|arm| arm.target.is_none())
-        {
-            return Err(syn::Error::new(
-                content.span(),
-                "theme requires exactly one final `_ => ...` fallback",
-            ));
-        }
+impl Parse for ClassInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let value: LitStr = input.parse()?;
         if !input.is_empty() {
-            return Err(input.error("unexpected tokens after theme match"));
+            return Err(input.error("class! accepts exactly one string literal"));
         }
-        Ok(Self {
-            component,
-            style,
-            arms,
-        })
+        validate_class_name(&value.value())
+            .map_err(|message| syn::Error::new(value.span(), message))?;
+        Ok(Self(value))
     }
 }
 
-fn expand_theme(input: ThemeInput) -> syn::Result<proc_macro2::TokenStream> {
-    let macroquad = match crate_name("mue-macroquad")
-        .map_err(|error| syn::Error::new(proc_macro2::Span::call_site(), error))?
-    {
-        FoundCrate::Itself => quote! { crate },
-        FoundCrate::Name(name) => {
-            let name = Ident::new(&name, proc_macro2::Span::call_site());
-            quote! { ::#name }
-        }
+fn expand_class_name(input: ClassInput) -> syn::Result<TokenStream2> {
+    let host = crate::paths::host()?;
+    let value = input.0;
+    Ok(quote! {
+        const { #host::theme::ClassName::from_static_checked(#value) }
+    })
+}
+
+fn validate_class_name(value: &str) -> Result<(), &'static str> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err("class name cannot be empty");
     };
-    let c = input.component;
-    let s = input.style;
-    let mut clones = Vec::new();
-    let mut branches = Vec::new();
-    let last = input.arms.len() - 1;
-    for (index, arm) in input.arms.into_iter().enumerate() {
-        let body = arm.body;
-        if index == last {
-            branches.push(quote! { #body });
-            break;
-        }
-        let target = arm.target.expect("checked by parser");
-        let handle = Ident::new(
-            &format!("__mue_theme_factory_{index}"),
-            proc_macro2::Span::mixed_site(),
-        );
-        clones.push(quote! { let #handle = (#target).clone(); });
-        let condition = arm
-            .guard
-            .map(|guard| quote! { #guard })
-            .unwrap_or_else(|| quote! { true });
-        if let Some(binding) = arm.binding {
-            branches.push(quote! { if let Some(#binding) = #c.options(&#handle) { if #condition { return #body; } } });
-        } else {
-            branches.push(
-                quote! { if #c.options(&#handle).is_some() { if #condition { return #body; } } },
-            );
-        }
+    if !first.is_ascii_alphabetic() {
+        return Err("class name must start with an ASCII letter");
     }
-    Ok(quote! {{
-        #(#clones)*
-        #macroquad::theme::theme(move |#c: #macroquad::theme::ComponentRef<'_>, #s: #macroquad::style::Style| {
-            #(#branches)*
-        })
-    }})
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+        return Err("class name may contain only ASCII letters, digits, '_' and '-'");
+    }
+    Ok(())
 }
 
-struct SelectorTheme {
-    rules: Vec<SelectorRule>,
-}
-struct SelectorRule {
-    chain: Vec<(Option<Ident>, SelectorRelation)>,
-    predicate: Option<Expr>,
-    hover: bool,
-    class: Option<String>,
-    body: TokenStream2,
-}
-#[derive(Clone, Copy)]
-enum SelectorRelation {
-    Descendant,
-    Child,
-    AdjacentSibling,
-    GeneralSibling,
-}
+struct ThemeRules(Vec<RuleBlock>);
 
-impl syn::parse::Parse for SelectorTheme {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+impl Parse for ThemeRules {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut rules = Vec::new();
         while !input.is_empty() {
-            let mut selectors = vec![parse_selector(input)?];
+            let mut selectors = vec![parse_compound(input)?];
             while input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
-                selectors.push(parse_selector(input)?);
+                selectors.push(parse_compound(input)?);
+            }
+            if !input.peek(syn::token::Brace) {
+                return Err(input.error(
+                    "expected a style block; selector ids and combinators are not supported",
+                ));
             }
             let body;
             braced!(body in input);
-            let body: TokenStream2 = body.parse()?;
-            rules.extend(selectors.into_iter().map(|mut selector| {
-                selector.body = body.clone();
-                selector
-            }));
+            let declarations: TokenStream2 = body.parse()?;
+            validate_theme_declarations(declarations.clone())?;
+            rules.push(RuleBlock {
+                selectors,
+                declarations,
+            });
             if input.peek(Token![;]) {
                 input.parse::<Token![;]>()?;
             }
         }
-        Ok(Self { rules })
+        Ok(Self(rules))
     }
 }
 
-fn parse_selector(input: syn::parse::ParseStream) -> syn::Result<SelectorRule> {
-    let mut chain = Vec::new();
-    let mut predicate = None;
-    let mut hover = false;
-    let first = if input.peek(Token![*]) {
+struct RuleBlock {
+    selectors: Vec<CompoundSelector>,
+    declarations: TokenStream2,
+}
+
+struct ClassSelector {
+    name: String,
+    negated: bool,
+    span: Span,
+}
+
+struct OptionPredicate {
+    expression: syn::Expr,
+    dollar_references: usize,
+}
+
+struct CompoundSelector {
+    identity: Option<TypePath>,
+    classes: Vec<ClassSelector>,
+    predicate: Option<OptionPredicate>,
+    hovered: bool,
+}
+
+impl CompoundSelector {
+    fn specificity_class_count(&self) -> usize {
+        self.classes.len()
+            + usize::from(self.hovered)
+            + self
+                .predicate
+                .as_ref()
+                .map_or(0, |predicate| predicate.dollar_references)
+    }
+}
+
+fn parse_compound(input: ParseStream<'_>) -> syn::Result<CompoundSelector> {
+    let wildcard = input.peek(Token![*]);
+    let identity = if wildcard {
         input.parse::<Token![*]>()?;
         None
-    } else {
-        Some(input.parse::<Ident>()?)
-    };
-    chain.push((first, SelectorRelation::Descendant));
-    loop {
-        let relation = if input.peek(Token![>]) {
-            input.parse::<Token![>]>()?;
-            Some(SelectorRelation::Child)
-        } else if input.peek(Token![+]) {
-            input.parse::<Token![+]>()?;
-            Some(SelectorRelation::AdjacentSibling)
-        } else if input.peek(Token![~]) {
-            input.parse::<Token![~]>()?;
-            Some(SelectorRelation::GeneralSibling)
-        } else if input.peek(Ident) || input.peek(Token![*]) {
-            Some(SelectorRelation::Descendant)
-        } else {
-            None
-        };
-        let Some(relation) = relation else { break };
-        let target = if input.peek(Token![*]) {
-            input.parse::<Token![*]>()?;
-            None
-        } else {
-            Some(input.parse::<Ident>()?)
-        };
-        chain.push((target, relation));
-    }
-    let class = if input.peek(Token![.]) {
-        input.parse::<Token![.]>()?;
-        Some(input.parse::<Ident>()?.to_string())
+    } else if input.peek(Ident)
+        || input.peek(Token![::])
+        || input.peek(Token![crate])
+        || input.peek(Token![self])
+        || input.peek(Token![super])
+        || input.peek(Token![Self])
+    {
+        Some(input.parse::<TypePath>()?)
     } else {
         None
     };
-    if input.peek(syn::token::Bracket) {
+
+    let mut classes = Vec::new();
+    while input.peek(Token![.]) {
+        input.parse::<Token![.]>()?;
+        let negated = if input.peek(Token![!]) {
+            input.parse::<Token![!]>()?;
+            true
+        } else {
+            false
+        };
+        let (name, span) = parse_class_lexer(input)?;
+        classes.push(ClassSelector {
+            name,
+            negated,
+            span,
+        });
+    }
+
+    let predicate = if input.peek(syn::token::Bracket) {
         let content;
         syn::bracketed!(content in input);
-        let expr: Expr = content.parse()?;
-        if !content.is_empty() {
-            return Err(content.error("expected one option expression in selector brackets"));
+        if content.is_empty() {
+            return Err(content.error("option selector cannot be empty"));
         }
-        predicate = Some(expr);
-    }
-    if input.peek(Token![:]) {
+        if identity.is_none() {
+            return Err(content.error("an option predicate requires a named type identity"));
+        }
+        let tokens: TokenStream2 = content.parse()?;
+        let (tokens, dollar_references) = rewrite_dollar_references(tokens)?;
+        Some(OptionPredicate {
+            expression: syn::parse2(tokens)?,
+            dollar_references,
+        })
+    } else {
+        None
+    };
+
+    let hovered = if input.peek(Token![:]) {
         input.parse::<Token![:]>()?;
         let pseudo: Ident = input.parse()?;
         if pseudo != "hover" {
             return Err(syn::Error::new(pseudo.span(), "only :hover is supported"));
         }
-        hover = true;
+        true
+    } else {
+        false
+    };
+
+    if identity.is_none() && !wildcard && classes.is_empty() && !hovered {
+        return Err(input.error("selector compound must contain at least one condition"));
     }
-    Ok(SelectorRule {
-        chain,
+    if input.peek(syn::token::Bracket) {
+        return Err(input.error("an option predicate may occur once, before :hover"));
+    }
+    if input.peek(Token![:]) {
+        return Err(input.error("only one :hover pseudo-class is supported"));
+    }
+    if input.peek(Token![.]) {
+        return Err(input.error("class selectors must precede the option predicate and :hover"));
+    }
+    Ok(CompoundSelector {
+        identity,
+        classes,
         predicate,
-        hover,
-        class,
-        body: TokenStream2::new(),
+        hovered,
     })
 }
 
-struct PrefixOptionPaths;
-impl syn::visit_mut::VisitMut for PrefixOptionPaths {
-    fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
-        if let syn::Expr::Path(path) = expression
-            && path.qself.is_none()
-            && path.path.leading_colon.is_none()
-            && path.path.segments.len() == 1
-        {
-            let ident = path.path.segments[0].ident.clone();
-            if ident != "true" && ident != "false" {
-                // Selector expressions use the option's native value.  This
-                // keeps ordinary fields (`progress < 32`) useful while still
-                // allowing reactive fields through an explicit `.get()`.
-                *expression = syn::parse_quote!(options.#ident);
-                return;
-            }
+// A class starts with an ASCII identifier token. Hyphens separate identifier
+// or numeric fragments; unrelated neighboring tokens never become one name.
+fn parse_class_lexer(input: ParseStream<'_>) -> syn::Result<(String, Span)> {
+    let first = input
+        .parse::<TokenTree>()
+        .map_err(|_| syn::Error::new(input.span(), "expected an ASCII class name after '.'"))?;
+    let span = first.span();
+    let mut name = match first {
+        TokenTree::Ident(ident) => ident.to_string(),
+        _ => {
+            return Err(syn::Error::new(
+                span,
+                "class name must start with an ASCII letter",
+            ));
         }
-        syn::visit_mut::visit_expr_mut(self, expression);
+    };
+    validate_class_name(&name).map_err(|message| syn::Error::new(span, message))?;
+
+    while input.peek(Token![-]) {
+        input.parse::<Token![-]>()?;
+        name.push('-');
+        let next = input.fork().parse::<TokenTree>();
+        let fragment = match next {
+            Ok(TokenTree::Ident(ident)) => ident.to_string(),
+            Ok(TokenTree::Literal(literal)) => literal.to_string(),
+            _ => continue,
+        };
+        if fragment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            let _ = input.parse::<TokenTree>()?;
+            name.push_str(&fragment);
+        }
     }
+    validate_class_name(&name).map_err(|message| syn::Error::new(span, message))?;
+    Ok((name, span))
 }
 
-fn expand_selectors(input: SelectorTheme) -> syn::Result<TokenStream2> {
-    let host = crate::paths::host()?;
-    let mut indexed: Vec<_> = input.rules.into_iter().enumerate().collect();
-    indexed.sort_by_key(|(_, rule)| {
-        let types = rule.chain.iter().filter(|(name, _)| name.is_some()).count();
-        let predicates = usize::from(rule.predicate.is_some())
-            + usize::from(rule.class.is_some())
-            + usize::from(rule.hover);
-        types * 100 + predicates * 10
-    });
-    let mut clones = Vec::new();
-    let mut rules = Vec::new();
-    for (index, rule) in indexed {
-        let body = rule.body;
-        let style = syn::parse2::<crate::style::Declarations>(body)?.expand()?;
-        let mut handles = Vec::new();
-        for (position, (name, _)) in rule.chain.iter().enumerate() {
-            if let Some(name) = name {
-                let handle = syn::Ident::new(
-                    &format!("__mue_selector_{index}_{position}"),
-                    TokenSpan::mixed_site(),
-                );
-                clones.push(quote! { let #handle = (#name).clone(); });
-                handles.push(Some(handle));
-            } else {
-                handles.push(None);
+// Rewriting token groups before syn parsing also reaches opaque macro inputs.
+fn rewrite_dollar_references(tokens: TokenStream2) -> syn::Result<(TokenStream2, usize)> {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    let mut output = Vec::new();
+    let mut references = 0;
+    let options = Ident::new("__mue_options", Span::mixed_site());
+    let mut index = 0;
+    while index < tokens.len() {
+        match &tokens[index] {
+            TokenTree::Punct(punct) if punct.as_char() == '$' => {
+                let Some(TokenTree::Ident(field)) = tokens.get(index + 1) else {
+                    return Err(syn::Error::new(
+                        punct.span(),
+                        "'$' in an option predicate must be followed by a field name",
+                    ));
+                };
+                output.extend(quote!(#options . #field ()));
+                references += 1;
+                index += 2;
+            }
+            TokenTree::Group(group) => {
+                let (inner, count) = rewrite_dollar_references(group.stream())?;
+                let mut rewritten = Group::new(group.delimiter(), inner);
+                rewritten.set_span(group.span());
+                output.push(TokenTree::Group(rewritten));
+                references += count;
+                index += 1;
+            }
+            tree => {
+                output.push(tree.clone());
+                index += 1;
             }
         }
-        let chain_ids = handles.iter().map(|handle| match handle {
-            Some(handle) => quote!(#handle.identity()),
-            None => quote!(0usize),
-        });
-        let relations: Vec<_> = rule
-            .chain
-            .iter()
-            .skip(1)
-            .map(|(_, relation)| match relation {
-                SelectorRelation::Descendant => 0u8,
-                SelectorRelation::Child => 1u8,
-                SelectorRelation::AdjacentSibling => 2u8,
-                SelectorRelation::GeneralSibling => 3u8,
-            })
-            .collect();
-        let chain_match = if rule.chain.len() == 1 && handles[0].is_none() {
-            quote!(true)
-        } else {
-            quote!(reference.matches_chain(&[#(#chain_ids),*], &[#(#relations),*]))
-        };
-        let option = if let Some(mut expr) = rule.predicate {
-            let last = handles.last().and_then(Clone::clone).ok_or_else(|| {
-                syn::Error::new(
-                    TokenSpan::call_site(),
-                    "an option selector needs a named final component",
-                )
+    }
+    Ok((output.into_iter().collect(), references))
+}
+
+// Inspect declaration names only. Values remain opaque to this check so typed
+// Rust expressions keep the exact semantics of style!.
+fn validate_theme_declarations(tokens: TokenStream2) -> syn::Result<()> {
+    let mut at_property = true;
+    let mut property = String::new();
+    for tree in tokens {
+        if at_property {
+            match &tree {
+                TokenTree::Ident(ident) => property.push_str(&ident.to_string()),
+                TokenTree::Punct(punct) if punct.as_char() == '-' => property.push('-'),
+                TokenTree::Punct(punct) if punct.as_char() == ':' => {
+                    let property = property.replace('_', "-");
+                    if property == "children" || property == "hooks" || property.starts_with("on-")
+                    {
+                        return Err(syn::Error::new(
+                            tree.span(),
+                            "theme rules cannot declare children or event hooks",
+                        ));
+                    }
+                    at_property = false;
+                }
+                _ => {}
+            }
+        } else if matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';') {
+            at_property = true;
+            property.clear();
+        }
+    }
+    Ok(())
+}
+
+fn expand_rules(input: ThemeRules) -> syn::Result<TokenStream2> {
+    let host = crate::paths::host()?;
+    let mut rules = Vec::with_capacity(input.0.len());
+    for (rule_index, rule) in input.0.into_iter().enumerate() {
+        let mut selectors = Vec::with_capacity(rule.selectors.len());
+        for (selector_index, selector) in rule.selectors.into_iter().enumerate() {
+            let component = Ident::new(
+                &format!("__mue_component_{rule_index}_{selector_index}"),
+                Span::mixed_site(),
+            );
+            let mut conditions = Vec::new();
+            let class_count = u32::try_from(selector.specificity_class_count()).map_err(|_| {
+                syn::Error::new(Span::call_site(), "selector specificity exceeds u32")
             })?;
-            if let Expr::Path(path) = &expr
-                && path.qself.is_none()
-                && path.path.leading_colon.is_none()
-                && path.path.segments.len() == 1
-            {
-                let field = &path.path.segments[0].ident;
-                let class = syn::LitStr::new(&field.to_string(), field.span());
-                quote!(reference.has_class(#class) || reference.options(&#last).is_some_and(|options| options.#field.is_set()))
+            let type_count = if let Some(identity) = selector.identity.as_ref() {
+                conditions.push(quote!(#component.is::<#identity>()));
+                1u32
             } else {
-                PrefixOptionPaths.visit_expr_mut(&mut expr);
-                quote!(reference.options(&#last).is_some_and(|options| #expr))
+                0u32
+            };
+            for class in selector.classes {
+                let name = LitStr::new(&class.name, class.span);
+                if class.negated {
+                    conditions.push(quote!(!#component.has_class(#name)));
+                } else {
+                    conditions.push(quote!(#component.has_class(#name)));
+                }
             }
-        } else {
-            quote!(true)
-        };
-        let class = if let Some(class) = rule.class {
-            let class = syn::LitStr::new(&class, TokenSpan::call_site());
-            quote!(reference.has_class(#class))
-        } else {
-            quote!(true)
-        };
-        let hover = if rule.hover {
-            quote!(reference.is_hovered())
-        } else {
-            quote!(true)
-        };
+            if let Some(predicate) = selector.predicate {
+                let expression = predicate.expression;
+                if predicate.dollar_references != 0 {
+                    let options = Ident::new("__mue_options", Span::mixed_site());
+                    let identity = selector.identity.expect("checked by parser");
+                    conditions.push(quote! {
+                        #component.options::<#identity>()
+                            .is_some_and(|#options| #expression)
+                    });
+                } else {
+                    conditions.push(quote!((#expression)));
+                }
+            }
+            if selector.hovered {
+                conditions.push(quote!(#component.hovered()));
+            }
+            let predicate = if conditions.is_empty() {
+                quote!(true)
+            } else {
+                quote!(#(#conditions)&&*)
+            };
+            selectors.push(quote! {
+                #host::theme::Selector::new(
+                    #host::theme::Specificity(0, #class_count, #type_count),
+                    move |#component: #host::theme::ComponentRef<'_>| -> bool { #predicate },
+                )
+            });
+        }
+        let declarations =
+            syn::parse2::<crate::style::Declarations>(rule.declarations)?.expand()?;
         rules.push(quote! {
-            if #chain_match && #option && #class && #hover {
-                __mue_theme_style = #host::style::Styleable::style(__mue_theme_style, #style);
-            }
+            #host::theme::Rule::new(
+                ::std::vec![#(#selectors),*],
+                move || #declarations,
+            )
         });
     }
-    Ok(quote! {{
-        #(#clones)*
-        use #host::__private::core::signal::Access as _;
-        use #host::theme::SelectorValue as _;
-        #host::theme::theme(move |reference, mut __mue_theme_style| {
-            #(#rules)*
-            __mue_theme_style
-        })
-    }})
+    Ok(quote! {
+        #host::theme::Theme::new(::std::vec![#(#rules),*])
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::ToTokens;
+
+    fn parse(source: &str) -> syn::Result<ThemeRules> {
+        syn::parse_str(source)
+    }
+
+    #[test]
+    fn parses_generic_type_paths_and_lists_without_splitting_generic_commas() {
+        let rules =
+            parse("crate::widgets::Badge<u32, 4>, Button.primary.!disabled { opacity: 80%; }")
+                .unwrap();
+        assert_eq!(rules.0.len(), 1);
+        assert_eq!(rules.0[0].selectors.len(), 2);
+        assert_eq!(
+            rules.0[0].selectors[0]
+                .identity
+                .as_ref()
+                .unwrap()
+                .path
+                .segments
+                .len(),
+            3
+        );
+        assert_eq!(rules.0[0].selectors[1].classes.len(), 2);
+        assert!(rules.0[0].selectors[1].classes[1].negated);
+        for source in [
+            "::widgets::Badge<'static, (u32, u64), { 2 + 2 }> {}",
+            "self::Button {}",
+            "super::Button {}",
+            "Self {}",
+        ] {
+            assert!(parse(source).is_ok(), "{source}");
+        }
+    }
+
+    #[test]
+    fn parses_class_lexer_wildcard_and_bare_hover() {
+        let rules = parse(".my-class.foo_2:hover {} * {} *.my-class {} :hover {}").unwrap();
+        assert_eq!(rules.0.len(), 4);
+        let selector = &rules.0[0].selectors[0];
+        assert_eq!(selector.classes[0].name, "my-class");
+        assert_eq!(selector.classes[1].name, "foo_2");
+        assert!(selector.hovered);
+        assert_eq!(selector.specificity_class_count(), 3);
+        for source in [".my-class-2 {}", ".a--b- {}", ".type {}"] {
+            assert!(parse(source).is_ok(), "{source}");
+        }
+    }
+
+    #[test]
+    fn recursively_rewrites_dollars_even_inside_opaque_macro_groups() {
+        let (rewritten, count) = rewrite_dollar_references(
+            "matches!($level, H2) && predicate!({ [$active, ($progress > 2)] })"
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(count, 3);
+        let rendered = rewritten.to_string();
+        for field in ["level", "active", "progress"] {
+            assert!(
+                rendered.contains(&format!("__mue_options . {field} ()")),
+                "{rendered}"
+            );
+        }
+        assert!(rendered.contains("H2"));
+        assert!(!rendered.contains('$'));
+    }
+
+    #[test]
+    fn counts_every_dollar_occurrence_and_keeps_list_specificities_separate() {
+        let rules = parse("Button[$a || ($b && $a)], .selected:hover {} ").unwrap();
+        assert_eq!(rules.0[0].selectors[0].specificity_class_count(), 3);
+        assert_eq!(rules.0[0].selectors[1].specificity_class_count(), 2);
+    }
+
+    #[test]
+    fn leaves_ordinary_rust_identifiers_constants_and_strings_unchanged() {
+        let rules =
+            parse(r#"Button[local_enabled && matches!($level, H2) && label == "$level"] {}"#)
+                .unwrap();
+        let predicate = rules.0[0].selectors[0].predicate.as_ref().unwrap();
+        assert_eq!(predicate.dollar_references, 1);
+        let expression = predicate.expression.to_token_stream().to_string();
+        assert!(expression.contains("local_enabled"));
+        assert!(expression.contains("H2"));
+        assert!(expression.contains(r#""$level""#));
+        assert!(!expression.contains("__mue_options . local_enabled"));
+        let rules = parse("Button[local_enabled] {} ").unwrap();
+        let predicate = rules.0[0].selectors[0].predicate.as_ref().unwrap();
+        assert_eq!(predicate.dollar_references, 0);
+        assert_eq!(
+            predicate.expression.to_token_stream().to_string(),
+            "local_enabled"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_or_misordered_selectors() {
+        for invalid in [
+            "#button {}",
+            "Button > Label {}",
+            "Button + Label {}",
+            "Button ~ Label {}",
+            "Button Label {}",
+            "[$active] {}",
+            "*[$active] {}",
+            ".active[$active] {}",
+            "Button:not(.active) {}",
+            "Button:hover:hover {}",
+            "Button[$a].active {}",
+            "Button:hover[$a] {}",
+            "Button[$a][$b] {}",
+            "Button[] {}",
+            "Button[$] {}",
+            "Button[$(active)] {}",
+            "Button, {}",
+            "{}",
+            ".2fast {}",
+            ".über {}",
+            ".r#type {}",
+            ".foo bar {}",
+            ".foo-1.2 {}",
+            ".foo+bar {}",
+            "|c, style| match c { _ => style }",
+        ] {
+            assert!(
+                parse(invalid).is_err(),
+                "accepted invalid selector: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_children_and_hooks_but_does_not_inspect_rust_value_tokens() {
+        for invalid in [
+            "Button { children: { build() }; }",
+            "Button { hooks: { hooks }; }",
+            "Button { on-tap: { || {} }; }",
+            "Button { on_tap: { || {} }; }",
+        ] {
+            assert!(parse(invalid).is_err(), "{invalid}");
+        }
+        assert!(parse("Button { opacity: { value(children, hooks) }; }").is_ok());
+    }
+
+    #[test]
+    fn class_macro_validates_a_single_literal_in_both_expression_contexts() {
+        for valid in [r#""compact""#, r#""my-class_2""#, r##"r#"raw-name"#"##] {
+            assert!(syn::parse_str::<ClassInput>(valid).is_ok(), "{valid}");
+        }
+        for invalid in [
+            r#""""#,
+            r#""2fast""#,
+            r#""not valid""#,
+            r#""über""#,
+            r#""dot.name""#,
+            r#""valid", extra"#,
+            "local_name",
+            "42",
+        ] {
+            assert!(syn::parse_str::<ClassInput>(invalid).is_err(), "{invalid}");
+        }
+    }
 }

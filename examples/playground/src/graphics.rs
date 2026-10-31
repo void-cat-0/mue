@@ -4,7 +4,7 @@ use mue_components::*;
 use mue_macroquad::{
     math::{Rect, vec2},
     shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
-    style::{Style, Styleable, percent, vh},
+    style::{Styleable, percent, vh},
 };
 
 pub fn page() -> Node {
@@ -95,15 +95,11 @@ pub fn page() -> Node {
                 font-size: {responsive::font(28.)};
                 line-height: {responsive::ui(38.)};
                 })),
-            halftone::halftone(
-                Style::new().style(mue_macroquad::style! {
+            halftone::halftone(density, pause.map(|v| !v)).style(mue_macroquad::style! {
                 height: {vh(22.5)};
                 width: 100%;
                 flex: none;
-                }),
-                density,
-                pause.map(|v| !v),
-            ),
+            }),
             // Shapes use the same paint API; a custom node can draw cached geometry.
             shape(mue_core::prop::Prop::Static(
                 mue_macroquad::paint::Shapes::build(|p| {

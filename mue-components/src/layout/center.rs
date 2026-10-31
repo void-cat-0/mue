@@ -1,9 +1,11 @@
-use mue_macroquad::node::flexbox::render_container;
+use mue_macroquad::node::{NodePlan, flexbox::render_container};
 use mue_macroquad::style::{Style, StyleableExt};
 
 /// Center children on both axes. Set width and height to define the available space.
 #[mue_macros::node]
-pub fn center(style: &mut Style) {
-    style.provide_defaults(Style::new().items_center().justify_center());
-    render_container(style);
+#[theme]
+pub fn center() -> NodePlan<impl FnOnce(&mut Style)> {
+    NodePlan::new(Style::new().items_center().justify_center(), move |style| {
+        render_container(style)
+    })
 }

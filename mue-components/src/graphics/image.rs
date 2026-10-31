@@ -4,6 +4,7 @@ use taffy::{AvailableSpace, Size};
 use mue_macroquad::{
     layout::use_layout,
     math::{Rect, Vector, vec2},
+    node::NodePlan,
     paint::use_background,
     paint::use_paint,
     shader::SharedTexture,
@@ -26,79 +27,81 @@ impl PropValue for ObjectFit {}
 /// Display a texture with reactive sizing, cropping, fit, and foreground tint.
 /// Without an explicit size, the node uses the texture region's natural size.
 #[mue_macros::node]
+#[theme(object_fit)]
 pub fn image(
-    style: &mut Style,
     texture: SharedTexture,
     #[default] object_fit: ObjectFit,
     #[default(vec2(0.5, 0.5))] object_position: Vector,
     #[default] region: Option<Rect>,
-) {
-    let layout = use_layout(style);
-    let rect = layout.rect;
-    let paint = use_paint(style);
-    use_background(style, rect);
-    let color = style.take_color();
+) -> NodePlan<impl FnOnce(&mut Style)> {
+    NodePlan::new(Style::new(), move |style| {
+        let layout = use_layout(style);
+        let rect = layout.rect;
+        let paint = use_paint(style);
+        use_background(style, rect);
+        let color = style.take_color();
 
-    layout.set_measure_fn({
-        let texture = texture.clone();
-        move |known_dimensions: Size<Option<f32>>, _available_space: Size<AvailableSpace>| {
+        layout.set_measure_fn({
+            let texture = texture.clone();
+            move |known_dimensions: Size<Option<f32>>, _available_space: Size<AvailableSpace>| {
+                let texture = texture.get_clone();
+                let region = region
+                    .get_clone()
+                    .unwrap_or_else(|| Rect::new(0., 0., texture.width(), texture.height()));
+
+                let Rect { w, h, .. } = region;
+                let aspect_ratio = w / h;
+                match (known_dimensions.width, known_dimensions.height) {
+                    (Some(width), Some(height)) => Size { width, height },
+                    (Some(width), None) => Size {
+                        width,
+                        height: width / aspect_ratio,
+                    },
+                    (None, Some(height)) => Size {
+                        width: height * aspect_ratio,
+                        height,
+                    },
+                    (None, None) => Size {
+                        width: w,
+                        height: h,
+                    },
+                }
+            }
+        });
+
+        let shapes = paint.build(move |p| {
             let texture = texture.get_clone();
             let region = region
                 .get_clone()
                 .unwrap_or_else(|| Rect::new(0., 0., texture.width(), texture.height()));
 
-            let Rect { w, h, .. } = region;
-            let aspect_ratio = w / h;
-            match (known_dimensions.width, known_dimensions.height) {
-                (Some(width), Some(height)) => Size { width, height },
-                (Some(width), None) => Size {
-                    width,
-                    height: width / aspect_ratio,
-                },
-                (None, Some(height)) => Size {
-                    width: height * aspect_ratio,
-                    height,
-                },
-                (None, None) => Size {
-                    width: w,
-                    height: h,
-                },
-            }
-        }
-    });
+            let uv_region = Rect::new(
+                region.x / texture.width(),
+                region.y / texture.height(),
+                region.w / texture.width(),
+                region.h / texture.height(),
+            );
+            let (draw_rect, adjusted_uv) = calculate_draw_rect_and_uv(
+                object_fit.get(),
+                object_position.get(),
+                rect.get(),
+                region.w,
+                region.h,
+                uv_region,
+            );
 
-    let shapes = paint.build(move |p| {
-        let texture = texture.get_clone();
-        let region = region
-            .get_clone()
-            .unwrap_or_else(|| Rect::new(0., 0., texture.width(), texture.height()));
+            p.draw_texture(
+                draw_rect,
+                texture,
+                adjusted_uv,
+                color.get_clone().shader(rect.get()),
+            );
+        });
 
-        let uv_region = Rect::new(
-            region.x / texture.width(),
-            region.y / texture.height(),
-            region.w / texture.width(),
-            region.h / texture.height(),
-        );
-        let (draw_rect, adjusted_uv) = calculate_draw_rect_and_uv(
-            object_fit.get(),
-            object_position.get(),
-            rect.get(),
-            region.w,
-            region.h,
-            uv_region,
-        );
-
-        p.draw_texture(
-            draw_rect,
-            texture,
-            adjusted_uv,
-            color.get_clone().shader(rect.get()),
-        );
-    });
-
-    style.on_render.append(move |_| {
-        shapes.get_clone().draw();
-    });
+        style.on_render.append(move |_| {
+            shapes.get_clone().draw();
+        });
+    })
 }
 
 fn calculate_draw_rect_and_uv(

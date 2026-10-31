@@ -83,30 +83,30 @@ fn page_node(page: Page, target: Signal<Page>) -> Node {
 #[mue_macros::component]
 fn pages(#[model] target: Page) -> impl Component {
     let buttons = Page::ALL.map(|destination| {
-        let hovered = signal(false);
         let pressed = signal(false);
         flexbox()
-            .style(mue_macroquad::style! {
-            background: {computed(move |_| {
-                            Brush::Solid(if pressed.get() {
-                                PRESSED
-                            } else {
-                                match (destination == target.get(), hovered.get()) {
-                                    (true, true) => HIGHLIGHT,
-                                    (true, false) => ACTIVE,
-                                    (false, true) => HOVER,
-                                    (false, false) => SURFACE,
-                                }
-                            })
-                        })};
-            padding: {(responsive::ui(12.), responsive::ui(12.))};
-            min-height: {responsive::ui(44.)};
-            min-width: 0px;
-            max-width: 100%;
-            transition: {Transition::ease_in_out(TRANSITION)};
-            justify-content: center;
+            .with_hovered(move |view, hovered| {
+                view.style(mue_macroquad::style! {
+                background: {computed(move |_| {
+                                Brush::Solid(if pressed.get() {
+                                    PRESSED
+                                } else {
+                                    match (destination == target.get(), hovered.get()) {
+                                        (true, true) => HIGHLIGHT,
+                                        (true, false) => ACTIVE,
+                                        (false, true) => HOVER,
+                                        (false, false) => SURFACE,
+                                    }
+                                })
+                            })};
+                padding: {(responsive::ui(12.), responsive::ui(12.))};
+                min-height: {responsive::ui(44.)};
+                min-width: 0px;
+                max-width: 100%;
+                transition: {Transition::ease_in_out(TRANSITION)};
+                justify-content: center;
+                })
             })
-            .use_hovered(hovered)
             .use_pressed(pressed)
             .on_activate(move || target.set(destination))
             .children(text(destination.title()).style(mue_macroquad::style! {

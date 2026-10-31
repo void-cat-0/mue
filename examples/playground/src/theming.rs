@@ -1,79 +1,92 @@
 use super::{controls::*, responsive};
 use mue_components::*;
-use mue_core::{Owned, prop::Prop};
+use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    factory::factory,
     style::Styleable,
-    theme::{provide_theme, theme},
+    theme::{Theme, Themeable, class, theme},
 };
-use std::rc::Rc;
+use std::{collections::HashSet, rc::Rc};
 
-#[derive(Clone)]
-struct Options {
-    accent: bool,
-}
-
-fn build_tile(caption: Prop<Rc<str>>) -> CenterBuilder {
+#[component]
+#[theme(accent)]
+fn tile(caption: Rc<str>, #[default] accent: bool) -> impl Component {
+    let _ = accent;
     center().children(text(caption).style(style! {
         font-size: {responsive::font(22.)};
         line-height: {responsive::ui(32.)};
     }))
 }
 
+// Installed once by the playground's App::with_theme entry point. New pages
+// inherit that application context, including pages built by map_keyed.
+pub fn appearance() -> ReadSignal<Theme> {
+    let light = theme! {
+        Tile { background: {BLUE}; transform: scale(1.02); }
+        Tile[$accent] { background: {CORAL}; transform: scale(1.04); }
+    };
+    let dark = theme! {
+        Tile { background: {panel_brush()}; transform: scale(1.); }
+        Tile[$accent] { background: {BLUE}; transform: scale(1.); }
+    };
+    let shared = theme! {
+        Tile.selected { opacity: 82%; }
+        Tile[$accent]:hover { opacity: 65%; }
+        Tile { transition: 220ms spring; }
+    };
+    dark_theme().select(
+        Theme::compose([dark, shared.clone()]),
+        Theme::compose([light, shared]),
+    )
+}
+
 pub fn page() -> Node {
     let dark = dark_theme();
-    let tile = factory(build_tile).defaults(Options { accent: false });
-    let panel_factory =
-        factory(|build: Rc<dyn Fn() -> Owned<Children>>| container().children(build()));
-    let first = theme! {
-        tile[accent] { background: { CORAL }; transform: scale(1.04); }
-        tile { background: { BLUE }; transform: scale(1.02); }
-        panel_factory > tile + tile { opacity: 82%; }
-        panel_factory > tile ~ tile { transform: translateX(4px); }
-    };
-    let second = theme! {
-        tile[accent] { background: { BLUE }; transform: scale(1.); }
-        tile { background: { panel_brush() }; transform: scale(1.); }
-    };
-    let nested = theme! {
-        tile { background: { Color::from_rgba(70, 140, 100, 255) }; }
-    };
-    let theme_code = dark.map(|is_dark| {
-        if is_dark {
-            r#"theme! {
-    tile[accent] {
-        background: { BLUE };
-        transform: scale(1.);
-    }
-    tile {
-        background: { panel_brush() };
-        transform: scale(1.);
-    }
-}"#
+    let selected = signal(true);
+    let classes = selected.map(|active| {
+        if active {
+            HashSet::from([class!("selected")])
         } else {
-            r#"theme! {
-    tile[accent] {
-        background: { CORAL };
-        transform: scale(1.04);
-    }
-    tile {
-        background: { BLUE };
-        transform: scale(1.02);
-    }
-    panel_factory > tile + tile {
-        opacity: 82%;
-    }
-    panel_factory > tile ~ tile {
-        transform: translateX(4px);
-    }
-}"#
+            HashSet::new()
         }
     });
+    let sample = r#"use std::{collections::HashSet, rc::Rc};
+use mue_core::prelude::*;
+use mue_components::prelude::*;
+use mue_macroquad::App;
+
+#[component]
+#[theme(accent)]
+fn tile(caption: Rc<str>, #[default] accent: bool) -> impl Component {
+    let _ = accent;
+    center().children(text(caption))
+}
+
+let light = theme! {
+    Tile { background: blue; }
+    Tile[$accent] { background: coral; }
+};
+let dark = theme! {
+    Tile { background: #263244; }
+    Tile[$accent] { background: blue; }
+};
+let shared = theme! {
+    Tile.selected { opacity: 82%; }
+    Tile[$accent]:hover { opacity: 65%; }
+};
+let dark_mode = signal(false);
+let theme = dark_mode.select(
+    Theme::compose([dark, shared.clone()]),
+    Theme::compose([light, shared]),
+);
+let mut app = App::with_theme(theme, || {
+    tile("Accent")
+        .accent(true)
+        .classes(HashSet::from([class!("selected")]))
+        .enable_hovered()
+});"#;
     stack()
         .style(style! {
-            width: 100%;
-            min-width: 0px;
+            width: 100%; min-width: 0px;
             gap: {responsive::ui(20.)};
         })
         .children((
@@ -81,41 +94,16 @@ pub fn page() -> Node {
                 dark.map(|is_dark| format!("Theme: {}", if is_dark { "Dark" } else { "Light" })),
                 toggle_theme,
             ),
-            provide_theme(dark.select(second, first), move || {
-                stack()
-                    .style(style! {
-                        width: 100%;
-                        min-width: 0px;
-                        gap: {responsive::ui(16.)};
-                    })
-                    .children((
-                        tile.create("Default")
-                            .style(style! { transition: 220ms spring; }),
-                        tile.create("Accent")
-                            .options(|options| options.accent = true)
-                            .style(style! { transition: 220ms spring; }),
-                        {
-                            let build: Rc<dyn Fn() -> Owned<Children>> = Rc::new({
-                                let tile = tile.clone();
-                                move || {
-                                    (tile.create("First sibling"), tile.create("Later sibling"))
-                                        .into_children()
-                                }
-                            });
-                            panel_factory.create(build).style(style! {
-                                width: 100%;
-                                gap: {responsive::ui(8.)};
-                            })
-                        },
-                        provide_theme(nested, move || {
-                            tile.create("Nested")
-                                .style(style! { transition: 220ms spring; })
-                        }),
-                    ))
-            }),
-            code_block(theme_code).style(style! {
-                width: 100%;
-                min-width: 0px;
+            button("Toggle selected class", move || selected.toggle()),
+            tile("Default"),
+            tile("Accent").accent(true).enable_hovered(),
+            tile("Selected accent")
+                .accent(true)
+                .classes(classes)
+                .enable_hovered(),
+            text("Theme changes update existing styles. Class sets replace the whole set; hover is enabled explicitly."),
+            code_block(sample).style(style! {
+                width: 100%; min-width: 0px;
                 text-wrap: {true};
                 font-size: {responsive::font(16.)};
                 line-height: {responsive::ui(24.)};

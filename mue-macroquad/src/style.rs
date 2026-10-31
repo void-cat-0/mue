@@ -11,13 +11,13 @@ use cosmic_text::{FamilyOwned, Weight};
 pub use ext::StyleableExt;
 
 use mue_core::{
-    Owned,
-    effect::{computed, computed_always},
+    effect::computed,
     prop::Prop,
+    scope::OwnedScope,
     signal::{Access, ReadSignal},
 };
 use paste::paste;
-use std::mem;
+use std::{collections::HashSet, mem, rc::Rc};
 use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
@@ -25,7 +25,8 @@ use crate::{
     gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent, TransformEvent},
     hook::{HookFn, NodeHooks},
     math::Matrix,
-    node::{Children, IntoChildren},
+    node::{ChildrenPlan, HoverOwner, IntoChildren},
+    theme::ClassName,
 };
 
 pub trait IntoRectProp<T> {
@@ -122,23 +123,28 @@ macro_rules! define_style {
         }
     };
 
-    (@themed_property $result:ident, $theme:ident, $defaults:ident, font_size, $ty:ty, $($default:expr)?) => {
-        let fallback = $defaults.font_size.take();
-        $result.font_size = Some(computed_always(move |_| {
-            let current = $theme.get_clone();
-            current.font_size.as_ref().or(fallback.as_ref())
-                .map(|value| value.get())
-                .unwrap_or(FontSize::Em(1.))
-        }).into());
+    (@themed_property $result:ident, $theme:ident, $defaults:ident, color, $ty:ty, $($default:expr)?) => {
+        if $result.color.is_none() {
+            // Capture the inherited Prop while seal is in its parent build context.
+            // Read its value in the projection so rule removal restores inheritance.
+            $result.color = Some(Self::themed_foreground(
+                $theme,
+                $defaults.color.take(),
+                crate::theme::inherited_foreground(),
+            ));
+        }
     };
     (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
-        let fallback = $defaults.$field.take();
-        $result.$field = Some(computed_always(move |_| {
-            let current = $theme.get_clone();
-            current.$field.as_ref().or(fallback.as_ref())
-                .map(|value| value.get_clone())
-                .unwrap_or_else(|| define_style!(@extract_default_raw ($ty, $($default)?)))
-        }).into());
+        if $result.$field.is_none() {
+            let fallback = $defaults.$field.take();
+            $result.$field = Some(computed(move |_| {
+                #[cfg(test)] crate::runtime::record_projection();
+                let current = $theme.get_clone();
+                current.$field.as_ref().or(fallback.as_ref())
+                    .map(|value| value.get_clone())
+                    .unwrap_or_else(|| define_style!(@extract_default_raw ($ty, $($default)?)))
+            }).into());
+        }
     };
     // Rect properties already have separate fields: fill only the missing sides.
     (@rect_defaults $target:ident, $source:ident, $rect:ident) => {
@@ -183,7 +189,11 @@ macro_rules! define_style {
                     pub(crate) [<$rect_name _bottom>]: Option<Prop<$rect_ty>>,
                 )*
                 $(pub $hook_name: HookFn<$hook_ty>,)*
-                pub(crate) children: Option<Owned<Children>>,
+                pub(crate) children: Option<ChildrenPlan>,
+                pub(crate) classes: Option<Prop<HashSet<ClassName>>>,
+                pub(crate) hover_owners: Vec<Rc<HoverOwner>>,
+                // Resolver snapshots own reactive values allocated by rule bodies.
+                pub(crate) theme_owners: Vec<Rc<OwnedScope>>,
             }
 
             /// Fluent styles accepting either static properties or reactive signals.
@@ -264,9 +274,9 @@ macro_rules! define_style {
                     }
                 )*
 
-                /// Replace the node's children. Factory content is passed to `create`.
+                /// Replace the child input, deferring child preparation until mount.
                 fn children(mut self, children: impl IntoChildren) -> Self {
-                    self.style_mut().children = Some(children.into_children());
+                    self.style_mut().children = Some(children.into_children_plan());
                     self
                 }
             }
@@ -278,8 +288,20 @@ macro_rules! define_style {
             }
 
             impl Style {
-                pub(crate) fn themed_defaults(theme: ReadSignal<std::rc::Rc<Style>>, mut default: Self) -> Self {
+                /// Bind every visual property to a sparse theme result and fallback.
+                #[cfg(test)]
+                pub(crate) fn themed_defaults(theme: ReadSignal<Rc<Style>>, default: Self) -> Self {
                     let mut result = Self::new();
+                    result.provide_themed_defaults(theme, default);
+                    result
+                }
+
+                /// Keep explicit properties and bind only missing fields once at seal.
+                ///
+                /// The theme remains sparse; a removed declaration falls through to the
+                /// prepare fallback, then the original foreground/font inheritance.
+                pub(crate) fn provide_themed_defaults(&mut self, theme: ReadSignal<Rc<Style>>, mut default: Self) {
+                    let result = self;
                     $(
                         define_style!(@themed_property result, theme, default, $name, $ty, $($default)?);
                     )*
@@ -290,7 +312,6 @@ macro_rules! define_style {
                         define_style!(@themed_property result, theme, default, [<$rect_name _bottom>], $rect_ty, $($rect_default)?);
                     )*
                     result.provide_defaults(default);
-                    result
                 }
                 /// Fill missing properties from `other` and append its event hooks.
                 pub fn merge(mut self, other: Self) -> Self {
@@ -305,6 +326,9 @@ macro_rules! define_style {
                         self.$hook_name.extend(other.$hook_name);
                     )*
                     self.children = self.children.or(other.children);
+                    self.classes = self.classes.or(other.classes);
+                    self.append_hover_owners(other.hover_owners);
+                    self.append_theme_owners(other.theme_owners);
                     self
                 }
 
@@ -326,11 +350,19 @@ macro_rules! define_style {
                     if self.children.is_none() {
                         self.children = default.children;
                     }
+                    if self.classes.is_none() {
+                        self.classes = default.classes;
+                    }
+                    self.append_hover_owners(default.hover_owners);
+                    self.append_theme_owners(default.theme_owners);
                 }
 
                 pub(crate) fn assert_visual_only(&self) {
-                    assert!(self.children.is_none() $( && self.$hook_name.is_empty() )*,
-                        "theme and factory style callbacks may only set visual properties");
+                    assert!(self.children.is_none()
+                        && self.classes.is_none()
+                        && self.hover_owners.is_empty()
+                        $( && self.$hook_name.is_empty() )*,
+                        "theme declarations may only set visual properties");
                 }
 
                 $(
@@ -514,6 +546,59 @@ impl Style {
         Self::default()
     }
 
+    fn themed_foreground(
+        theme: ReadSignal<Rc<Style>>,
+        fallback: Option<Prop<Brush>>,
+        inherited: Option<Prop<Brush>>,
+    ) -> Prop<Brush> {
+        let fallback = fallback.or(inherited);
+        computed(move |_| {
+            #[cfg(test)]
+            crate::runtime::record_projection();
+            let current = theme.get_clone();
+            current
+                .color
+                .as_ref()
+                .or(fallback.as_ref())
+                .map(|value| value.get_clone())
+                .unwrap_or(Brush::Solid(Color::WHITE))
+        })
+        .into()
+    }
+
+    pub(crate) fn ensure_hovered(&mut self) -> Rc<HoverOwner> {
+        if let Some(owner) = self.hover_owners.first() {
+            return owner.clone();
+        }
+        let owner = HoverOwner::new();
+        self.hover_owners.push(owner.clone());
+        owner
+    }
+
+    fn append_hover_owners(&mut self, owners: Vec<Rc<HoverOwner>>) {
+        for owner in owners {
+            if !self
+                .hover_owners
+                .iter()
+                .any(|existing| Rc::ptr_eq(existing, &owner))
+            {
+                self.hover_owners.push(owner);
+            }
+        }
+    }
+
+    fn append_theme_owners(&mut self, owners: Vec<Rc<OwnedScope>>) {
+        for owner in owners {
+            if !self
+                .theme_owners
+                .iter()
+                .any(|existing| Rc::ptr_eq(existing, &owner))
+            {
+                self.theme_owners.push(owner);
+            }
+        }
+    }
+
     pub(crate) fn build_hooks(&mut self) -> NodeHooks {
         NodeHooks {
             render: self.take_on_render(),
@@ -620,6 +705,377 @@ impl Style {
 
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, panic::AssertUnwindSafe};
+
+    use mue_core::{
+        effect::watch_effect,
+        scope::OwnedScope,
+        signal::{Signal, signal},
+    };
+
+    use super::*;
+    use crate::theme::{ThemeTarget, Themeable};
+
+    #[derive(Default)]
+    struct Target(Style);
+
+    impl ThemeTarget for Target {
+        type Options = ();
+    }
+    impl Styleable for Target {
+        fn style_mut(&mut self) -> &mut Style {
+            &mut self.0
+        }
+    }
+
+    fn classes(name: &str) -> HashSet<ClassName> {
+        HashSet::from([ClassName::try_from(name).unwrap()])
+    }
+
+    #[test]
+    fn stable_slots_accept_new_fields_and_restore_sparse_fallbacks() {
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let theme = Signal::shallow(Rc::new(Style::new()));
+            let fallback = signal(Size::Px(12.));
+            let mut style =
+                Style::themed_defaults(*theme, Style::new().width(fallback).padding_left(3.));
+            let width = style.take_width();
+            let height = style.take_height();
+            let padding = style.take_padding();
+            let font_size = style.take_font_size();
+            drop(style);
+
+            assert_eq!(width.get(), Size::Px(12.));
+            assert_eq!(height.get(), Size::Auto);
+            assert_eq!(padding.get().left, Size::Px(3.));
+            assert_eq!(font_size.get(), FontSize::Em(1.));
+
+            theme.set(Rc::new(
+                Style::new()
+                    .width(24.)
+                    .height(18.)
+                    .padding_top(7.)
+                    .font_size(20.),
+            ));
+            assert_eq!(width.get(), Size::Px(24.));
+            assert_eq!(height.get(), Size::Px(18.));
+            assert_eq!(padding.get().left, Size::Px(3.));
+            assert_eq!(padding.get().top, Size::Px(7.));
+            assert_eq!(font_size.get(), FontSize::Px(20.));
+
+            fallback.set(Size::Px(16.));
+            theme.set(Rc::new(Style::new()));
+            assert_eq!(width.get(), Size::Px(16.));
+            assert_eq!(height.get(), Size::Auto);
+            assert_eq!(padding.get().top, Size::Px(0.));
+            assert_eq!(font_size.get(), FontSize::Em(1.));
+        });
+    }
+
+    #[test]
+    fn equal_projections_do_not_notify_visual_consumers() {
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let transform = Transform(vec![TransformOp::Scale(2., 2.)]);
+            let theme = Signal::shallow(Rc::new(
+                Style::new()
+                    .width(10.)
+                    .color(Color::BLACK)
+                    .transform_list(transform.clone()),
+            ));
+            let mut style = Style::themed_defaults(*theme, Style::new());
+            let width = style.take_width();
+            let color = style.take_color();
+            let transform_list = style.take_transform_list();
+            let runs = Rc::new(Cell::new(0));
+            let observed = runs.clone();
+            watch_effect(move || {
+                width.get();
+                color.get_clone();
+                transform_list.get_clone();
+                observed.set(observed.get() + 1);
+            });
+            assert_eq!(runs.get(), 1);
+
+            theme.set(Rc::new(
+                Style::new()
+                    .width(10.)
+                    .color(Color::BLACK)
+                    .transform_list(transform)
+                    .height(50.),
+            ));
+            assert_eq!(runs.get(), 1);
+            theme.set(Rc::new(
+                Style::new()
+                    .width(11.)
+                    .color(Color::BLACK)
+                    .transform_list(Transform(vec![TransformOp::Scale(2., 2.)])),
+            ));
+            assert_eq!(runs.get(), 2);
+        });
+    }
+
+    #[test]
+    fn explicit_values_keep_their_signal_and_override_theme_and_fallback() {
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let theme = Signal::shallow(Rc::new(Style::new().width(20.)));
+            let explicit = signal(Size::Px(40.));
+            let mut style = Style::new().width(explicit);
+            style.provide_themed_defaults(*theme, Style::new().width(10.));
+            let width = style.take_width();
+            theme.set(Rc::new(Style::new().width(30.)));
+            assert_eq!(width.get(), Size::Px(40.));
+            explicit.set(Size::Px(50.));
+            assert_eq!(width.get(), Size::Px(50.));
+        });
+    }
+
+    #[test]
+    fn color_rule_removal_restores_reactive_inheritance_and_fallback_precedence() {
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let theme = Signal::shallow(Rc::new(Style::new().color(Color::WHITE)));
+            let inherited = signal(Brush::Solid(Color::BLACK));
+            let color = Style::themed_foreground(*theme, None, Some(inherited.into()));
+            assert_eq!(color.get_clone(), Brush::Solid(Color::WHITE));
+            theme.set(Rc::new(Style::new()));
+            assert_eq!(color.get_clone(), Brush::Solid(Color::BLACK));
+            let changed = Brush::Solid(Color::new(0.2, 0.4, 0.6, 1.));
+            inherited.set(changed.clone());
+            assert_eq!(color.get_clone(), changed);
+
+            let fallback =
+                Style::themed_foreground(*theme, Some(Color::WHITE.into()), Some(inherited.into()));
+            assert_eq!(fallback.get_clone(), Brush::Solid(Color::WHITE));
+            let mut no_inheritance = Style::themed_defaults(*theme, Style::new());
+            assert_eq!(
+                no_inheritance.take_color().get_clone(),
+                Brush::Solid(Color::WHITE)
+            );
+        });
+    }
+
+    #[test]
+    fn hover_configuration_reuses_owner_and_transfers_derived_lifetimes() {
+        let external_scope = OwnedScope::new();
+        let external = external_scope.run(|| signal(1.));
+        let configured_scope = OwnedScope::new();
+        let (style, hovered) = configured_scope.run(|| {
+            let mut observed = None;
+            let style = Style::new().with_hovered(|style, hovered| {
+                observed = Some(hovered);
+                style.opacity(computed(
+                    move |_| if hovered.get() { external.get() } else { 0.5 },
+                ))
+            });
+            (style, observed.unwrap())
+        });
+        drop(configured_scope);
+        let mut style = style.style(Style::new().height(10.));
+        let owner = style.ensure_hovered();
+        assert_eq!(style.hover_owners.len(), 1);
+        assert!(Rc::ptr_eq(&owner, &style.ensure_hovered()));
+        let opacity = style.take_opacity();
+        assert_eq!(opacity.get(), 0.5);
+        owner.signal.set(true);
+        assert!(hovered.get());
+        assert_eq!(opacity.get(), 1.);
+        external.set(0.75);
+        assert_eq!(opacity.get(), 0.75);
+        drop(owner);
+        drop(style);
+        assert!(hovered.is_disposed());
+        match opacity {
+            Prop::Dynamic(value) => assert!(value.is_disposed()),
+            Prop::Static(_) => panic!("hover-derived property must be reactive"),
+        }
+        assert!(!external.is_disposed());
+    }
+
+    #[test]
+    fn combining_styles_retains_all_hover_owners_without_duplicates() {
+        let mut outer = Style::new();
+        let first = outer.ensure_hovered();
+        let mut inner = Style::new();
+        let second = inner.ensure_hovered();
+        inner.hover_owners.push(first.clone());
+        let mut merged = outer.merge(inner);
+        assert_eq!(merged.hover_owners.len(), 2);
+        assert!(Rc::ptr_eq(&first, &merged.ensure_hovered()));
+        let mut defaults = Style::new();
+        let third = defaults.ensure_hovered();
+        defaults.hover_owners.push(second.clone());
+        merged.provide_defaults(defaults);
+        assert_eq!(merged.hover_owners.len(), 3);
+        let signals = [*first.signal, *second.signal, *third.signal];
+        drop((first, second, third));
+        assert!(signals.iter().all(|value| !value.is_disposed()));
+        drop(merged);
+        assert!(signals.iter().all(ReadSignal::is_disposed));
+    }
+
+    fn owned_theme_style(build: impl FnOnce() -> Style) -> (Style, std::rc::Weak<OwnedScope>) {
+        let owner = Rc::new(OwnedScope::new_inherited());
+        let mut style = owner.run(build);
+        let weak = Rc::downgrade(&owner);
+        style.theme_owners.push(owner);
+        (style, weak)
+    }
+
+    #[test]
+    fn combining_theme_styles_transfers_all_rule_scopes_without_duplicates() {
+        let outer_scope = OwnedScope::new();
+        outer_scope.run(|| {
+            let input = signal(2.);
+            let (outer, outer_owner) =
+                owned_theme_style(|| Style::new().width(computed(move |_| Size::Px(input.get()))));
+            let (mut inner, inner_owner) = owned_theme_style(|| {
+                Style::new().height(computed(move |_| Size::Px(input.get() * 2.)))
+            });
+            inner.theme_owners.push(outer.theme_owners[0].clone());
+            let mut style = outer.merge(inner);
+            assert_eq!(style.theme_owners.len(), 2);
+
+            let (mut fallback, fallback_owner) =
+                owned_theme_style(|| Style::new().opacity(computed(move |_| input.get() / 4.)));
+            fallback.theme_owners.push(style.theme_owners[0].clone());
+            style.provide_defaults(fallback);
+            assert_eq!(style.theme_owners.len(), 3);
+
+            let (replacement, replacement_owner) = owned_theme_style(|| {
+                Style::new().radius(computed(move |_| Size::Px(input.get() * 3.)))
+            });
+            style = style.style(replacement);
+            assert_eq!(style.theme_owners.len(), 4);
+            style.assert_visual_only();
+            let width = style.take_width();
+            let height = style.take_height();
+            let opacity = style.take_opacity();
+            let radius = style.take_radius();
+            input.set(4.);
+            assert_eq!(width.get(), Size::Px(4.));
+            assert_eq!(height.get(), Size::Px(8.));
+            assert_eq!(opacity.get(), 1.);
+            assert_eq!(radius.get(), Size::Px(12.));
+
+            let owners = [outer_owner, inner_owner, fallback_owner, replacement_owner];
+            assert!(owners.iter().all(|owner| owner.upgrade().is_some()));
+            drop(style);
+            assert!(owners.iter().all(|owner| owner.upgrade().is_none()));
+            for value in [width, height, radius] {
+                match value {
+                    Prop::Dynamic(value) => assert!(value.is_disposed()),
+                    Prop::Static(_) => panic!("rule-derived length must remain reactive"),
+                }
+            }
+            assert!(!input.is_disposed());
+        });
+    }
+
+    #[test]
+    fn replacing_resolver_snapshot_releases_previous_rule_scope() {
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let input = signal(3.);
+            let generation = signal(1.);
+            let owners = Rc::new(std::cell::RefCell::new(Vec::new()));
+            let created = owners.clone();
+            let theme = mue_core::effect::computed_always(move |_| {
+                let factor = generation.get();
+                if factor == 0. {
+                    return Rc::new(Style::new());
+                }
+                let (style, owner) = owned_theme_style(|| {
+                    Style::new().width(computed(move |_| Size::Px(input.get() * factor)))
+                });
+                created.borrow_mut().push(owner);
+                Rc::new(style)
+            });
+            let mut style = Style::themed_defaults(theme, Style::new());
+            let width = style.take_width();
+            let observed = Rc::new(Cell::new(Size::Auto));
+            let last = observed.clone();
+            watch_effect(move || last.set(width.get()));
+            assert_eq!(observed.get(), Size::Px(3.));
+
+            generation.set(2.);
+            assert!(owners.borrow()[0].upgrade().is_none());
+            assert!(owners.borrow()[1].upgrade().is_some());
+            assert_eq!(observed.get(), Size::Px(6.));
+            input.set(4.);
+            assert_eq!(observed.get(), Size::Px(8.));
+            assert_eq!(owners.borrow().len(), 2);
+
+            generation.set(0.);
+            assert!(owners.borrow()[1].upgrade().is_none());
+            assert_eq!(observed.get(), Size::Auto);
+            assert!(!input.is_disposed());
+        });
+    }
+
+    #[test]
+    fn classes_replace_previous_inputs_in_setters_and_style_application() {
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let old = signal(classes("old"));
+            let mut target = Target::default().classes(old).classes(classes("new"));
+            old.set(classes("stale"));
+            assert_eq!(
+                target.0.classes.as_ref().unwrap().get_clone(),
+                classes("new")
+            );
+            let replacement = Target::default().classes(classes("replacement")).0;
+            target = target.style(replacement);
+            assert_eq!(
+                target.0.classes.as_ref().unwrap().get_clone(),
+                classes("replacement")
+            );
+            target = target.style(Style::new().width(10.));
+            assert_eq!(
+                target.0.classes.as_ref().unwrap().get_clone(),
+                classes("replacement")
+            );
+        });
+    }
+
+    #[test]
+    fn child_setter_defers_build_and_replaces_old_plan() {
+        let builds = Rc::new(Cell::new(0));
+        let build = builds.clone();
+        let mut style = Style::new().children(ChildrenPlan::new(move || {
+            build.set(build.get() + 1);
+            ().into_children()
+        }));
+        assert_eq!(builds.get(), 0);
+        style = style.children(());
+        drop(style);
+        assert_eq!(builds.get(), 0);
+    }
+
+    #[test]
+    fn theme_styles_reject_non_visual_channels() {
+        Style::new().width(10.).assert_visual_only();
+        let mut classes = Style::new();
+        classes.classes = Some(HashSet::new().into());
+        let mut hover = Style::new();
+        hover.ensure_hovered();
+        for style in [
+            Style::new().children(()),
+            Style::new().on_tap(|_| {}),
+            classes,
+            hover,
+        ] {
+            assert!(
+                std::panic::catch_unwind(AssertUnwindSafe(|| style.assert_visual_only())).is_err()
+            );
+        }
     }
 }
 

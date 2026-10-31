@@ -47,7 +47,6 @@ fn main() {
 async fn run() {
     let tap = signal(0);
     let held = signal(0);
-    let hovered = signal(false);
     let wheel = signal(0.);
     let pan = signal(String::from("Drag"));
     let swipe = signal(String::from("Swipe"));
@@ -78,7 +77,20 @@ async fn run() {
                             .on_activate(move || tap.update(|n| *n += 1)),
                         panel("Long press", held.map(|n| format!("{n}")))
                             .on_long_press(move |_| held.update(|n| *n += 1)),
-                        panel("Hover", hovered.map(|v| format!("{v}"))).use_hovered(hovered),
+                        panel("Hover", *signal(String::new())).with_hovered(|view, hovered| {
+                            view.children((
+                                heading("Hover").style(mue_macroquad::style! {
+                                    font-size: {responsive::font(24.)};
+                                    line-height: {responsive::ui(32.)};
+                                }),
+                                text(hovered.map(|value| format!("{value}"))).style(
+                                    mue_macroquad::style! {
+                                        font-size: {responsive::font(18.)};
+                                        line-height: {responsive::ui(28.)};
+                                    },
+                                ),
+                            ))
+                        }),
                         panel("Wheel", wheel.map(|v| format!("{v:.1}")))
                             .on_wheel_event(move |e| wheel.update(|n| *n += e.delta.y)),
                         panel("Pan", *pan).on_pan(move |e| {

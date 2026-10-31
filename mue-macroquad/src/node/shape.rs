@@ -10,18 +10,21 @@ use std::rc::Rc;
 
 /// Draw prebuilt shapes in local coordinates within a node's layout and lifetime.
 #[mue_macros::node]
-pub fn shape(style: &mut Style, shapes: Rc<Shapes>) {
-    let rect = use_layout(style).rect;
-    let paint = use_paint(style);
-    style.on_render.append(move |_| {
-        let translation = Matrix::from_translation(rect.get().min());
-        let transform = paint.transform.get() * translation;
-        let matrix = crate::math::model_matrix(transform);
-        let gl = unsafe { macroquad::window::get_internal_gl() }.quad_gl;
-        gl.push_model_matrix(matrix);
-        shapes.get_clone().draw();
-        unsafe { macroquad::window::get_internal_gl() }
-            .quad_gl
-            .pop_model_matrix();
-    });
+#[theme]
+pub fn shape(shapes: Rc<Shapes>) -> super::NodePlan<impl FnOnce(&mut Style)> {
+    super::NodePlan::new(Style::new(), move |style| {
+        let rect = use_layout(style).rect;
+        let paint = use_paint(style);
+        style.on_render.append(move |_| {
+            let translation = Matrix::from_translation(rect.get().min());
+            let transform = paint.transform.get() * translation;
+            let matrix = crate::math::model_matrix(transform);
+            let gl = unsafe { macroquad::window::get_internal_gl() }.quad_gl;
+            gl.push_model_matrix(matrix);
+            shapes.get_clone().draw();
+            unsafe { macroquad::window::get_internal_gl() }
+                .quad_gl
+                .pop_model_matrix();
+        });
+    })
 }

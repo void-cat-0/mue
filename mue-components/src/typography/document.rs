@@ -1,9 +1,9 @@
 //! Read-only rich text and a CommonMark adapter for cosmic-text.
 // Preserve the original public document module's Markdown entry points.
-pub use super::markdown::{MarkdownBuilder, markdown};
+pub use super::markdown::{Markdown, MarkdownBuilder, markdown};
 use cosmic_text::{FamilyOwned, Weight};
 use mue_core::prop::{Prop, PropValue};
-use mue_macroquad::style::Style;
+use mue_macroquad::{node::NodePlan, style::Style};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 pub use mue_macroquad::node::text::{Span, SpanStyle};
@@ -236,7 +236,11 @@ pub fn document(content: impl IntoDocumentProp) -> DocumentViewBuilder {
     document_view(content.into_document_prop())
 }
 
+#[doc(hidden)]
 #[mue_macros::node]
-fn document_view(style: &mut Style, content: Document) {
-    super::text::render_text(style, content);
+#[theme]
+pub fn document_view(content: Document) -> NodePlan<impl FnOnce(&mut Style)> {
+    NodePlan::new(Style::new(), move |style| {
+        super::text::render_text(style, content)
+    })
 }

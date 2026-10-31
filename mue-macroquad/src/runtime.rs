@@ -23,6 +23,45 @@ thread_local! {
     static RUNTIME: Runtime = Runtime::new();
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ThemeStats {
+    pub resolver_runs: usize,
+    pub projection_runs: usize,
+    pub transition_binds: usize,
+}
+#[cfg(test)]
+thread_local! { static THEME_STATS: std::cell::Cell<ThemeStats> = const { std::cell::Cell::new(ThemeStats { resolver_runs: 0, projection_runs: 0, transition_binds: 0 }) }; }
+#[cfg(test)]
+pub(crate) fn theme_stats() -> ThemeStats {
+    THEME_STATS.get()
+}
+#[cfg(test)]
+pub(crate) fn reset_theme_stats() {
+    THEME_STATS.set(ThemeStats::default());
+}
+#[cfg(test)]
+pub(crate) fn record_resolver() {
+    THEME_STATS.update(|mut stats| {
+        stats.resolver_runs += 1;
+        stats
+    });
+}
+#[cfg(test)]
+pub(crate) fn record_projection() {
+    THEME_STATS.update(|mut stats| {
+        stats.projection_runs += 1;
+        stats
+    });
+}
+#[cfg(test)]
+pub(crate) fn record_transition_bind() {
+    THEME_STATS.update(|mut stats| {
+        stats.transition_binds += 1;
+        stats
+    });
+}
+
 pub(crate) struct TimeoutKey {
     pub time: NotNan<f32>,
     pub aborted: Rc<AtomicBool>,

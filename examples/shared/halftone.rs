@@ -1,7 +1,7 @@
 //! A custom GPU material can live inside an ordinary Mue node.
 use macroquad::prelude::*;
 use mue_core::prelude::*;
-use mue_macroquad::{layout::use_layout, node::Node, style::Style};
+use mue_macroquad::{layout::use_layout, node::NodePlan, style::Style};
 
 // Macroquad queues draws but deletes a material's pipeline as soon as it is dropped.
 // Submit any pending draws before a departing page releases its material.
@@ -37,7 +37,8 @@ void main() {
 }
 "#;
 
-pub fn halftone(style: Style, density: ReadSignal<f32>, moving: ReadSignal<bool>) -> Node {
+#[mue_components::node]
+pub fn halftone(density: f32, moving: bool) -> NodePlan<impl FnOnce(&mut Style)> {
     let material = PageMaterial(
         load_material(
             ShaderSource::Glsl {
@@ -55,7 +56,7 @@ pub fn halftone(style: Style, density: ReadSignal<f32>, moving: ReadSignal<bool>
         )
         .expect("halftone material"),
     );
-    Node::build_with_style(style, move |style| {
+    NodePlan::new(Style::new(), move |style| {
         let rect = use_layout(style).rect;
         let mut time = 0.;
         style.on_render.append(move |_| {

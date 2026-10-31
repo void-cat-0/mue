@@ -7,7 +7,6 @@ pub fn page() -> Node {
     let count = signal(0);
     let child = signal(0);
     let pressed = signal(false);
-    let hover = signal(false);
     let held = signal(0);
     let swipe = signal(String::from("Swipe"));
     let pinch = signal(1.);
@@ -43,30 +42,31 @@ pub fn page() -> Node {
                 background: {panel_brush()};
                 })
                 .use_pressed(pressed)
-                .use_hovered(hover)
                 .on_activate(move || count.update(|n| *n += 1))
                 .on_long_press(move |_| held.update(|n| *n += 1))
-                .children((
-                    text(computed(move |_| {
-                        format!(
-                            "Tap {} · hold {} · pressed {} · hover {}",
-                            count.get(),
-                            held.get(),
-                            pressed.get(),
-                            hover.get()
-                        )
-                    }))
-                    .style(mue_macroquad::style! {
-                    font-size: {responsive::font(20.)};
-                    line-height: {responsive::ui(28.)};
-                    }),
-                    link(child.map(|n| format!("Child {n}")))
+                .with_hovered(move |view, hover| {
+                    view.children((
+                        text(computed(move |_| {
+                            format!(
+                                "Tap {} · hold {} · pressed {} · hover {}",
+                                count.get(),
+                                held.get(),
+                                pressed.get(),
+                                hover.get()
+                            )
+                        }))
                         .style(mue_macroquad::style! {
                         font-size: {responsive::font(20.)};
                         line-height: {responsive::ui(28.)};
-                        })
-                        .on_activate(move || child.update(|n| *n += 1)),
-                )),
+                        }),
+                        link(child.map(|n| format!("Child {n}")))
+                            .style(mue_macroquad::style! {
+                            font-size: {responsive::font(20.)};
+                            line-height: {responsive::ui(28.)};
+                            })
+                            .on_activate(move || child.update(|n| *n += 1)),
+                    ))
+                }),
             wrap()
                 .style(mue_macroquad::style! {
                 width: 100%;

@@ -94,9 +94,8 @@ pub async fn run() {
     let selected = signal(0usize);
     let fps = signal(0u32);
     let zoom = responsive::zoom();
-    let mut app = App::new(mue_macroquad::theme::provide_foreground(
-        foreground(),
-        || {
+    let mut app = App::with_theme(theming::appearance(), || {
+        mue_macroquad::theme::provide_foreground(foreground(), || {
             let (transition, transition_control) = choice(
                 "Transition",
                 vec![
@@ -198,8 +197,8 @@ pub async fn run() {
                             transition_control,
                         )),
                 ))
-        },
-    ));
+        })
+    });
     let mut frames = 0;
     let mut sampled_at = get_time();
     loop {

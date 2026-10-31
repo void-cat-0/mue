@@ -87,13 +87,14 @@ pub fn use_layout(style: &mut Style) -> Layout {
 
         let layout_id =
             Runtime::with_taffy_mut(|taffy| taffy.new_leaf(Default::default()).unwrap());
+        // Register ownership before the first reactive read can unwind.
+        node.layout_id = Some(layout_id);
         watch_effect(move || {
             Runtime::with_taffy_mut(|taffy| {
                 taffy.set_style(layout_id, style.get_clone()).unwrap();
             });
         });
 
-        node.layout_id = Some(layout_id);
         node.layout = OwnedLayout {
             rect: signal(Rect::default()),
         };

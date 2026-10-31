@@ -1,3 +1,6 @@
+mod build;
+pub(crate) use build::HoverOwner;
+pub use build::{AppBuildContext, NodePlan, PrepareNode, PreparedNode, RootBuild, build};
 pub mod atlas;
 pub mod children;
 pub mod flexbox;
@@ -14,7 +17,7 @@ use std::{cell::RefCell, ops::Deref, rc::Rc};
 use mue_core::{
     Disposable, Owned,
     prop::Prop,
-    scope::Scope,
+    scope::{OwnedScope, Scope},
     signal::{Access, ReadSignal, Signal, signal},
 };
 use slotmap::{Key, new_key_type};
@@ -43,6 +46,10 @@ thread_local! {
 pub(crate) struct NodeInner {
     pub scope: Scope,
     pub(crate) retained_scopes: Vec<Scope>,
+    owned_scopes: Vec<OwnedScope>,
+    hover_owners: Vec<Rc<HoverOwner>>,
+    pub(crate) hovered: Option<Signal<bool>>,
+    pub(crate) hovered_aliases: Vec<Signal<bool>>,
     pub hooks: NodeHooks,
 
     pub(crate) layout_id: Option<taffy::NodeId>,
@@ -92,10 +99,14 @@ impl NodeInner {
                 .resolve(bounds, self.transform_origin.get())
     }
 
-    pub fn new(children: Owned<Children>) -> Self {
+    pub fn new(scope: Scope, children: Owned<Children>) -> Self {
         Self {
-            scope: Scope::new(),
+            scope,
             retained_scopes: Vec::new(),
+            owned_scopes: Vec::new(),
+            hover_owners: Vec::new(),
+            hovered: None,
+            hovered_aliases: Vec::new(),
             hooks: NodeHooks::default(),
 
             layout_id: None,
@@ -117,12 +128,22 @@ impl NodeInner {
     }
 
     pub fn with_mut<T>(f: impl FnOnce(&mut Self) -> T) -> T {
-        let mut ctx = CONTEXT.with_borrow_mut(|stack| stack.pop().expect("no node context found"));
-        let result = f(ctx.as_mut());
-        CONTEXT.with_borrow_mut(|stack| stack.push(ctx));
-        result
+        struct Restore(Option<Box<NodeInner>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                if let Some(node) = self.0.take() {
+                    CONTEXT.with_borrow_mut(|stack| stack.push(node));
+                }
+            }
+        }
+        let mut restore =
+            Restore(Some(CONTEXT.with_borrow_mut(|stack| {
+                stack.pop().expect("no node context found")
+            })));
+        f(restore.0.as_mut().unwrap().as_mut())
     }
 
+    #[cfg(test)]
     pub fn register(self) -> NodeId {
         Runtime::with(|rt| rt.nodes.borrow_mut().insert(self))
     }
@@ -135,6 +156,17 @@ pub struct NodeRef {
 }
 
 impl NodeRef {
+    /// Observe an already enabled live node without allocating or retaining it.
+    pub fn hovered(&self) -> Option<ReadSignal<bool>> {
+        Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .and_then(|node| node.hovered.map(|signal| *signal))
+        })
+        .ok()
+        .flatten()
+    }
     pub(crate) fn null() -> Self {
         Self { id: NodeId::null() }
     }
@@ -250,26 +282,30 @@ impl NodeRef {
     }
 }
 
+fn dispose_inner(node: NodeInner) {
+    // Drop children and all owned reactive graphs before removing their layout storage.
+    node.children.dispose();
+    node.scope.dispose();
+    for scope in node.retained_scopes {
+        scope.dispose();
+    }
+    let _ = Runtime::try_with(|rt| {
+        if let Some(layout_id) = node.layout_id {
+            let _ = rt.taffy.borrow_mut().remove(layout_id);
+        }
+        for gesture_id in node.gestures {
+            rt.gestures.borrow_mut().remove(gesture_id);
+        }
+    });
+}
 impl Disposable for NodeRef {
     fn dispose(&self) {
-        let _ = Runtime::try_with(|rt| {
-            let Some(node) = rt.nodes.borrow_mut().remove(self.id) else {
-                return;
-            };
-            // The children signal owns the child Nodes through its callback.
-            // Disposing it drops those Nodes, including hidden children.
-            node.children.dispose();
-            node.scope.dispose();
-            for scope in node.retained_scopes {
-                scope.dispose();
-            }
-            if let Some(layout_id) = node.layout_id {
-                rt.taffy.borrow_mut().remove(layout_id).unwrap();
-            }
-            for gesture_id in node.gestures {
-                rt.gestures.borrow_mut().remove(gesture_id);
-            }
-        });
+        let node = Runtime::try_with(|rt| rt.nodes.borrow_mut().remove(self.id))
+            .ok()
+            .flatten();
+        if let Some(node) = node {
+            dispose_inner(node);
+        }
     }
 }
 
@@ -286,39 +322,107 @@ impl Node {
         Self::build_with_style(Style::default(), |_style| f())
     }
 
-    /// Build a custom node with layout, paint, and event styles.
-    pub fn build_with_style(mut style: Style, f: impl FnOnce(&mut Style)) -> Self {
-        let node = NodeInner::new(style.children.take().unwrap_or_else(|| ().into_children()));
-        let scope = node.scope;
-        CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
-        scope.run(|| {
-            crate::transition::bind_style(&mut style);
-            NodeInner::with_mut(|node| {
-                node.computed_font_size = signal(FontSize::DEFAULT_PX);
-                node.font_size = style.font_size;
-            });
-            // Apply once around the whole subtree, including custom draw hooks.
-            NodeInner::with_mut(|node| {
-                node.matrix_transform = style.take_matrix_transform();
-                node.transform_list = style.take_transform_list();
-                node.transform_origin = style.take_transform_origin();
-            });
-            f(&mut style);
-        });
-        let mut node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
-        if let Some(font_size) = style.font_size.take() {
-            node.font_size = Some(font_size);
+    pub fn retain_owned_scope(&self, scope: OwnedScope) {
+        Runtime::with(|rt| rt.nodes.borrow_mut()[self.id].owned_scopes.push(scope));
+    }
+
+    /// Build a custom node. Its style is sealed before consumers execute.
+    pub fn build_with_style(style: Style, f: impl FnOnce(&mut Style)) -> Self {
+        let mut root = RootBuild::new();
+        root.push_style(style);
+        // This convenience entry has no declaration target or prepare defaults.
+        let owner = root.into_untyped();
+        Self::mount_parts(owner.0, owner.1, owner.2, owner.3, f)
+    }
+
+    pub(super) fn mount_prepared(prepared: PreparedNode) -> Self {
+        let PreparedNode {
+            owner,
+            environment,
+            style,
+            hover_owners,
+            mount,
+        } = prepared;
+        Self::mount_parts(owner, environment, style, hover_owners, mount)
+    }
+
+    fn mount_parts(
+        owner: OwnedScope,
+        environment: AppBuildContext,
+        mut style: Style,
+        hover_owners: Vec<Rc<HoverOwner>>,
+        f: impl FnOnce(&mut Style),
+    ) -> Self {
+        struct MountGuard {
+            depth: usize,
+            armed: bool,
         }
-        let after_children = std::mem::take(&mut node.hooks.after_children);
-        node.hooks = style.build_hooks();
-        node.hooks.after_children = after_children;
-        append_hooks(node.as_mut(), &mut style);
-        Self(
-            NodeRef {
-                id: node.register(),
+        impl Drop for MountGuard {
+            fn drop(&mut self) {
+                if self.armed {
+                    loop {
+                        let node = CONTEXT.with_borrow_mut(|stack| {
+                            if stack.len() > self.depth {
+                                stack.pop()
+                            } else {
+                                None
+                            }
+                        });
+                        match node {
+                            Some(node) => dispose_inner(*node),
+                            None => break,
+                        }
+                    }
+                }
             }
-            .owned(),
-        )
+        }
+        let scope = owner.scope();
+        environment.run(|| {
+            scope.run(|| {
+                let children = ().into_children();
+                let mut node = NodeInner::new(scope, children);
+                node.hovered = hover_owners.first().map(|owner| owner.signal);
+                node.hovered_aliases = hover_owners
+                    .iter()
+                    .skip(1)
+                    .map(|owner| owner.signal)
+                    .collect();
+                node.hover_owners = hover_owners;
+                node.owned_scopes.push(owner);
+                let depth = CONTEXT.with_borrow(|stack| stack.len());
+                CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
+                let mut guard = MountGuard { depth, armed: true };
+                crate::transition::bind_style(&mut style);
+                crate::paint::bind_node_style(&mut style);
+                NodeInner::with_mut(|node| {
+                    node.computed_font_size = signal(FontSize::DEFAULT_PX);
+                    node.font_size = style.font_size;
+                    node.matrix_transform = style.take_matrix_transform();
+                    node.transform_list = style.take_transform_list();
+                    node.transform_origin = style.take_transform_origin();
+                });
+                // Parent bindings exist before every independent child is materialized.
+                if let Some(children) = style.children.take() {
+                    let children = children.mount();
+                    NodeInner::with_mut(|node| node.children = children);
+                }
+                f(&mut style);
+                NodeInner::with_mut(|node| {
+                    let after_children = std::mem::take(&mut node.hooks.after_children);
+                    node.hooks = style.build_hooks();
+                    node.hooks.after_children = after_children;
+                    append_hooks(node, &mut style);
+                });
+                // Acquire the arena before removing the guarded node from its stack.
+                let id = Runtime::with(|rt| {
+                    let mut nodes = rt.nodes.borrow_mut();
+                    let node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
+                    nodes.insert(*node)
+                });
+                guard.armed = false;
+                Self(NodeRef { id }.owned())
+            })
+        })
     }
 }
 
@@ -383,15 +487,11 @@ impl Deref for Node {
 pub trait IntoNode {
     fn into_node(self) -> Node;
 
-    fn factory_identity(&self) -> Option<usize> {
-        None
-    }
-
-    fn show_if(self, condition: impl Into<Prop<bool>>) -> Owned<Children>
+    fn show_if(self, condition: impl Into<Prop<bool>>) -> ChildrenPlan
     where
-        Self: Sized,
+        Self: Sized + 'static,
     {
-        children::show_if(condition.into(), self.into_node())
+        children::show_if(condition.into(), self)
     }
 }
 
@@ -401,8 +501,8 @@ impl IntoNode for Node {
     }
 }
 
-pub trait Component: IntoNode + Styleable + StyleableExt {}
-impl<T: IntoNode + Styleable + StyleableExt> Component for T {}
+pub trait Component: IntoNode + PrepareNode + Styleable + StyleableExt {}
+impl<T: IntoNode + PrepareNode + Styleable + StyleableExt> Component for T {}
 
 /// Take the current node's children so a component can wrap or reorder them.
 pub fn take_children() -> Owned<Children> {

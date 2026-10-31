@@ -41,3 +41,6 @@ mue-core = { path = "mue-core" }
 mue-macros = { path = "mue-macros" }
 mue-macroquad = { path = "mue-macroquad" }
 mue-components = { path = "mue-components" }
+
+[profile.release]
+debug = true

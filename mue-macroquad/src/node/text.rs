@@ -155,8 +155,10 @@ fn measured_size(buffer: &Buffer, paragraph_spacing: f32, max_lines: Option<usiz
 
 /// Display a plain reactive string with the renderer's text node.
 #[mue_macros::node]
-pub fn text(style: &mut Style, text: Rc<str>) {
-    render_spans(style, text.map(|value| vec![Span::new(value.to_string())]));
+#[theme]
+pub fn text(text: Rc<str>) -> super::NodePlan<impl FnOnce(&mut Style)> {
+    let spans = text.map(|value| vec![Span::new(value.to_string())]);
+    super::NodePlan::new(Style::new(), move |style| render_spans(style, spans))
 }
 
 pub fn render_spans(style: &mut Style, content: Prop<Vec<Span>>) {

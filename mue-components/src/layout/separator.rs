@@ -1,5 +1,5 @@
 use mue_core::prop::PropValue;
-use mue_macroquad::node::flexbox::render_container;
+use mue_macroquad::node::{NodePlan, flexbox::render_container};
 use mue_macroquad::{
     color::Color,
     style::{Size, Style, Styleable, StyleableExt},
@@ -15,12 +15,12 @@ impl PropValue for Orientation {}
 
 /// A one-pixel divider. A vertical divider requires a bounded parent height.
 #[mue_macros::node]
+#[theme(orientation, thickness)]
 pub fn separator(
-    style: &mut Style,
     #[default] orientation: Orientation,
     #[default(Size::Px(1.))] thickness: Size,
-) {
-    style.provide_defaults(
+) -> NodePlan<impl FnOnce(&mut Style)> {
+    NodePlan::new(
         Style::new()
             .flex_none()
             .width(mue_core::effect::computed(move |_| {
@@ -50,6 +50,6 @@ pub fn separator(
                 }
             }))
             .background(Color::from_rgba(128, 128, 128, 96)),
-    );
-    render_container(style);
+        move |style| render_container(style),
+    )
 }
