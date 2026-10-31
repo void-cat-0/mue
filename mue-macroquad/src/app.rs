@@ -22,6 +22,22 @@ pub struct App {
 }
 
 impl App {
+    /// Install the application's sole static or reactive theme before building its view.
+    pub fn with_theme<T: IntoNode>(
+        theme: impl Into<mue_core::prop::Prop<crate::theme::Theme>>,
+        build: impl FnOnce() -> T,
+    ) -> Self {
+        let owner = mue_core::scope::OwnedScope::new_inherited();
+        let scope = owner.scope();
+        crate::node::AppBuildContext::with_theme(theme.into(), || {
+            scope.run(|| {
+                let app = Self::new(build());
+                app.root_node.retain_owned_scope(owner);
+                app
+            })
+        })
+    }
+
     /// Build and retain a root view.
     pub fn new(root_node: impl IntoNode) -> Self {
         crate::viewport::set(crate::viewport::Viewport {
@@ -114,9 +130,11 @@ impl App {
         Runtime::begin_text_render_pass();
         batch(|| {
             self.root_node.render(vec2(0., 0.));
-            self.pointer_manager.process(root_node);
-            crate::event::wheel::check_wheel(root_node);
         });
         Runtime::end_text_render_pass();
+        // Hit-test against this frame's published bounds. Hover owns its atomic
+        // signal batch; changes to layout are handled by the next normal frame.
+        self.pointer_manager.process(root_node);
+        batch(|| crate::event::wheel::check_wheel(root_node));
     }
 }

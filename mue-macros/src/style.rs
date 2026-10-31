@@ -606,12 +606,7 @@ fn transition(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
                     "ease_in_out"
                 },
             "spring" => "spring",
-            "ease" =>
-                if strength.is_some() {
-                    "ease_with_strength"
-                } else {
-                    "ease"
-                },
+            "ease" if strength.is_some() => "ease_with_strength",
             _ => "ease",
         }
     );

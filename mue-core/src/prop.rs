@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::HashSet,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     rc::Rc,
@@ -158,14 +159,17 @@ impl_prop_value!(char, bool);
 impl_prop_value!(f32, f64);
 impl_prop_value!(u8, u16, u32, u64, u128, usize);
 impl_prop_value!(i8, i16, i32, i64, i128, isize);
-impl_prop_value!(String, Cow<'static, str>, &'static str);
+impl_prop_value!(String, Cow<'static, str>, &'static str, Rc<str>, Arc<str>);
 impl_prop_value!(PathBuf, Cow<'static, Path>, &'static Path);
 
 impl<T: PropValue> PropValue for Option<T> {}
 impl<T: PropValue> PropValue for Box<T> {}
 impl<T: PropValue> PropValue for Vec<T> {}
+impl<T: PropValue> PropValue for HashSet<T> {}
 impl<T: PropValue> PropValue for Rc<T> {}
 impl<T: PropValue> PropValue for Arc<T> {}
+impl<T: PropValue> PropValue for Rc<[T]> {}
+impl<T: PropValue> PropValue for Arc<[T]> {}
 impl<T: PropValue> PropValue for [T] {}
 impl<T: PropValue, const N: usize> PropValue for [T; N] {}
 
@@ -184,6 +188,33 @@ impl_prop_value_tuple!(T1 T2 T3 T4 T5);
 impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6);
 impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6 T7);
 impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6 T7 T8);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_collections_and_shared_strings_are_property_values() {
+        fn into_prop<T: PropValue>(value: T) -> Prop<T> {
+            value.into()
+        }
+        let values = HashSet::from(["compact", "selected"]);
+        let prop = into_prop(values.clone());
+        assert_eq!(prop.get_clone(), values);
+        let values: Rc<[i32]> = Rc::from([1, 2, 3]);
+        let prop = into_prop(values.clone());
+        assert!(Rc::ptr_eq(prop.as_static().unwrap(), &values));
+        let values: Arc<[i32]> = Arc::from([1, 2, 3]);
+        let prop = into_prop(values.clone());
+        assert!(Arc::ptr_eq(prop.as_static().unwrap(), &values));
+        let text: Rc<str> = Rc::from("label");
+        let prop = into_prop(text.clone());
+        assert!(Rc::ptr_eq(prop.as_static().unwrap(), &text));
+        let text: Arc<str> = Arc::from("label");
+        let prop = into_prop(text.clone());
+        assert!(Arc::ptr_eq(prop.as_static().unwrap(), &text));
+    }
+}
 
 #[cfg(feature = "impl-cosmic-text")]
 mod cosmic_text;

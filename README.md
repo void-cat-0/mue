@@ -3,6 +3,8 @@
 基于 [macroquad](https://macroquad.rs) 的响应式声明式 UI / 组件库，用 Rust 编写。
 布局交给 [taffy](https://github.com/DioxusLabs/taffy)，文本由 [cosmic-text](https://github.com/pop-os/cosmic-text) 排版。
 
+> 本文使用声明式 Theme API；设计边界见[设计摘要](docs/theme-refactor.md) / [实施规格](docs/theme-refactor-implementation.md)。首版仅支持顶层主题，不包含实例 ID、结构选择器或嵌套主题作用域。
+
 ## 特性
 
 - **细粒度响应式**：`signal` / `computed` / `watch_effect`，配合 `scope` 自动追踪与释放依赖。
@@ -10,7 +12,7 @@
 - **组件宏**：`#[mue_macros::component]` 把普通函数变成一个可组合的节点，参数自动支持字面量或 signal。
 - **事件与手势**：点击、hover、滚轮、长按、拖动、滑动、双指缩放与旋转，以及基于 taffy 布局的命中测试。
 - **自定义字体**：按字面（family / weight）注册 `ttf` / `otf`，字重本身也能是响应式的。
-- **Factory 与主题**：具名参数、实例级覆盖、按身份匹配的 `theme!` 分支、局部 Provider 和响应式换肤。
+- **声明式主题**：显式 opt-in、类型身份与参数 allowlist、完整 class 集合、逐属性级联、顶层主题组合与响应式换肤。
 - **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
 - **样式过渡**：节点 `.transition(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
 
@@ -29,7 +31,7 @@
 | `examples/pages` | 页面切换与切换动画。 |
 | `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
 | `examples/style` | style 声明、响应式变换，以及滚动区域、图片、形状、圆和文档组件。 |
-| `examples/theme` | 练习计数、按钮变体、嵌套主题与明暗主题切换。 |
+| `examples/theme` | 练习计数、响应式按钮参数、class 集合、显式 hover 与明暗主题切换。 |
 | `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
 | `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
 | `examples/navigation` | 导航栈、自适应双栏、返回、深链接与页面状态保留。 |
@@ -58,21 +60,36 @@ cargo run -p color
 cargo run -p playground
 ```
 
-`Factory` 复用组件定义；主题只覆盖选中的样式字段。`theme!` 克隆分支里的 Factory 句柄，原句柄仍可用来创建实例：
+声明直接创建 builder；用 `#[theme(...)]` 显式开放类型身份及所列参数，`theme!` 以生成的 CamelCase 类型别名匹配：
 
 ```rust
-use mue_components::text;
-use mue_macroquad::{App, color::Color, factory::factory, style::Styleable, theme::{provide_theme, theme}};
+use std::{collections::HashSet, rc::Rc};
+use mue_components::prelude::*;
+use mue_macroquad::{App, theme::{Themeable, class, theme}};
 
-let label = factory(|caption: String| text(caption));
-let appearance = theme!(|c, s| match c {
-    label => s.font_size(18.).color(Color::WHITE),
-    _ => s,
+#[component]
+#[theme(primary)]
+fn button(caption: Rc<str>, #[default] primary: bool) -> impl Component {
+    let _ = primary;
+    text(caption)
+}
+
+let appearance = theme! {
+    Button { color: white; padding: 12px; }
+    Button[$primary] { background: blue; }
+    Button.selected[$primary]:hover { opacity: 80%; }
+};
+let app = App::with_theme(appearance, || {
+    button("Hello")
+        .primary(true)
+        .classes(HashSet::from([class!("selected")]))
+        .enable_hovered()
 });
-let app = App::new(provide_theme(appearance, move || label.create("Hello")));
 ```
 
-`provide_theme` 也接受 `Signal<Theme>` / `ReadSignal<Theme>`；替换信号值会重算样式，未设置的字段继续从外层主题和 Factory 默认样式回退。参见 `cargo run -p theme`。
+`App::with_theme` 在执行根构建闭包前安装唯一顶层主题，接受 `Theme`、`Signal<Theme>` / `ReadSignal<Theme>`；多个规则模块用 `Theme::compose` 有序组合。替换信号值只更新已有节点的样式，不重建视图或重置局部状态。规则退出后按逐属性级联恢复低层默认值。
+
+`.classes(...)` 替换完整 `HashSet<ClassName>`，`class!` 在编译期校验名称；动态条件由调用方派生整集合。`:hover` 需要显式 `.enable_hovered()`，无主题的普通 builder 也能通过 `.with_hovered(|view, hovered| ...)` 直接使用只读 hover 信号。完整规则及级联见 [主题教程](docs/themes.md)，自定义 `NodePlan` 见 [组件教程](docs/components.md)。
 
 在 `macroquad` 的窗口回调里构建并驱动一棵节点树：
 
@@ -232,9 +249,9 @@ let label = text("Hello")
 
 实现 `mue_macroquad::transition::Interpolatable` 可以扩展可过渡值。`App::frame` 会在布局前调用 `mue_macroquad::transition::advance(dt)`。
 
-更完整的主题、factory、组件和示例说明位于 [`docs/`](docs/)。
+更完整的[主题](docs/themes.md)、[组件声明](docs/factories.md)、[自定义节点](docs/components.md)和示例说明位于 [`docs/`](docs/)。
 
-`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、嵌套主题以及明暗主题的 0.3 秒颜色过渡。
+`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、class 切换，以及由顶层动态主题驱动的颜色过渡。
 
 ## 同级页面
 

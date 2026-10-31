@@ -1,7 +1,6 @@
 mod app;
 pub mod color;
 pub mod event;
-pub mod factory;
 pub mod font;
 pub mod gesture;
 pub mod hook;
@@ -17,7 +16,8 @@ pub mod transition;
 mod viewport;
 
 pub use app::App;
-pub use factory::FactoryUse;
+pub use mue_macros::{class, theme};
+pub use theme::{ClassName, Theme, ThemeTarget, Themeable};
 
 pub use mue_macros::style;
 

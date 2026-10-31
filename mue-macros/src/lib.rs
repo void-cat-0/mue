@@ -23,6 +23,12 @@ pub fn theme(input: TokenStream) -> TokenStream {
     theme::expand(input)
 }
 
+/// Build a statically validated theme class name.
+#[proc_macro]
+pub fn class(input: TokenStream) -> TokenStream {
+    theme::expand_class(input)
+}
+
 mod paths;
 mod style;
 

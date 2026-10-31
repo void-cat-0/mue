@@ -11,7 +11,7 @@ use mue_macroquad::{
     color::Color,
     math::vec2,
     shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
-    style::{Size, Style, Styleable, StyleableExt},
+    style::{Size, Styleable, StyleableExt},
 };
 
 fn swatch(label: &str, brush: impl Into<Brush>) -> Node {
@@ -122,16 +122,12 @@ async fn run() {
                                 })
                                 .toggle_on_tap(dense),
                         )),
-                        halftone::halftone(
-                            Style::new().style(mue_macroquad::style! {
+                        halftone::halftone(density, *moving).style(mue_macroquad::style! {
                             height: {Size::vh(24.)};
                             max-height: {responsive::ui(180.)};
                             width: 100%;
                             flex: none;
-                            }),
-                            density,
-                            *moving,
-                        ),
+                        }),
                     )),
             ),
     );

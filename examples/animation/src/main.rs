@@ -35,7 +35,6 @@ fn main() {
 async fn run() {
     let expanded = signal(false);
     let spring = signal(true);
-    let hovered = signal(false);
     responsive::sync();
     let mut app = App::new(
         stack()
@@ -103,20 +102,21 @@ async fn run() {
                             )),
                     ),
                 center()
-                    .style(mue_macroquad::style! {
-                    flex: none;
-                    min-height: {responsive::ui(44.)};
-                    padding: {(responsive::ui(16.), responsive::ui(8.))};
-                    background: {hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE))};
-                    transition: {computed(move |_| {
-                                            if spring.get() {
-                                                Transition::spring(0.8, 0.35)
-                                            } else {
-                                                Transition::ease_in_out(0.65)
-                                            }
-                                        })};
+                    .with_hovered(move |view, hovered| {
+                        view.style(mue_macroquad::style! {
+                        flex: none;
+                        min-height: {responsive::ui(44.)};
+                        padding: {(responsive::ui(16.), responsive::ui(8.))};
+                        background: {hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE))};
+                        transition: {computed(move |_| {
+                                                if spring.get() {
+                                                    Transition::spring(0.8, 0.35)
+                                                } else {
+                                                    Transition::ease_in_out(0.65)
+                                                }
+                                            })};
+                        })
                     })
-                    .use_hovered(hovered)
                     .on_activate(move || expanded.toggle())
                     .children(text(expanded.select("Close", "Open")).style(
                         mue_macroquad::style! {

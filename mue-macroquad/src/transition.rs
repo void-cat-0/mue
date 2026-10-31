@@ -269,6 +269,19 @@ struct Tween<T> {
     transition: Option<Transition>,
     value: Signal<T>,
     _running: Signal<bool>,
+    registration: Option<Weak<dyn Driver>>,
+}
+
+impl<T> Drop for Tween<T> {
+    fn drop(&mut self) {
+        if let Some(registration) = self.registration.take() {
+            let _ = DRIVERS.try_with(|drivers| {
+                if let Ok(mut drivers) = drivers.try_borrow_mut() {
+                    drivers.retain(|driver| !Weak::ptr_eq(driver, &registration));
+                }
+            });
+        }
+    }
 }
 
 impl<T: Interpolatable> Driver for RefCell<Tween<T>> {
@@ -310,8 +323,10 @@ fn transition_value<T: Interpolatable>(
         transition: None,
         value,
         _running: running,
+        registration: None,
     }));
     let driver: Rc<dyn Driver> = tween.clone();
+    tween.borrow_mut().registration = Some(Rc::downgrade(&driver));
     register_driver(&driver);
     watch(source, move |source| {
         let destination = source.get_clone_untracked();
@@ -377,8 +392,10 @@ fn bind<T: Interpolatable>(value: &mut Option<Prop<T>>, transition: Prop<Transit
     }
 }
 
-/// Called after factory/theme resolution, inside the node's lifetime scope.
+/// Called once after seal, inside the node's lifetime scope.
 pub(crate) fn bind_style(style: &mut Style) {
+    #[cfg(test)]
+    crate::runtime::record_transition_bind();
     let transition = style.take_transition();
     macro_rules! bind_fields { ($($field:ident),*) => { $(bind(&mut style.$field, transition.clone());)* }; }
     bind_fields!(
@@ -429,5 +446,28 @@ pub(crate) fn bind_style(style: &mut Style) {
                 .map(|m| Matrix::from_cols_array(&m))
                 .into(),
         );
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use mue_core::{runtime::resource_counts, scope::OwnedScope};
+
+    #[test]
+    fn dropping_the_owner_removes_tween_registrations_without_another_frame() {
+        let before = resource_counts();
+        let drivers = DRIVERS.with_borrow(Vec::len);
+        let owner = OwnedScope::new();
+        let value = owner.run(|| {
+            let source = signal(1.0f32);
+            transition_value(*source, Prop::Static(Transition::Instant))
+        });
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers + 1);
+        assert!(!value.is_disposed());
+        drop(owner);
+        assert!(value.is_disposed());
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers);
+        assert_eq!(resource_counts(), before);
     }
 }

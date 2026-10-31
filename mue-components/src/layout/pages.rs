@@ -4,9 +4,10 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     layout::use_layout,
     math::Vector,
-    node::{IntoNode, Node, NodeRef},
+    node::{self, IntoNode, Node, NodePlan, NodeRef, PrepareNode, PreparedNode, RootBuild},
     paint::use_background,
     style::{Style, Styleable, StyleableExt},
+    theme::ThemeTarget,
     transition::{self, Driver, Transition as Curve},
 };
 use std::{cell::RefCell, rc::Rc};
@@ -25,6 +26,13 @@ pub struct PagesBuilder<I> {
     style: Style,
     transition: PagesTransition,
     curve: Curve,
+}
+
+/// Theme selector alias for the concrete pages builder.
+pub type Pages<I> = PagesBuilder<I>;
+
+impl<I: 'static> ThemeTarget for PagesBuilder<I> {
+    type Options = ();
 }
 
 /// Display a fixed list of pages, retaining every page's state until disposal.
@@ -180,19 +188,33 @@ impl Driver for PresentationDriver {
 
 impl<I> IntoNode for PagesBuilder<I>
 where
-    I: IntoIterator,
-    I::Item: IntoNode,
+    I: IntoIterator + 'static,
+    I::Item: IntoNode + 'static,
 {
     fn into_node(self) -> Node {
+        node::build(self)
+    }
+}
+
+impl<I> PrepareNode for PagesBuilder<I>
+where
+    I: IntoIterator + 'static,
+    I::Item: IntoNode + 'static,
+{
+    fn prepare(self, mut root: RootBuild) -> PreparedNode {
         let Self {
             selected,
             pages,
-            mut style,
+            style,
             transition,
             curve,
         } = self;
-        style.provide_defaults(Style::new().size_full());
-        Node::build_with_style(style, move |style| {
+        root.push_style(style);
+        if root.has_theme() {
+            root.push_target::<Self>(Rc::new(()));
+        }
+        let defaults = Style::new().size_full();
+        root.finish(NodePlan::new(defaults, move |style| {
             let position = signal(0.);
             let size = signal(Vector::ZERO);
             let visible = signal(Rc::<[NodeRef]>::default());
@@ -216,7 +238,7 @@ where
                         .height(computed(move |_| size.get().y))
                         .inset_left(computed(move |_| offset.get().x))
                         .inset_top(computed(move |_| offset.get().y))
-                        .children(page.into_node())
+                        .children(page)
                         .into_node()
                 })
                 .collect();
@@ -257,9 +279,9 @@ where
                 if let Some(page) = interactive.get_untracked() {
                     mue_macroquad::event::hit_test::do_hit_test(page, pos, result);
                 }
-                result.insert(node);
+                result.hit_self(node);
             }));
             use_background(style, layout.rect);
-        })
+        }))
     }
 }

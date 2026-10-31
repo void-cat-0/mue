@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, ops::Deref};
 
 use slotmap::{Key, SlotMap, new_key_type};
 use type_map::TypeMap;
@@ -24,6 +24,7 @@ pub(crate) struct ScopeInner {
     pub(crate) subscopes: Vec<ScopeId>,
 
     parent: Scope,
+    context_parent: Scope,
     context: TypeMap,
 
     #[cfg(debug_assertions)]
@@ -39,6 +40,7 @@ impl ScopeInner {
             subscopes: Vec::new(),
 
             parent: Scope::null(),
+            context_parent: Scope::null(),
             context: TypeMap::new(),
 
             #[cfg(debug_assertions)]
@@ -72,9 +74,69 @@ impl Disposable for ScopeInner {
     }
 }
 
+/// A copyable, non-owning handle to a reactive scope.
 #[derive(Clone, Copy)]
 pub struct Scope {
     id: ScopeId,
+}
+
+/// Owns a detached scope and disposes its resources when dropped.
+///
+/// Moving this guard transfers ownership without attaching the scope to the
+/// ambient scope. Context is explicit with `new`, or inherited with `new_inherited`.
+/// Copying its [`Scope`] handle does not keep resources alive.
+pub struct OwnedScope {
+    scope: Scope,
+}
+
+impl OwnedScope {
+    #[track_caller]
+    pub fn new() -> Self {
+        Self {
+            scope: Scope::new_detached(),
+        }
+    }
+
+    /// Create a detached owner with context lookup inherited from the current scope.
+    /// This does not give the current scope ownership of the new scope.
+    #[track_caller]
+    pub fn new_inherited() -> Self {
+        let owner = Self::new();
+        owner.set_context_parent(current_scope());
+        owner
+    }
+
+    pub fn scope(&self) -> Scope {
+        self.scope
+    }
+
+    /// Relinquish RAII ownership. The caller must dispose the returned scope or
+    /// transfer it to a parent with [`Scope::push_subscope`].
+    pub fn into_scope(self) -> Scope {
+        let scope = self.scope;
+        std::mem::forget(self);
+        scope
+    }
+}
+
+impl Default for OwnedScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Deref for OwnedScope {
+    type Target = Scope;
+
+    fn deref(&self) -> &Scope {
+        &self.scope
+    }
+}
+
+impl Drop for OwnedScope {
+    fn drop(&mut self) {
+        self.scope.dispose();
+    }
 }
 
 impl Default for Scope {
@@ -86,18 +148,20 @@ impl Default for Scope {
 impl Scope {
     #[track_caller]
     pub fn new() -> Self {
-        #[cfg(debug_assertions)]
-        let location = std::panic::Location::caller();
+        let scope = Self::new_detached();
+        current_scope().push_subscope(scope);
+        scope
+    }
+
+    /// Create an unparented scope, independent of the current scope's lifetime
+    /// and context lookup chain. Prefer [`OwnedScope`] for automatic cleanup.
+    #[track_caller]
+    pub fn new_detached() -> Self {
         Runtime::with(|rt| {
             let id = rt.scopes.borrow_mut().insert(ScopeInner::new(
                 #[cfg(debug_assertions)]
-                location,
+                std::panic::Location::caller(),
             ));
-            CURRENT_SCOPE.with_borrow_mut(|parent| {
-                if !parent.is_null() {
-                    parent.push_subscope(Self { id });
-                }
-            });
             Self { id }
         })
     }
@@ -110,6 +174,11 @@ impl Scope {
 
     pub fn is_null(&self) -> bool {
         self.id.is_null()
+    }
+
+    /// Whether this non-null scope still exists in the current runtime.
+    pub fn is_alive(&self) -> bool {
+        Runtime::try_with(|rt| rt.scopes.borrow().contains_key(self.id)).unwrap_or(false)
     }
 
     pub fn push_signal<T>(&self, signal: ReadSignal<T>) {
@@ -136,22 +205,48 @@ impl Scope {
         }
         Runtime::with(|rt| {
             let mut scopes = rt.scopes.borrow_mut();
+            assert!(
+                scopes.contains_key(self.id),
+                "Parent scope has been disposed"
+            );
+            assert!(
+                scopes.contains_key(subscope.id),
+                "Subscope has been disposed"
+            );
             if scopes[subscope.id].parent.id == self.id {
                 return;
             }
             if !scopes[subscope.id].parent.is_null() {
                 panic!("Subscope already has a parent");
             }
+            let mut ancestor = *self;
+            while !ancestor.is_null() {
+                assert_ne!(ancestor.id, subscope.id, "Subscope ownership cycle");
+                ancestor = scopes[ancestor.id].parent;
+            }
+            let mut ancestor = *self;
+            while let Some(inner) = scopes.get(ancestor.id) {
+                assert_ne!(ancestor.id, subscope.id, "Subscope context parent cycle");
+                ancestor = inner.context_parent;
+            }
             scopes[subscope.id].parent = *self;
+            scopes[subscope.id].context_parent = *self;
             scopes[self.id].subscopes.push(subscope.id);
         });
     }
 
+    /// Run with this current scope, restoring the previous scope on unwind.
     pub fn run<R>(self, f: impl FnOnce() -> R) -> R {
-        let prev_scope = CURRENT_SCOPE.replace(self);
-        let result = f();
-        CURRENT_SCOPE.replace(prev_scope);
-        result
+        struct RestoreScope(Scope);
+        impl Drop for RestoreScope {
+            fn drop(&mut self) {
+                CURRENT_SCOPE.set(self.0);
+            }
+        }
+
+        assert!(self.is_null() || self.is_alive(), "Scope has been disposed");
+        let _restore = RestoreScope(CURRENT_SCOPE.replace(self));
+        f()
     }
 
     pub fn provide<T: 'static>(&self, value: T) {
@@ -163,13 +258,37 @@ impl Scope {
         });
     }
 
+    /// Change context lookup without transferring resource ownership.
+    pub fn set_context_parent(&self, parent: Scope) {
+        assert!(self.is_alive(), "Scope has been disposed");
+        assert!(
+            parent.is_null() || parent.is_alive(),
+            "Context parent has been disposed"
+        );
+        Runtime::with(|rt| {
+            let mut scopes = rt.scopes.borrow_mut();
+            let mut ancestor = parent;
+            while !ancestor.is_null() {
+                assert_ne!(ancestor.id, self.id, "Scope context parent cycle");
+                let Some(inner) = scopes.get(ancestor.id) else {
+                    break;
+                };
+                ancestor = inner.context_parent;
+            }
+            scopes[self.id].context_parent = parent;
+        });
+    }
+
     fn inject_with<T: 'static>(self, scopes: &SlotMap<ScopeId, ScopeInner>) -> Option<&T> {
         let mut scope = self;
         while !scope.is_null() {
-            if let Some(context) = scopes[scope.id].context.get::<T>() {
+            let Some(inner) = scopes.get(scope.id) else {
+                break;
+            };
+            if let Some(context) = inner.context.get::<T>() {
                 return Some(context);
             }
-            scope = scopes[scope.id].parent;
+            scope = inner.context_parent;
         }
         None
     }
@@ -207,9 +326,12 @@ pub fn inject<T: Clone + 'static>() -> Option<T> {
 
 impl Disposable for Scope {
     fn dispose(&self) {
-        Runtime::with(|rt| {
+        let _ = Runtime::try_with(|rt| {
             let scope = rt.scopes.borrow_mut().remove(self.id);
             if let Some(scope) = scope {
+                if let Some(parent) = rt.scopes.borrow_mut().get_mut(scope.parent.id) {
+                    parent.subscopes.retain(|id| *id != self.id);
+                }
                 scope.dispose();
             }
         });
@@ -221,14 +343,126 @@ pub fn current_scope() -> Scope {
 }
 
 pub fn create_scope(f: impl FnOnce()) -> Scope {
-    let scope = Scope::new();
-    scope.run(f);
-    scope
+    let owner = OwnedScope {
+        scope: Scope::new(),
+    };
+    owner.run(f);
+    owner.into_scope()
 }
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn detached_owner_survives_configuration_scope_and_moves() {
+        let configuration = OwnedScope::new();
+        let owner = configuration.run(OwnedScope::new);
+        let scope = owner.scope();
+        let value = owner.run(|| signal(42));
+        let observer = value;
+        drop(configuration);
+        assert!(scope.is_alive());
+        assert_eq!(observer.get(), 42);
+        let node_owner = owner;
+        assert!(scope.is_alive());
+        drop(node_owner);
+        assert!(!scope.is_alive());
+        assert!(observer.is_disposed());
+    }
+
+    #[test]
+    fn detached_context_inheritance_does_not_transfer_ownership() {
+        let parent = OwnedScope::new();
+        parent.provide(7u32);
+        let detached = parent.run(OwnedScope::new);
+        let inherited = parent.run(OwnedScope::new_inherited);
+        let attached = parent.run(Scope::new);
+        assert_eq!(detached.inject::<u32>(), None);
+        assert_eq!(inherited.inject::<u32>(), Some(7));
+        assert_eq!(attached.inject::<u32>(), Some(7));
+        let value = inherited.run(|| signal(1));
+        drop(parent);
+        assert!(!attached.is_alive());
+        assert!(inherited.is_alive());
+        assert_eq!(inherited.inject::<u32>(), None);
+        assert_eq!(value.get(), 1);
+        drop(inherited);
+        assert!(value.is_disposed());
+    }
+
+    #[test]
+    fn scope_and_context_restore_after_failed_build() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let parent = OwnedScope::new();
+        parent.provide(3u32);
+        parent.run(|| {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let builder = OwnedScope::new_inherited();
+                builder.provide(9u32);
+                builder.run(|| {
+                    assert_eq!(inject::<u32>(), Some(9));
+                    panic!("failed build");
+                });
+            }));
+            assert!(result.is_err());
+            assert_eq!(current_scope().id, parent.scope().id);
+            assert_eq!(inject::<u32>(), Some(3));
+            let child = Scope::new();
+            assert_eq!(child.inject::<u32>(), Some(3));
+        });
+        assert!(current_scope().is_null());
+        assert!(!Scope::null().is_alive());
+    }
+
+    #[test]
+    fn failed_create_scope_cleans_up_unreturned_resources() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let resource = Rc::new(());
+        let parent = OwnedScope::new();
+        parent.run(|| {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                create_scope(|| {
+                    Signal::shallow(resource.clone());
+                    panic!("cannot return scope");
+                });
+            }));
+            assert!(result.is_err());
+            assert_eq!(Rc::strong_count(&resource), 1);
+            crate::runtime::Runtime::with(|rt| {
+                assert!(rt.scopes.borrow()[parent.scope().id].subscopes.is_empty());
+            });
+        });
+    }
+
+    #[test]
+    fn context_parent_rebinding_rejects_cycles() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let first = OwnedScope::new();
+        let second = OwnedScope::new();
+        first.provide(12u32);
+        second.set_context_parent(first.scope());
+        assert_eq!(second.inject::<u32>(), Some(12));
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                first.set_context_parent(second.scope());
+            }))
+            .is_err()
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                second.push_subscope(first.scope());
+            }))
+            .is_err()
+        );
+        second.set_context_parent(Scope::null());
+        assert_eq!(second.inject::<u32>(), None);
+        first.push_subscope(second.into_scope());
+    }
 
     use crate::prelude::*;
 

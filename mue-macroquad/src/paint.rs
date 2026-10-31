@@ -14,8 +14,9 @@ use lyon::{
 };
 use macroquad::prelude::*;
 use mue_core::{
-    effect::computed_always,
+    effect::{computed, computed_always},
     prop::Prop,
+    scope::{inject, provide},
     signal::{Access, ReadSignal},
 };
 use smallvec::SmallVec;
@@ -94,13 +95,29 @@ pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
 }
 
 #[derive(Clone)]
-#[repr(transparent)]
-struct Transform(Prop<Matrix>);
+struct PaintContext {
+    opacity: Prop<f32>,
+}
 
-#[derive(Clone)]
-struct Opacity(Prop<f32>);
+fn combine_opacity(inherited: Option<Prop<f32>>, local: Prop<f32>) -> Prop<f32> {
+    match inherited {
+        Some(Prop::Static(parent)) => local.map(move |local| parent * local),
+        Some(parent) => computed(move |_| parent.get() * local.get()).into(),
+        None => local,
+    }
+}
 
-/// Draw geometry using the node's inherited transform and opacity.
+/// Bind this node's final opacity before mounting its children or paint consumers.
+///
+/// Called once after transition binding, this retains the local property in Style
+/// while publishing the effective alpha for both this node and its descendants.
+pub(crate) fn bind_node_style(style: &mut Style) {
+    let inherited = inject::<PaintContext>().map(|context| context.opacity);
+    let opacity = combine_opacity(inherited, style.opacity.unwrap_or(Prop::Static(1.)));
+    provide(PaintContext { opacity });
+}
+
+/// Draw geometry using the node's paint transform and effective inherited opacity.
 pub struct Paint {
     pub transform: Prop<Matrix>,
     opacity: Prop<f32>,
@@ -148,36 +165,21 @@ fn frobenius_norm(m: &Matrix) -> f32 {
     (m.col(0).length_squared() + m.col(1).length_squared() + m.col(2).length_squared()).sqrt()
 }
 
-/// Obtain paint state while building a node, inheriting parent transform and opacity.
+/// Obtain this node's already bound paint state while building its consumers.
 pub fn use_paint(style: &mut Style) -> Paint {
-    fn extract<T: Clone + PartialEq + 'static>(
-        prev: Option<Prop<T>>,
-        style: Option<Prop<T>>,
-        default: T,
-        mut reduce: impl FnMut(T, T) -> T + 'static,
-    ) -> Prop<T> {
-        match (prev, style) {
-            (Some(prev), Some(style)) => Prop::Dynamic(mue_core::effect::computed(move |_| {
-                reduce(prev.get_clone(), style.get_clone())
-            })),
-            (Some(prev), None) => prev,
-            (None, Some(style)) => style,
-            (None, None) => Prop::Static(default),
-        }
-    }
-
-    let transform = extract(
-        mue_core::scope::inject::<Transform>().map(|it| it.0),
-        style.matrix_transform,
-        Matrix::IDENTITY,
-        |a, b| a * b,
-    );
-    let opacity = extract(
-        mue_core::scope::inject::<Opacity>().map(|it| it.0),
-        style.opacity,
-        1.0,
-        |a, b| a * b,
-    );
+    let (transform, opacity) = if let Some(context) = inject::<PaintContext>() {
+        // Node::render applies the node transform around the entire subtree.
+        // Geometry stays in layout coordinates, and local alpha is already bound.
+        (Prop::Static(Matrix::IDENTITY), context.opacity)
+    } else {
+        // Preserve direct use outside the node mount protocol.
+        (
+            style
+                .matrix_transform
+                .unwrap_or(Prop::Static(Matrix::IDENTITY)),
+            style.opacity.unwrap_or(Prop::Static(1.)),
+        )
+    };
     let tolerance = transform.map(|t| {
         let scale = frobenius_norm(&t);
         0.2 / scale
@@ -673,6 +675,83 @@ mod tests {
         color::Color,
         shader::{Brush, ColorStop, LinearGradient},
     };
+
+    #[test]
+    fn node_opacity_multiplies_ancestors_once_for_all_consumers() {
+        use crate::style::Styleable;
+        use mue_core::scope::OwnedScope;
+
+        let parent_scope = OwnedScope::new();
+        parent_scope.run(|| {
+            let mut parent = Style::new().opacity(0.5);
+            bind_node_style(&mut parent);
+            assert_eq!(parent.opacity.unwrap().get(), 0.5);
+            assert_eq!(use_paint(&mut parent).opacity.get(), 0.5);
+            assert_eq!(use_paint(&mut parent).opacity.get(), 0.5);
+
+            let child_scope = OwnedScope::new_inherited();
+            child_scope.run(|| {
+                let mut child = Style::new().opacity(0.25);
+                bind_node_style(&mut child);
+                assert_eq!(child.opacity.unwrap().get(), 0.25);
+                assert_eq!(use_paint(&mut child).opacity.get(), 0.125);
+                assert_eq!(use_paint(&mut child).opacity.get(), 0.125);
+
+                let grandchild_scope = OwnedScope::new_inherited();
+                grandchild_scope.run(|| {
+                    let mut grandchild = Style::new();
+                    bind_node_style(&mut grandchild);
+                    assert_eq!(use_paint(&mut grandchild).opacity.get(), 0.125);
+                });
+            });
+            assert_eq!(use_paint(&mut parent).opacity.get(), 0.5);
+        });
+    }
+
+    #[test]
+    fn node_opacity_inheritance_tracks_parent_and_child_signals() {
+        use crate::style::Styleable;
+        use mue_core::{scope::OwnedScope, signal::signal};
+
+        let parent_scope = OwnedScope::new();
+        parent_scope.run(|| {
+            let parent_alpha = signal(0.5);
+            let child_alpha = signal(0.25);
+            let mut parent = Style::new().opacity(parent_alpha);
+            bind_node_style(&mut parent);
+            let child_scope = OwnedScope::new_inherited();
+            child_scope.run(|| {
+                let mut child = Style::new().opacity(child_alpha);
+                bind_node_style(&mut child);
+                let paint = use_paint(&mut child);
+                assert_eq!(paint.opacity.get(), 0.125);
+                parent_alpha.set(0.75);
+                assert_eq!(paint.opacity.get(), 0.1875);
+                child_alpha.set(0.5);
+                assert_eq!(paint.opacity.get(), 0.375);
+                assert_eq!(use_paint(&mut child).opacity.get(), 0.375);
+                parent_alpha.set(0.);
+                assert_eq!(paint.opacity.get(), 0.);
+            });
+            assert_eq!(use_paint(&mut parent).opacity.get(), 0.);
+        });
+    }
+
+    #[test]
+    fn bound_paint_leaves_subtree_transforms_to_node_render() {
+        use crate::style::Styleable;
+        use mue_core::scope::OwnedScope;
+
+        let scope = OwnedScope::new();
+        scope.run(|| {
+            let matrix = Matrix::from_scale(vec2(2., 3.));
+            let mut style = Style::new().transform(matrix);
+            assert_eq!(use_paint(&mut style).transform.get(), matrix);
+            bind_node_style(&mut style);
+            assert_eq!(style.matrix_transform.unwrap().get(), matrix);
+            assert_eq!(use_paint(&mut style).transform.get(), Matrix::IDENTITY);
+        });
+    }
 
     fn assert_shape_limits(shapes: &Shapes) {
         for shape in &shapes.shapes {

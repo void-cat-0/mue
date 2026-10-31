@@ -7,9 +7,9 @@ use std::{
 use slotmap::{Key, SlotMap};
 
 use crate::{
-    effect::{Dependencies, DependencyList, EffectId, EffectInner, EffectState},
+    effect::{Dependencies, DependencyList, EffectCallback, EffectId, EffectInner, EffectState},
     scope::{ScopeId, ScopeInner},
-    signal::{SignalId, SignalInner},
+    signal::{SignalId, SignalInner, Value},
 };
 
 thread_local! {
@@ -37,6 +37,74 @@ impl DependencyTracker {
             self.index += 1;
         } else {
             self.new_dependencies.push(signal_id);
+        }
+    }
+}
+
+/// Restores the runtime stack and temporarily removed effect data on unwind.
+struct EffectRun<'a> {
+    runtime: &'a Runtime,
+    effect_id: EffectId,
+    signal_id: SignalId,
+    previous_effect: Option<EffectId>,
+    previous_tracker: Option<DependencyTracker>,
+    callback: Option<EffectCallback>,
+    value: Option<Value>,
+    took_callback: bool,
+    completed: bool,
+}
+
+impl Drop for EffectRun<'_> {
+    fn drop(&mut self) {
+        let rt = self.runtime;
+        rt.current_effect.replace(self.previous_effect);
+        let tracker = rt.tracker.replace(self.previous_tracker.take());
+
+        // The callback may have disposed itself or its owning scope. Never
+        // resurrect resources removed while their callback was executing.
+        if self.took_callback
+            && let Some(signal) = rt.signals.borrow_mut().get_mut(self.signal_id)
+        {
+            signal.value = self.value.take();
+        }
+
+        let mut effects = rt.effects.borrow_mut();
+        let effect = effects.get_mut(self.effect_id);
+        let mut signals = rt.signals.borrow_mut();
+        if let Some(effect) = effect {
+            if self.took_callback {
+                effect.callback = self.callback.take();
+            }
+            if self.completed {
+                effect.state = EffectState::Clean;
+            }
+            if let Some(mut tracker) = tracker {
+                if self.completed {
+                    for signal_id in tracker.dependencies.drain(tracker.index..) {
+                        if let Some(signal) = signals.get_mut(signal_id) {
+                            signal.subscribers.remove(&self.effect_id);
+                        }
+                    }
+                }
+                tracker.dependencies.retain(|id| signals.contains_key(*id));
+                // On unwind retain old and newly observed dependencies so that
+                // disposing the failed build can remove every subscription.
+                for signal_id in tracker.new_dependencies {
+                    if let Some(signal) = signals.get_mut(signal_id) {
+                        signal.subscribers.insert(self.effect_id);
+                        if !tracker.dependencies.contains(&signal_id) {
+                            tracker.dependencies.push(signal_id);
+                        }
+                    }
+                }
+                effect.dependencies = Dependencies::Dynamic(tracker.dependencies);
+            }
+        } else if let Some(tracker) = tracker {
+            for signal_id in tracker.dependencies.iter().chain(&tracker.new_dependencies) {
+                if let Some(signal) = signals.get_mut(*signal_id) {
+                    signal.subscribers.remove(&self.effect_id);
+                }
+            }
         }
     }
 }
@@ -136,7 +204,15 @@ impl Runtime {
         }
 
         let mut effect = self.effect_mut(effect_id);
-        effect.cleanup();
+        let cleanups = mem::take(&mut effect.cleanups);
+        drop(effect);
+        for cleanup in cleanups {
+            cleanup();
+        }
+        if !self.effects.borrow().contains_key(effect_id) {
+            return None;
+        }
+        let mut effect = self.effect_mut(effect_id);
         let update_context = mem::take(&mut effect.update_context);
 
         let tracker = match &mut effect.dependencies {
@@ -149,50 +225,34 @@ impl Runtime {
 
         let signal_id = effect.signal;
 
+        let took_callback = track_fn.is_none();
+        let callback = if took_callback {
+            effect.callback.take()
+        } else {
+            None
+        };
+        drop(effect);
+        let mut run = EffectRun {
+            runtime: self,
+            effect_id,
+            signal_id,
+            previous_effect: prev_effect,
+            previous_tracker: prev_tracker,
+            callback,
+            value: None,
+            took_callback,
+            completed: false,
+        };
         let mut result = None;
-        let mut effect_callback = None;
         let updated = if let Some(track_fn) = track_fn {
-            drop(effect);
             result = Some(track_fn());
             false
         } else {
-            let mut value = self.signal_mut(signal_id).value.take();
-            let mut callback = effect.callback.take().unwrap();
-            drop(effect);
-
-            let updated = update_context.run(|| callback(&mut value));
-            self.signal_mut(signal_id).value = value;
-            effect_callback = Some(callback);
-            updated
+            run.value = self.signal_mut(signal_id).value.take();
+            update_context.run(|| run.callback.as_mut().unwrap()(&mut run.value))
         };
-
-        self.current_effect.replace(prev_effect);
-
-        let mut effect = self.effect_mut(effect_id);
-        effect.state = EffectState::Clean;
-        if effect_callback.is_some() {
-            effect.callback = effect_callback;
-        }
-        if let Some(mut tracker) = self.tracker.replace(prev_tracker) {
-            // The callback may dispose children while the old dependencies are
-            // temporarily held by this tracker instead of EffectInner.
-            let mut signals = self.signals.borrow_mut();
-            for signal_id in tracker.dependencies.drain(tracker.index..) {
-                if let Some(signal) = signals.get_mut(signal_id) {
-                    signal.subscribers.remove(&effect_id);
-                }
-            }
-            tracker.dependencies.retain(|id| signals.contains_key(*id));
-            tracker.dependencies.reserve(tracker.new_dependencies.len());
-            for signal_id in tracker.new_dependencies {
-                if let Some(signal) = signals.get_mut(signal_id) {
-                    signal.subscribers.insert(effect_id);
-                    tracker.dependencies.push(signal_id);
-                }
-            }
-            effect.dependencies = Dependencies::Dynamic(tracker.dependencies);
-        }
-        drop(effect);
+        run.completed = true;
+        drop(run);
 
         if updated {
             update_context.run(|| self.on_update(signal_id));
@@ -208,7 +268,7 @@ impl Runtime {
 
         let mut effect = self.effect_mut(effect_id);
         if effect.state == EffectState::Check {
-            let dependencies = mem::take(&mut effect.dependencies);
+            let dependencies = effect.dependencies.to_vec();
             drop(effect);
 
             for dependency_signal_id in &*dependencies {
@@ -236,7 +296,6 @@ impl Runtime {
                 return;
             }
             effect = self.effect_mut(effect_id);
-            effect.dependencies = dependencies;
         }
 
         if effect.state == EffectState::Dirty {
@@ -291,15 +350,27 @@ impl Runtime {
     }
 
     pub fn batch(&self, f: impl FnOnce()) {
+        struct RestoreDepth<'a> {
+            depth: &'a Cell<usize>,
+            previous: usize,
+        }
+        impl Drop for RestoreDepth<'_> {
+            fn drop(&mut self) {
+                self.depth.set(self.previous);
+            }
+        }
+
         let depth = self.batch_depth.get();
         self.batch_depth.set(depth + 1);
+        let _restore = RestoreDepth {
+            depth: &self.batch_depth,
+            previous: depth,
+        };
         f();
 
         if depth == 0 {
             self.flush_updates();
         }
-
-        self.batch_depth.set(depth);
     }
 
     /// Dispose a signal, removing it and cleaning up all dependencies.
@@ -354,6 +425,28 @@ pub fn batch(f: impl FnOnce()) {
     Runtime::with(|rt| rt.batch(f))
 }
 
+/// Live arena entry counts for current-thread lifecycle instrumentation.
+/// This reports live entries, not cumulative allocations or memory usage.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResourceCounts {
+    pub scopes: usize,
+    /// Includes the runtime's permanent null signal.
+    pub signals: usize,
+    pub effects: usize,
+}
+
+/// Snapshot current-thread reactive resources, including the null signal.
+/// Compare snapshots on the same thread to measure creation and cleanup.
+#[doc(hidden)]
+pub fn resource_counts() -> ResourceCounts {
+    Runtime::with(|rt| ResourceCounts {
+        scopes: rt.scopes.borrow().len(),
+        signals: rt.signals.borrow().len(),
+        effects: rt.effects.borrow().len(),
+    })
+}
+
 #[cfg(debug_assertions)]
 pub fn debug() {
     crate::runtime::Runtime::with(|rt| {
@@ -369,4 +462,199 @@ pub fn debug() {
             eprintln!("  {}", effect.location);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::*;
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    fn assert_context_restored() {
+        Runtime::with(|rt| {
+            assert_eq!(rt.batch_depth.get(), 0);
+            assert!(rt.current_effect.borrow().is_none());
+            assert!(rt.tracker.borrow().is_none());
+        });
+    }
+
+    #[test]
+    fn resource_snapshot_counts_live_entries_and_returns_to_baseline() {
+        let baseline = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(1);
+            let derived = computed(move |_| source.get() * 2);
+            watch_effect(move || {
+                derived.get();
+            });
+        });
+        let live = resource_counts();
+        assert_eq!(live.scopes - baseline.scopes, 1);
+        assert_eq!(live.signals - baseline.signals, 2);
+        assert_eq!(live.effects - baseline.effects, 2);
+        drop(owner);
+        assert_eq!(resource_counts(), baseline);
+    }
+
+    #[test]
+    fn initial_effect_and_computed_panics_release_owned_resources() {
+        let external_owner = OwnedScope::new();
+        let source = external_owner.run(|| signal(1));
+        let baseline = resource_counts();
+        for computed_build in [false, true] {
+            let resource = Rc::new(());
+            let cleanup_runs = Rc::new(Cell::new(0));
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let build = OwnedScope::new();
+                build.run(|| {
+                    batch(|| {
+                        let resource = resource.clone();
+                        let cleanup_runs = cleanup_runs.clone();
+                        if computed_build {
+                            computed::<i32>(move |_| {
+                                let _resource = &resource;
+                                source.get();
+                                let cleanup_runs = cleanup_runs.clone();
+                                on_cleanup(move || cleanup_runs.set(cleanup_runs.get() + 1));
+                                panic!("initial computed build failed");
+                            });
+                        } else {
+                            watch_effect(move || {
+                                let _resource = &resource;
+                                source.get();
+                                let cleanup_runs = cleanup_runs.clone();
+                                on_cleanup(move || cleanup_runs.set(cleanup_runs.get() + 1));
+                                panic!("initial effect build failed");
+                            });
+                        }
+                    })
+                });
+            }));
+            assert!(result.is_err());
+            assert_eq!(cleanup_runs.get(), 1);
+            assert_eq!(Rc::strong_count(&resource), 1);
+            assert_eq!(resource_counts(), baseline);
+            assert!(!source.is_disposed());
+            Runtime::with(|rt| assert!(rt.signal_mut(source.id).subscribers.is_empty()));
+            assert!(current_scope().is_null());
+            assert_context_restored();
+            source.set(source.get() + 1);
+        }
+    }
+
+    #[test]
+    fn nested_batch_depth_restores_without_running_callbacks_during_unwind() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let observed = Rc::new(Cell::new(0));
+            watch(*source, {
+                let observed = observed.clone();
+                move |value| observed.set(value.get())
+            });
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                batch(|| {
+                    source.set(1);
+                    let inner = catch_unwind(AssertUnwindSafe(|| {
+                        batch(|| panic!("inner batch failed"));
+                    }));
+                    assert!(inner.is_err());
+                    Runtime::with(|rt| assert_eq!(rt.batch_depth.get(), 1));
+                    panic!("outer batch failed");
+                });
+            }));
+            assert!(result.is_err());
+            assert_eq!(observed.get(), 0);
+            assert_context_restored();
+            source.set(2);
+            assert_eq!(observed.get(), 2);
+        });
+    }
+
+    #[test]
+    fn callback_value_and_context_restore_when_batch_flush_panics() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(1);
+            let fail = Rc::new(Cell::new(false));
+            let previous = Rc::new(Cell::new(None));
+            let derived = computed({
+                let fail = fail.clone();
+                let previous = previous.clone();
+                move |old: Option<&i32>| {
+                    let value = source.get();
+                    assert!(!fail.get(), "computed update failed");
+                    previous.set(old.copied());
+                    value * 10
+                }
+            });
+            assert_eq!(derived.get(), 10);
+            fail.set(true);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                batch(|| source.set(2));
+            }));
+            assert!(result.is_err());
+            assert_context_restored();
+            Runtime::with(|rt| {
+                let signals = rt.signals.borrow();
+                let inner = &signals[derived.id];
+                assert_eq!(
+                    inner.value.as_ref().unwrap().downcast_ref::<i32>(),
+                    Some(&10)
+                );
+                assert!(
+                    rt.effects.borrow()[inner.effect.unwrap()]
+                        .callback
+                        .is_some()
+                );
+            });
+            fail.set(false);
+            assert_eq!(derived.get(), 20);
+            assert_eq!(previous.get(), Some(10));
+        });
+    }
+
+    #[test]
+    fn inner_failed_effect_restores_outer_effect_and_dependency_tracker() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let runs = Rc::new(Cell::new(0));
+            let cleanups = Rc::new(Cell::new(0));
+            watch_effect({
+                let runs = runs.clone();
+                let cleanups = cleanups.clone();
+                move || {
+                    let outer = Runtime::with(|rt| *rt.current_effect.borrow());
+                    assert!(
+                        catch_unwind(AssertUnwindSafe(|| {
+                            let failed = OwnedScope::new();
+                            failed.run(|| {
+                                computed::<i32>(move |_| {
+                                    source.get();
+                                    panic!("inner failed build");
+                                });
+                            });
+                        }))
+                        .is_err()
+                    );
+                    assert_eq!(Runtime::with(|rt| *rt.current_effect.borrow()), outer);
+                    source.get();
+                    let cleanups = cleanups.clone();
+                    on_cleanup(move || cleanups.set(cleanups.get() + 1));
+                    runs.set(runs.get() + 1);
+                }
+            });
+            assert_eq!(runs.get(), 1);
+            source.set(1);
+            assert_eq!(runs.get(), 2);
+            assert_eq!(cleanups.get(), 1);
+            assert_context_restored();
+            Runtime::with(|rt| assert_eq!(rt.signal_mut(source.id).subscribers.len(), 1));
+        });
+    }
 }
