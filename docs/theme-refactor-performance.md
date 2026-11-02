@@ -66,6 +66,27 @@ Build live deltas are maximum observed arena counts sampled after each mount rel
 - The dynamic derived-declaration scenario creates a computed height signal in each active theme generation. Resource counts remain fixed while toggling, measured operations have zero net allocation traffic, and cleanup returns reactive arenas to baseline.
 - Results are specific to this compiler, CPU virtualization, checkout, and instrumented release test profile. There is no performance threshold or comparable pre-refactor measurement in this run.
 
+## Resolver Identity Index
+
+Measured 2026-11-02 in the working tree based on revision 6caa01e with the ignored `resolver_identity_scaling` release test on the same Linux/WSL2 host/compiler listed above. Both resolver paths run in one newly built instrumented binary; this is not a timing comparison against the older October binary. It compares indexed `Theme::resolve` with the exhaustive `resolve_linear` reference over the same prebuilt theme and components, 16 warmups and 256 alternating samples per path. These are resolver-only timings: no node mount/layout/projection or GPU work. `Theme::new` index construction is reported separately (16 warmups, 64 samples); input `Rule` cloning is outside the timer/counters, Theme drop is allocation-counted but untimed. The tests assert sparse visual output and exactly-once rule bodies for both paths.
+
+| Workload | p50 indexed | p50 linear | Indexed allocations/op | Linear allocations/op |
+| --- | ---: | ---: | ---: | ---: |
+| Sparse, 16 rules / 1 branch / 1 target | 373 ns | 431 ns | 1 | 1 |
+| Sparse, 256 rules / 4 branches / 1 target | 3,264 ns | 6,331 ns | 3 | 3 |
+| Sparse, 4,096 rules / 1 branch / 1 target | 13,038 ns | 37,146 ns | 5 | 5 |
+| Sparse, 4,096 rules / 4 branches / 8 targets | 486,369 ns | 523,622 ns | 12 | 11 |
+| Universal, 256 rules / 4 branches / 8 targets | 40,671 ns | 40,609 ns | 8 | 8 |
+| Class-only, 256 rules / 4 branches / 8 targets | 52,933 ns | 52,488 ns | 8 | 8 |
+| Mixed identity + unkeyed, 256 rules / 4 branches / 8 targets | 43,720 ns | 43,405 ns | 8 | 8 |
+| Dense repeated identity, 256 rules / 4 branches / 8 targets | 50,643 ns | 50,419 ns | 8 | 8 |
+
+Sparse single-target lookup improves 1.16x at 16 rules, 1.94x at 256 rules/four branches, and 2.85x at 4,096 rules. At eight targets, the 4,096-rule sparse case improves only 1.08x; most matching predicates still run, so candidate union/sort cost narrows the gain. Universal, class-only, custom unkeyed, mixed, and dense workloads are effectively neutral within this single run. Do not treat small differences as stable regressions or gains.
+
+Index construction cost is paid when each Theme is created: p50 `Theme::new` was 1.33 us for 16 rules / 1 branch, 29.5 us for 256 rules / 4 branches, and 402 us for 4,096 rules / 4 branches distributed across 64 identity keys. This is a real tradeoff for dynamically reconstructing large themes; rule-list changes should be composed once and reused when possible. These measurements show a useful win for large sparse identity-heavy themes, not a universal speedup.
+
+The original eight pipeline scenarios were also rerun successfully on 2026-11-02: no-theme resolver/projection counts remained zero, update prepare/mount counts stayed zero, and reactive arenas returned to baseline after cleanup. Absolute p50 times were higher even for the untouched no-theme path (3,549 ns versus the historical 1,938 ns); the older table remains a historical snapshot, and cross-date timings are not attributed to indexing. Dynamic theme construction now has additional index allocations; resolver-only allocation rows above intentionally exclude construction.
+
 ## Reproduction
 
-From the workspace root, run the command above. The ignored test prints timings, pipeline counters, allocation deltas, and reactive resource snapshots. Keep compiler/profile, instrumentation, sample counts, scenario code, and virtualization environment fixed when comparing revisions.
+From the workspace root, run the original baseline command above. For the resolver comparison alone, run `cargo test -p mue-macroquad --lib --release resolver_identity_scaling -- --ignored --nocapture --test-threads=1`. The ignored test prints timings, pipeline counters, allocation deltas, and reactive resource snapshots. Keep compiler/profile, instrumentation, sample counts, scenario code, and virtualization environment fixed when comparing revisions.

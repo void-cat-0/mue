@@ -31,6 +31,15 @@
 
 Vendor macroquad 输入桥接的独立 replay 测试通过（1 项），通过 workspace 既有依赖构建 test harness：cargo rustc -p macroquad --lib --crate-type bin -- --test。未依赖独立 vendor manifest 重新拉取全平台 git 依赖。
 
+## 2026-11-02：identity 索引与初步优化
+
+- Selector 增加可选具体 ThemeKey，具名类型宏分支使用 Selector::for_target；通用/手写 Selector::new 保持通用候选语义。Theme::new/compose 建立不可变规则位置索引，clone 共享；不缓存匹配结果或动态声明值。
+- 单桶/全覆盖候选直接借用，多桶一次 reserve 后按源码位置去重；短链 key 去重留在栈上，超过 8 个 target 使用 HashSet，避免长链前缀扫描。
+- 新增 10 项回归测试，含 512 组 indexed/linear 稀疏属性与声明执行顺序对照、泛型/alias 元数据、同 target 条件、动态 class/options/hover 和主题替换，以及长链重复 key。跨 crate host fixture 同步新构造 API。
+- 本次实际通过：cargo test --workspace（含跨 crate 展开与 doctests）；cargo check --workspace --all-targets；10 项 theme::tests；单独 release resolver_identity_scaling；单独 release cpu_performance_baseline；改动 Rust 文件的 rustfmt --check；git diff --check。Cargo 使用显式 /root/mue/Cargo.toml；cargo fmt 在此环境中选中父 workspace，改为 scoped rustfmt，未将失败的 cargo fmt 记为通过。
+- 原有 8 个 pipeline 基线场景均通过，无主题 resolver/projection 仍为 0，动态更新不重跑 prepare/mount，所有场景清理后 reactive arenas 回到基线。动态创建 Theme 会付出索引初始化成本；resolver 规模对照与测量边界见性能记录。
+- 本次没有执行平台图形测试。用户已确认 Windows/macOS 测试完成；本记录不据此补造 target、命令或交互覆盖明细。wasm 按用户要求不纳入本轮。
+
 ## 图形 smoke 与平台边界
 
 - cargo run -p atlas -- --frames 4 --glyphs 100 --max-size 28 --verify：通过，内嵌字体实际绘制 4 帧；oversized/exhausted/raster rejected 均为 0。

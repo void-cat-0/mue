@@ -1,0 +1,97 @@
+[package]
+name = "miniquad"
+version = "0.4.10"
+authors = ["not-fl3 <not.fl3@gmail.com>"]
+edition = "2018"
+rust-version = "1.70"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/not-fl3/miniquad"
+repository = "https://github.com/not-fl3/miniquad"
+description = """
+Cross-platform window context and rendering library.
+"""
+readme = "README.md"
+exclude = ["examples/"]
+keywords = ["graphics", "3D", "opengl", "gamedev", "windowing"]
+categories = ["rendering::graphics-api"]
+
+[features]
+
+# Optional log-rs like macros implementation
+# disabled by default
+log-impl = []
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "wingdi",
+    "winuser",
+    "libloaderapi",
+    "windef",
+    "shellscalingapi",
+    "errhandlingapi",
+    "windowsx",
+    "winbase",
+    "hidusage",
+    "shellapi",
+    "imm",
+    "minwindef",
+    "ntdef"
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+ndk-sys = "0.2"
+# Add for initializeContext
+ndk-context = "0.1.1"
+jni = "0.21.1"
+rustls-platform-verifier = "0.6.2"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc = { package = "objc-rs", version = "0.2" }
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+ohos-xcomponent-binding = "0.3"
+raw-window-handle = "0.6"
+napi-ohos = { version = "1.1.3", default-features = false, features = [
+    "napi8",
+    "async",
+] }
+napi-derive-ohos = { version = "1.1.3" }
+ohos-hilog-binding = { version = "0.1.2", features = [
+    "redirect"
+] }
+xcomponent-sys = { version = "0.3.4", features = ["api-14", "keyboard-types"] }
+keyboard-types = "0.8.3"
+ohos-xcomponent-sys = { version = "0.1.0" }
+ohos_enum_macro = { version = "0.0.2" }
+ohos-ime-binding = { version = "0.2.0" }
+ohos-input-sys = { version = "0.3.2", features = ["api-17"] }
+ohos-sys-opaque-types = { version = "0.1.7" }
+ohos-native-window-sys = { version = "0.0.1" }
+ohos-native-buffer-sys = { version = "0.0.1" }
+ohos-init-binding = { version = "0.0.3" }
+ohos-qos-binding = { version = "0.1.0" }
+ohos-bundle-binding = { version = "0.1.0" }
+hms-opengtx-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings" }
+
+[target.'cfg(target_env = "ohos")'.build-dependencies]
+napi-build-ohos = { version = "1.1.3" }
+
+[dev-dependencies]
+glam = { version = "0.24", features = ["scalar-math"] }
+quad-rand = "0.1"
+fontdue = "0.8"
+
+[profile.release]
+lto = true
+panic = 'abort'
+opt-level = "s"
+overflow-checks = false
+debug-assertions = false
+incremental = false
+rpath = false
+codegen-units = 1
+strip = true

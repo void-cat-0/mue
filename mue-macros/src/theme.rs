@@ -327,11 +327,13 @@ fn expand_rules(input: ThemeRules) -> syn::Result<TokenStream2> {
             let class_count = u32::try_from(selector.specificity_class_count()).map_err(|_| {
                 syn::Error::new(Span::call_site(), "selector specificity exceeds u32")
             })?;
-            let type_count = if let Some(identity) = selector.identity.as_ref() {
-                conditions.push(quote!(#component.is::<#identity>()));
-                1u32
+            let (constructor, type_count) = if let Some(identity) = selector.identity.as_ref() {
+                (
+                    quote!(#host::theme::Selector::for_target::<#identity>),
+                    1u32,
+                )
             } else {
-                0u32
+                (quote!(#host::theme::Selector::new), 0u32)
             };
             for class in selector.classes {
                 let name = LitStr::new(&class.name, class.span);
@@ -363,7 +365,7 @@ fn expand_rules(input: ThemeRules) -> syn::Result<TokenStream2> {
                 quote!(#(#conditions)&&*)
             };
             selectors.push(quote! {
-                #host::theme::Selector::new(
+                #constructor(
                     #host::theme::Specificity(0, #class_count, #type_count),
                     move |#component: #host::theme::ComponentRef<'_>| -> bool { #predicate },
                 )

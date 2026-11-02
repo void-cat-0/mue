@@ -79,6 +79,12 @@ pub mod theme {
 
     pub trait ThemeTarget: 'static {
         type Options: 'static;
+        fn key() -> std::any::TypeId
+        where
+            Self: Sized,
+        {
+            std::any::TypeId::of::<Self>()
+        }
     }
 
     #[derive(Clone, Copy)]
@@ -109,6 +115,7 @@ pub mod theme {
     #[derive(Clone)]
     pub struct Selector {
         _specificity: Specificity,
+        identity: Option<std::any::TypeId>,
         predicate: Rc<dyn for<'a> Fn(ComponentRef<'a>) -> bool>,
     }
     impl Selector {
@@ -116,13 +123,27 @@ pub mod theme {
             specificity: Specificity,
             predicate: impl for<'a> Fn(ComponentRef<'a>) -> bool + 'static,
         ) -> Self {
+            Self::with_identity(None, specificity, predicate)
+        }
+        pub fn for_target<T: ThemeTarget>(
+            specificity: Specificity,
+            predicate: impl for<'a> Fn(ComponentRef<'a>) -> bool + 'static,
+        ) -> Self {
+            Self::with_identity(Some(T::key()), specificity, predicate)
+        }
+        fn with_identity(
+            identity: Option<std::any::TypeId>,
+            specificity: Specificity,
+            predicate: impl for<'a> Fn(ComponentRef<'a>) -> bool + 'static,
+        ) -> Self {
             Self {
                 _specificity: specificity,
+                identity,
                 predicate: Rc::new(predicate),
             }
         }
         pub fn matches(&self, component: ComponentRef<'_>) -> bool {
-            (self.predicate)(component)
+            self.identity.is_none_or(|key| key == component.key) && (self.predicate)(component)
         }
     }
 

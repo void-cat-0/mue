@@ -195,7 +195,7 @@ Theme 只能声明视觉/布局/字体/transition 等可主题化属性，不能
 
 ### 7.2 候选与排序
 
-当前 Theme 是 `Rc<[Rule]>`，Rule 持有 `Vec<Selector>` 与声明闭包，Selector 持有 Specificity 与谓词。组合后的规则数组位置就是 source order；resolve 按规则位置遍历，用实际命中分支的最高 specificity 为该规则生成一次候选，不另设 RuleId/分支 id 类型。候选按 (Specificity, source order) 字典序排序，声明仍以稀疏 Style 参与逐属性合并。
+Theme 共享有序的 `Rc<[Rule]>` 与不可变 identity 索引；Rule 持有 `Vec<Selector>` 与声明闭包，Selector 持有 Specificity、可选 ThemeKey 与谓词。theme! 的具名类型分支生成 `Selector::for_target::<T>`，匹配时先强制检查具体 identity；无 identity 分支及手写 `Selector::new` 放在通用候选桶，不猜闭包内部的身份条件。Theme::new/compose 按规则数组位置建立去重索引，clone 共享索引。resolve 合并当前共根 identity 的规则位置与通用候选，按 source order 去重后再求每条规则实际命中分支的最高 specificity；不缓存动态谓词或声明值，不另设公开 RuleId/分支 id。单桶/全覆盖候选借用已有切片，多桶按需分配。候选按 (Specificity, source order) 字典序排序，声明仍以稀疏 Style 参与逐属性合并。
 
 每属性优先级：
 
@@ -293,7 +293,7 @@ fn with_hovered(self, f: impl FnOnce(Self, ReadSignal<bool>) -> Self) -> Self;
 
 本轮量化无主题、空静态 Theme、有主题无匹配、静态命中、class/hover 高频、option 改变但结果相同、动态主题新增/撤销字段。记录构建次数、resolver/投影运行与通知、signals/effects、layout/paint/transition、分配与清理后存量及 p50/p95，不编造耗时门槛。
 
-后置按 identity 索引、完全静态专用路径、只绑定可证明封闭的属性集合、per-class 跟踪、interning 与 Rc&lt;HashSet&gt; 快照优化。优化不能改变首次未命中后来命中、规则退出回退和动态主题覆盖语义。
+identity 规则候选索引已接入，规模基准以同一二进制中的线性参照验证收益与通用/密集场景成本，结果见性能记录。完全静态专用路径、只绑定可证明封闭的属性集合、per-class 跟踪、interning 与 Rc&lt;HashSet&gt; 快照仍后置。优化不能改变首次未命中后来命中、规则退出回退和动态主题覆盖语义。
 
 ## 11. 代码落点与迁移索引
 
