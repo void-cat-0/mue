@@ -706,3 +706,371 @@ fn cpu_performance_baseline() {
         "allocation counts: test-only System forwarding allocator with atomics; successful realloc counts as allocation+free. GPU draw/paint execution and transition interpolation: not measured; post-drop transition driver maintenance is counted only in cleanup"
     );
 }
+
+// Resolver-only measurements leave cpu_performance_baseline unchanged.
+// Filter to this test and pass --test-threads=1: allocation counters are process-wide.
+const RESOLVER_KEYS: usize = 64;
+const RESOLVER_WARMUP: usize = 16;
+const RESOLVER_SAMPLES: usize = 256;
+
+struct ResolverTarget<const KEY: usize>;
+impl<const KEY: usize> ThemeTarget for ResolverTarget<KEY> {
+    type Options = usize;
+}
+
+struct ResolverCounters {
+    predicates: Cell<usize>,
+    body_calls: Cell<usize>,
+    // Per-rule counts detect duplicate execution even if another rule was skipped.
+    bodies: Vec<Cell<usize>>,
+}
+impl ResolverCounters {
+    fn new(rules: usize) -> Self {
+        Self {
+            predicates: Cell::new(0),
+            body_calls: Cell::new(0),
+            bodies: (0..rules).map(|_| Cell::new(0)).collect(),
+        }
+    }
+
+    fn clear(&self) {
+        self.predicates.set(0);
+        self.body_calls.set(0);
+        for body in &self.bodies {
+            body.set(0);
+        }
+    }
+
+    fn assert_bodies(&self, matched: &[bool], operations: usize) {
+        assert_eq!(self.bodies.len(), matched.len());
+        for (index, (body, expected)) in self.bodies.iter().zip(matched).enumerate() {
+            assert_eq!(
+                body.get(),
+                usize::from(*expected) * operations,
+                "rule {index} must execute once per matching operation",
+            );
+        }
+    }
+}
+
+fn resolver_selector<const KEY: usize>(
+    specificity: Specificity,
+    counters: Rc<ResolverCounters>,
+) -> Selector {
+    Selector::for_target::<ResolverTarget<KEY>>(specificity, move |target| {
+        counters.predicates.set(counters.predicates.get() + 1);
+        std::hint::black_box(target.has_class("selected"))
+    })
+}
+type ResolverSelectorFactory = fn(Specificity, Rc<ResolverCounters>) -> Selector;
+
+fn resolver_keys() -> [(crate::theme::ThemeKey, ResolverSelectorFactory); RESOLVER_KEYS] {
+    macro_rules! keys {
+        ($($key:literal),* $(,)?) => {
+            [$(
+                (ResolverTarget::<$key>::key(), resolver_selector::<$key> as ResolverSelectorFactory),
+            )*]
+        };
+    }
+    keys![
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+    ]
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ResolverWorkload {
+    Sparse,
+    Universal,
+    ClassOnly,
+    CustomUnkeyed,
+    Mixed,
+    Dense,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolverCase {
+    workload: ResolverWorkload,
+    rules: usize,
+    branches: usize,
+    targets: usize,
+}
+
+fn resolver_unkeyed(
+    kind: usize,
+    specificity: Specificity,
+    counters: Rc<ResolverCounters>,
+) -> Selector {
+    Selector::new(specificity, move |target| {
+        counters.predicates.set(counters.predicates.get() + 1);
+        std::hint::black_box(match kind {
+            0 => true,
+            1 => target.has_class("selected"),
+            // The opaque closure intentionally remains unkeyed despite checking a type.
+            _ => target
+                .options::<ResolverTarget<0>>()
+                .is_some_and(|value| *value == 7),
+        })
+    })
+}
+
+fn resolver_rule(
+    index: usize,
+    case: ResolverCase,
+    counters: &Rc<ResolverCounters>,
+    keys: &[(crate::theme::ThemeKey, ResolverSelectorFactory); RESOLVER_KEYS],
+) -> Rule {
+    let selectors = (0..case.branches)
+        .map(|branch| {
+            let specificity = Specificity(0, ((index + branch) % 3) as u32, 1);
+            let kind = match case.workload {
+                ResolverWorkload::Universal => Some(0),
+                ResolverWorkload::ClassOnly => Some(1),
+                ResolverWorkload::CustomUnkeyed => Some(2),
+                ResolverWorkload::Mixed if branch != 0 => Some(branch - 1),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                resolver_unkeyed(kind, specificity, counters.clone())
+            } else {
+                let key = match case.workload {
+                    ResolverWorkload::Dense => 0,
+                    _ => (index + branch * 17) % RESOLVER_KEYS,
+                };
+                (keys[key].1)(specificity, counters.clone())
+            }
+        })
+        .collect();
+    let counters = counters.clone();
+    Rule::new(selectors, move || {
+        counters.body_calls.set(counters.body_calls.get() + 1);
+        counters.bodies[index].set(counters.bodies[index].get() + 1);
+        // These are the only fields emitted; equivalence checks compare both.
+        if index % 2 == 0 {
+            Style::new().width((index + 1) as f32)
+        } else {
+            Style::new().height((index + 1) as f32)
+        }
+    })
+}
+
+#[derive(Default)]
+struct ResolverMeasurements {
+    samples: Vec<u128>,
+    allocations: Allocations,
+    predicates: usize,
+    bodies: usize,
+}
+impl ResolverMeasurements {
+    fn new() -> Self {
+        Self {
+            samples: Vec::with_capacity(RESOLVER_SAMPLES),
+            ..Self::default()
+        }
+    }
+
+    fn record(&mut self, resolve: impl FnOnce() -> Style, counters: &ResolverCounters) {
+        let predicate_before = counters.predicates.get();
+        let body_before = counters.body_calls.get();
+        let allocation_before = Allocations::snapshot();
+        let start = Instant::now();
+        let result = std::hint::black_box(resolve());
+        let elapsed = start.elapsed().as_nanos();
+        self.predicates += counters.predicates.get() - predicate_before;
+        self.bodies += counters.body_calls.get() - body_before;
+        self.samples.push(elapsed);
+        drop(result);
+        // Include result disposal in allocation accounting, outside the timer.
+        self.allocations
+            .add(Allocations::snapshot().since(allocation_before));
+    }
+
+    fn report(self, label: &str) {
+        let operations = self.samples.len() as f64;
+        let timings = summarize(self.samples);
+        println!(
+            "    {label}: p50={}ns p95={}ns predicates/op={:.2} bodies/op={:.2} allocs/op={:.2} frees/op={:.2} allocated_bytes/op={:.2} freed_bytes/op={:.2}",
+            timings.p50,
+            timings.p95,
+            self.predicates as f64 / operations,
+            self.bodies as f64 / operations,
+            self.allocations.allocated as f64 / operations,
+            self.allocations.deallocated as f64 / operations,
+            self.allocations.allocated_bytes as f64 / operations,
+            self.allocations.deallocated_bytes as f64 / operations,
+        );
+    }
+}
+
+fn measure_theme_setup(rules: &[Rule]) {
+    const WARMUP: usize = 16;
+    const SAMPLES: usize = 64;
+    let mut times = Vec::with_capacity(SAMPLES);
+    let mut allocations = Allocations::default();
+
+    for _ in 0..WARMUP {
+        let cloned_rules = rules.to_vec();
+        drop(Theme::new(cloned_rules));
+    }
+    for _ in 0..SAMPLES {
+        // Rule cloning is shared setup, excluded from both measurement windows.
+        let cloned_rules = rules.to_vec();
+        let before = Allocations::snapshot();
+        let start = Instant::now();
+        let theme = std::hint::black_box(Theme::new(cloned_rules));
+        let elapsed = start.elapsed().as_nanos();
+        drop(theme);
+        allocations.add(Allocations::snapshot().since(before));
+        times.push(elapsed);
+    }
+
+    let timings = summarize(times);
+    let operations = SAMPLES as f64;
+    println!(
+        "    Theme::new setup (prebuilt Rule clone excluded): p50={}ns p95={}ns allocs/op={:.2} frees/op={:.2} allocated_bytes/op={:.2} freed_bytes/op={:.2}; Theme drop is allocation-counted but untimed",
+        timings.p50,
+        timings.p95,
+        allocations.allocated as f64 / operations,
+        allocations.deallocated as f64 / operations,
+        allocations.allocated_bytes as f64 / operations,
+        allocations.deallocated_bytes as f64 / operations,
+    );
+}
+
+fn resolver_case(case: ResolverCase) {
+    use std::hint::black_box;
+
+    let keys = resolver_keys();
+    let counters = Rc::new(ResolverCounters::new(case.rules));
+    let theme = Theme::new(
+        (0..case.rules)
+            .map(|index| resolver_rule(index, case, &counters, &keys))
+            .collect(),
+    );
+    let classes = class_set(&["selected"]);
+    let options = 7usize;
+    // Sparse inputs have distinct keys; dense inputs repeat the same identity.
+    let components = (0..case.targets)
+        .map(|index| {
+            let key = if matches!(case.workload, ResolverWorkload::Dense) {
+                0
+            } else {
+                index
+            };
+            ComponentRef::new(keys[key].0, &options, &classes, None)
+        })
+        .collect::<Vec<_>>();
+
+    // Exhaustively derive matching rule ids outside measurement; body counters
+    // independently assert each id executes once despite matching branches/aliases.
+    let expected_bodies = theme
+        .rules()
+        .iter()
+        .map(|rule| {
+            rule.selectors().iter().any(|selector| {
+                components
+                    .iter()
+                    .any(|component| selector.matches(*component))
+            })
+        })
+        .collect::<Vec<_>>();
+    counters.clear();
+    let resolved = theme.resolve(&components);
+    counters.assert_bodies(&expected_bodies, 1);
+    counters.clear();
+    let linear = theme.resolve_linear(&components);
+    counters.assert_bodies(&expected_bodies, 1);
+    assert_eq!(
+        (
+            resolved.declared_width().map(|value| value.get_clone()),
+            resolved.declared_height().map(|value| value.get_clone())
+        ),
+        (
+            linear.declared_width().map(|value| value.get_clone()),
+            linear.declared_height().map(|value| value.get_clone())
+        ),
+        "resolver output differs: {case:?}",
+    );
+    drop((resolved, linear));
+
+    for _ in 0..RESOLVER_WARMUP {
+        black_box(theme.resolve(black_box(&components)));
+        black_box(theme.resolve_linear(black_box(&components)));
+    }
+    counters.clear();
+    let mut indexed = ResolverMeasurements::new();
+    let mut linear = ResolverMeasurements::new();
+    for sample in 0..RESOLVER_SAMPLES {
+        // Alternate ordering so neither implementation is always measured first.
+        if sample % 2 == 0 {
+            indexed.record(
+                || black_box(&theme).resolve(black_box(&components)),
+                &counters,
+            );
+            linear.record(
+                || black_box(&theme).resolve_linear(black_box(&components)),
+                &counters,
+            );
+        } else {
+            linear.record(
+                || black_box(&theme).resolve_linear(black_box(&components)),
+                &counters,
+            );
+            indexed.record(
+                || black_box(&theme).resolve(black_box(&components)),
+                &counters,
+            );
+        }
+    }
+    counters.assert_bodies(&expected_bodies, RESOLVER_SAMPLES * 2);
+    assert_eq!(
+        indexed.bodies, linear.bodies,
+        "body count differs: {case:?}"
+    );
+    println!("resolver_identity_scaling {case:?}");
+    measure_theme_setup(theme.rules());
+    indexed.report("resolve");
+    linear.report("resolve_linear");
+}
+
+#[test]
+#[ignore = "Resolver scaling; run with --release -- --ignored resolver_identity_scaling --nocapture --test-threads=1"]
+fn resolver_identity_scaling() {
+    println!(
+        "resolver only, {RESOLVER_SAMPLES} samples/path after {RESOLVER_WARMUP} warmups; same instrumented binary, 64 identity keys; setup excluded, result drop allocation-counted but untimed; process-wide allocation counters require this test alone and --test-threads=1"
+    );
+    // Six representative sparse cases, not the full Cartesian product.
+    for (rules, branches, targets) in [
+        (16, 1, 1),
+        (16, 4, 8),
+        (256, 1, 8),
+        (256, 4, 1),
+        (4096, 1, 1),
+        (4096, 4, 8),
+    ] {
+        resolver_case(ResolverCase {
+            workload: ResolverWorkload::Sparse,
+            rules,
+            branches,
+            targets,
+        });
+    }
+    for workload in [
+        ResolverWorkload::Universal,
+        ResolverWorkload::ClassOnly,
+        ResolverWorkload::CustomUnkeyed,
+        ResolverWorkload::Mixed,
+        ResolverWorkload::Dense,
+    ] {
+        resolver_case(ResolverCase {
+            workload,
+            rules: 256,
+            branches: 4,
+            targets: 8,
+        });
+    }
+    println!(
+        "allocations: existing test-only System forwarding allocator; successful realloc counts as allocation+free; predicate/body Cell counters instrument both paths equally; no timing thresholds"
+    );
+}

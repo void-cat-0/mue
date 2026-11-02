@@ -1,7 +1,7 @@
 use std::{
     any::{Any, TypeId},
     borrow::{Borrow, Cow},
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt,
     rc::Rc,
 };
@@ -18,6 +18,9 @@ use mue_core::{
 };
 
 pub use mue_macros::{class, theme};
+
+#[cfg(test)]
+mod tests;
 
 /// A validated, case-sensitive class name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -157,15 +160,33 @@ pub struct Specificity(pub u32, pub u32, pub u32);
 #[derive(Clone)]
 pub struct Selector {
     specificity: Specificity,
+    identity: Option<ThemeKey>,
     predicate: Rc<dyn for<'a> Fn(ComponentRef<'a>) -> bool>,
 }
 impl Selector {
+    /// An unrestricted predicate. Kept in the common candidate bucket.
     pub fn new(
+        specificity: Specificity,
+        predicate: impl for<'a> Fn(ComponentRef<'a>) -> bool + 'static,
+    ) -> Self {
+        Self::with_identity(None, specificity, predicate)
+    }
+    /// Matches only this concrete identity, then evaluates the remaining conditions.
+    /// The identity is enforced even when the predicate does not check it.
+    pub fn for_target<T: ThemeTarget>(
+        specificity: Specificity,
+        predicate: impl for<'a> Fn(ComponentRef<'a>) -> bool + 'static,
+    ) -> Self {
+        Self::with_identity(Some(T::key()), specificity, predicate)
+    }
+    fn with_identity(
+        identity: Option<ThemeKey>,
         specificity: Specificity,
         predicate: impl for<'a> Fn(ComponentRef<'a>) -> bool + 'static,
     ) -> Self {
         Self {
             specificity,
+            identity,
             predicate: Rc::new(predicate),
         }
     }
@@ -173,7 +194,7 @@ impl Selector {
         self.specificity
     }
     pub fn matches(&self, component: ComponentRef<'_>) -> bool {
-        (self.predicate)(component)
+        self.identity.is_none_or(|key| key == component.key) && (self.predicate)(component)
     }
 }
 #[derive(Clone)]
@@ -194,30 +215,122 @@ impl Rule {
     }
 }
 /// Ordered sparse declarations; composing modules appends their source order.
-#[derive(Clone, Default)]
-pub struct Theme(Rc<[Rule]>);
+#[derive(Clone)]
+pub struct Theme {
+    rules: Rc<[Rule]>,
+    indexed: Rc<RuleIndex>,
+}
+#[derive(Default)]
+struct RuleIndex {
+    by_identity: HashMap<ThemeKey, Vec<usize>>,
+    generic: Vec<usize>,
+}
+impl RuleIndex {
+    fn build(rules: &[Rule]) -> Self {
+        let mut index = Self::default();
+        for (rule_index, rule) in rules.iter().enumerate() {
+            for selector in &rule.selectors {
+                let bucket = if let Some(key) = selector.identity {
+                    index.by_identity.entry(key).or_default()
+                } else {
+                    &mut index.generic
+                };
+                // Rules are visited in source order; repeated branches need no set.
+                if bucket.last() != Some(&rule_index) {
+                    bucket.push(rule_index);
+                }
+            }
+        }
+        index
+    }
+}
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            rules: Rc::from([]),
+            indexed: Rc::new(RuleIndex::default()),
+        }
+    }
+}
 impl Theme {
     pub fn new(rules: Vec<Rule>) -> Self {
-        Self(rules.into())
+        if rules.is_empty() {
+            return Self::default();
+        }
+        let indexed = Rc::new(RuleIndex::build(&rules));
+        Self {
+            rules: rules.into(),
+            indexed,
+        }
     }
     pub fn compose(themes: impl IntoIterator<Item = Theme>) -> Self {
         Self::new(
             themes
                 .into_iter()
-                .flat_map(|theme| theme.0.to_vec())
+                .flat_map(|theme| theme.rules.to_vec())
                 .collect(),
         )
     }
     pub fn rules(&self) -> &[Rule] {
-        &self.0
+        &self.rules
     }
-    pub fn resolve(&self, components: &[ComponentRef<'_>]) -> Style {
-        // One candidate per rule, weighted only by its actually matched branches.
-        let mut matched: Vec<_> = self
-            .0
-            .iter()
-            .enumerate()
-            .filter_map(|(order, rule)| {
+    fn candidate_indices(&self, components: &[ComponentRef<'_>]) -> Cow<'_, [usize]> {
+        if components.is_empty() {
+            return Cow::Borrowed(&[]);
+        }
+        let generic = self.indexed.generic.as_slice();
+        if generic.len() == self.rules.len() {
+            return Cow::Borrowed(generic);
+        }
+        let mut buckets = smallvec::SmallVec::<[&[usize]; 9]>::new();
+        if !generic.is_empty() {
+            buckets.push(generic);
+        }
+        // Keep short return chains on the stack, without quadratic work on long chains.
+        let mut seen = (components.len() > 8).then(HashSet::new);
+        for (position, component) in components.iter().enumerate() {
+            let duplicate = if let Some(seen) = &mut seen {
+                !seen.insert(component.key)
+            } else {
+                components[..position]
+                    .iter()
+                    .any(|previous| previous.key == component.key)
+            };
+            if duplicate {
+                continue;
+            }
+            if let Some(indices) = self.indexed.by_identity.get(&component.key) {
+                if indices.len() == self.rules.len() {
+                    return Cow::Borrowed(indices);
+                }
+                buckets.push(indices);
+            }
+        }
+        match buckets.as_slice() {
+            [] => Cow::Borrowed(&[]),
+            [indices] => Cow::Borrowed(indices),
+            _ => {
+                // Reserve once for the union instead of growing a cloned first bucket.
+                let mut indices =
+                    Vec::with_capacity(buckets.iter().map(|bucket| bucket.len()).sum());
+                for bucket in buckets {
+                    indices.extend_from_slice(bucket);
+                }
+                indices.sort_unstable();
+                indices.dedup();
+                Cow::Owned(indices)
+            }
+        }
+    }
+    fn resolve_indices(
+        &self,
+        components: &[ComponentRef<'_>],
+        indices: impl IntoIterator<Item = usize>,
+    ) -> Style {
+        let mut matched: Vec<_> = indices
+            .into_iter()
+            .filter_map(|order| {
+                let rule = &self.rules[order];
                 rule.selectors
                     .iter()
                     .filter(|selector| {
@@ -240,10 +353,18 @@ impl Theme {
         }
         result
     }
+    pub fn resolve(&self, components: &[ComponentRef<'_>]) -> Style {
+        let candidates = self.candidate_indices(components);
+        self.resolve_indices(components, candidates.iter().copied())
+    }
+    #[cfg(test)]
+    pub(crate) fn resolve_linear(&self, components: &[ComponentRef<'_>]) -> Style {
+        self.resolve_indices(components, 0..self.rules.len())
+    }
 }
 impl PartialEq for Theme {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        Rc::ptr_eq(&self.rules, &other.rules)
     }
 }
 impl PropValue for Theme {}
