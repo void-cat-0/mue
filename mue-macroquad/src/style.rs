@@ -1,4 +1,13 @@
 mod ext;
+#[cfg(test)]
+#[path = "style/layout_reference.rs"]
+mod layout_reference;
+#[cfg(test)]
+#[path = "style/layout_tests.rs"]
+mod layout_tests;
+#[cfg(test)]
+#[path = "style/lazy_tests.rs"]
+mod lazy_tests;
 mod transform;
 pub use transform::{IntoTransformProp, Transform, TransformOp, TransformOrigin, TransformProp};
 pub mod units;
@@ -13,11 +22,16 @@ pub use ext::StyleableExt;
 use mue_core::{
     effect::computed,
     prop::Prop,
-    scope::OwnedScope,
+    scope::{OwnedScope, Scope, current_scope},
     signal::{Access, ReadSignal},
 };
 use paste::paste;
-use std::{collections::HashSet, mem, rc::Rc};
+use std::{
+    cell::{Cell, OnceCell},
+    collections::HashSet,
+    mem,
+    rc::Rc,
+};
 use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
@@ -123,27 +137,38 @@ macro_rules! define_style {
         }
     };
 
-    (@themed_property $result:ident, $theme:ident, $defaults:ident, color, $ty:ty, $($default:expr)?) => {
-        if $result.color.is_none() {
-            // Capture the inherited Prop while seal is in its parent build context.
-            // Read its value in the projection so rule removal restores inheritance.
-            $result.color = Some(Self::themed_foreground(
-                $theme,
-                $defaults.color.take(),
-                crate::theme::inherited_foreground(),
-            ));
-        }
+    (@project $state:ident, color, $ty:ty, $($default:expr)?) => {
+        Style::themed_foreground_owned($state.theme, $state.fallback.clone(), $state.inherited_foreground.clone())
     };
-    (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
-        if $result.$field.is_none() {
-            let fallback = $defaults.$field.take();
-            $result.$field = Some(computed(move |_| {
-                #[cfg(test)] crate::runtime::record_projection();
-                let current = $theme.get_clone();
-                current.$field.as_ref().or(fallback.as_ref())
-                    .map(|value| value.get_clone())
-                    .unwrap_or_else(|| define_style!(@extract_default_raw ($ty, $($default)?)))
-            }).into());
+    (@project $state:ident, $field:ident, $ty:ty, $($default:expr)?) => {{
+        let theme = $state.theme;
+        let fallback = $state.fallback.clone();
+        computed(move |_| {
+            #[cfg(test)] crate::runtime::record_projection();
+            let current = theme.get_clone();
+            current.$field.as_ref().or(fallback.$field.as_ref())
+                .map(|value| value.get_clone())
+                .unwrap_or_else(|| define_style!(@extract_default_raw ($ty, $($default)?)))
+        }).into()
+    }};
+    (@animate $state:ident, $value:expr, $field:ident) => {
+        crate::transition::bind_property!($field, $value, $state.animation_curve.get())
+    };
+    (@side_accessor $field:ident, $ty:ty, $($default:expr)?) => {
+        paste! {
+            pub fn [<declared_ $field>](&self) -> Option<Prop<$ty>> {
+                self.$field.clone().or_else(|| self.themed.as_ref().map(|state| {
+                    state.$field.get_or_init(|| state.scope.run(|| {
+                        let value = define_style!(@project state, $field, $ty, $($default)?);
+                        define_style!(@animate state, value, $field)
+                    })).clone()
+                }))
+            }
+            #[allow(dead_code)]
+            pub fn [<take_ $field>](&mut self) -> Prop<$ty> {
+                if self.themed.is_some() { return self.[<declared_ $field>]().unwrap(); }
+                self.$field.take().unwrap_or_else(|| define_style!(@extract_default ($ty, $($default)?)))
+            }
         }
     };
     // Rect properties already have separate fields: fill only the missing sides.
@@ -194,6 +219,23 @@ macro_rules! define_style {
                 pub(crate) hover_owners: Vec<Rc<HoverOwner>>,
                 // Resolver snapshots own reactive values allocated by rule bodies.
                 pub(crate) theme_owners: Vec<Rc<OwnedScope>>,
+                themed: Option<Box<ThemedStyle>>,
+            }
+
+            struct ThemedStyle {
+                theme: ReadSignal<Rc<Style>>,
+                fallback: Rc<Style>,
+                inherited_foreground: Option<Prop<Brush>>,
+                scope: Scope,
+                animation_curve: Cell<Option<Prop<crate::transition::Transition>>>,
+                $($name: OnceCell<Prop<$ty>>,)*
+                $(
+                    [<$rect_name _left>]: OnceCell<Prop<$rect_ty>>,
+                    [<$rect_name _right>]: OnceCell<Prop<$rect_ty>>,
+                    [<$rect_name _top>]: OnceCell<Prop<$rect_ty>>,
+                    [<$rect_name _bottom>]: OnceCell<Prop<$rect_ty>>,
+                    $rect_name: OnceCell<Prop<taffy::Rect<$rect_ty>>>,
+                )*
             }
 
             /// Fluent styles accepting either static properties or reactive signals.
@@ -230,34 +272,41 @@ macro_rules! define_style {
 
                 $(
                     fn [<$rect_name _left>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         self.style_mut().[<$rect_name _left>] = Some(value.into());
                         self
                     }
                     fn [<$rect_name _right>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         self.style_mut().[<$rect_name _right>] = Some(value.into());
                         self
                     }
                     fn [<$rect_name _top>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         self.style_mut().[<$rect_name _top>] = Some(value.into());
                         self
                     }
                     fn [<$rect_name _bottom>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         self.style_mut().[<$rect_name _bottom>] = Some(value.into());
                         self
                     }
                     fn [<$rect_name _x>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         let prop = value.into();
                         self.style_mut().[<$rect_name _left>] = Some(prop.clone());
                         self.style_mut().[<$rect_name _right>] = Some(prop.clone());
                         self
                     }
                     fn [<$rect_name _y>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         let prop = value.into();
                         self.style_mut().[<$rect_name _top>] = Some(prop.clone());
                         self.style_mut().[<$rect_name _bottom>] = Some(prop);
                         self
                     }
                     fn $rect_name(mut self, value: impl IntoRectProp<$rect_ty>) -> Self {
+                        if let Some(state) = &mut self.style_mut().themed { state.$rect_name.take(); }
                         let rect = value.into_rect_prop();
                         self.style_mut().[<$rect_name _left>] = Some(rect.left);
                         self.style_mut().[<$rect_name _right>] = Some(rect.right);
@@ -288,7 +337,7 @@ macro_rules! define_style {
             }
 
             impl Style {
-                /// Bind every visual property to a sparse theme result and fallback.
+                /// Store sparse theme defaults without allocating property projections.
                 #[cfg(test)]
                 pub(crate) fn themed_defaults(theme: ReadSignal<Rc<Style>>, default: Self) -> Self {
                     let mut result = Self::new();
@@ -296,26 +345,72 @@ macro_rules! define_style {
                     result
                 }
 
-                /// Keep explicit properties and bind only missing fields once at seal.
-                ///
-                /// The theme remains sparse; a removed declaration falls through to the
-                /// prepare fallback, then the original foreground/font inheritance.
+                /// Seal sparse defaults; create each stable projection on first consumption.
                 pub(crate) fn provide_themed_defaults(&mut self, theme: ReadSignal<Rc<Style>>, mut default: Self) {
-                    let result = self;
+                    // Non-visual inputs keep their existing ownership and hook ordering.
                     $(
-                        define_style!(@themed_property result, theme, default, $name, $ty, $($default)?);
+                        mem::swap(&mut self.$hook_name, &mut default.$hook_name);
+                        self.$hook_name.extend(mem::take(&mut default.$hook_name));
                     )*
+                    if self.children.is_none() { self.children = default.children.take(); }
+                    if self.classes.is_none() { self.classes = default.classes.take(); }
+                    self.append_hover_owners(mem::take(&mut default.hover_owners));
+                    self.append_theme_owners(default.theme_owners.clone());
+                    self.themed = Some(Box::new(ThemedStyle {
+                        theme,
+                        fallback: Rc::new(default),
+                        // Capture inheritance at seal, not in a later caller's context.
+                        inherited_foreground: crate::theme::inherited_foreground(),
+                        scope: current_scope(),
+                        animation_curve: Cell::new(None),
+                        $($name: OnceCell::new(),)*
+                        $(
+                            [<$rect_name _left>]: OnceCell::new(),
+                            [<$rect_name _right>]: OnceCell::new(),
+                            [<$rect_name _top>]: OnceCell::new(),
+                            [<$rect_name _bottom>]: OnceCell::new(),
+                            $rect_name: OnceCell::new(),
+                        )*
+                    }));
+                }
+                pub(crate) fn bind_theme_transition(&self, transition: Prop<crate::transition::Transition>) {
+                    if let Some(state) = &self.themed { state.animation_curve.set(Some(transition)); }
+                }
+                pub(crate) fn bind_explicit_transitions(&mut self, transition: Prop<crate::transition::Transition>) {
+                    $(if let Some(value) = self.$name.take() {
+                        self.$name = Some(crate::transition::bind_property!($name, value, Some(transition)));
+                    })*
                     $(
-                        define_style!(@themed_property result, theme, default, [<$rect_name _left>], $rect_ty, $($rect_default)?);
-                        define_style!(@themed_property result, theme, default, [<$rect_name _right>], $rect_ty, $($rect_default)?);
-                        define_style!(@themed_property result, theme, default, [<$rect_name _top>], $rect_ty, $($rect_default)?);
-                        define_style!(@themed_property result, theme, default, [<$rect_name _bottom>], $rect_ty, $($rect_default)?);
+                        if let Some(value) = self.[<$rect_name _left>].take() {
+                            self.[<$rect_name _left>] = Some(crate::transition::bind_property!([<$rect_name _left>], value, Some(transition)));
+                        }
+                        if let Some(value) = self.[<$rect_name _right>].take() {
+                            self.[<$rect_name _right>] = Some(crate::transition::bind_property!([<$rect_name _right>], value, Some(transition)));
+                        }
+                        if let Some(value) = self.[<$rect_name _top>].take() {
+                            self.[<$rect_name _top>] = Some(crate::transition::bind_property!([<$rect_name _top>], value, Some(transition)));
+                        }
+                        if let Some(value) = self.[<$rect_name _bottom>].take() {
+                            self.[<$rect_name _bottom>] = Some(crate::transition::bind_property!([<$rect_name _bottom>], value, Some(transition)));
+                        }
                     )*
-                    result.provide_defaults(default);
+                }
+                fn materialize_theme(&mut self) {
+                    if self.themed.is_none() { return; }
+                    $(if self.$name.is_none() { self.$name = self.[<declared_ $name>](); })*
+                    $(
+                        if self.[<$rect_name _left>].is_none() { self.[<$rect_name _left>] = self.[<declared_ $rect_name _left>](); }
+                        if self.[<$rect_name _right>].is_none() { self.[<$rect_name _right>] = self.[<declared_ $rect_name _right>](); }
+                        if self.[<$rect_name _top>].is_none() { self.[<$rect_name _top>] = self.[<declared_ $rect_name _top>](); }
+                        if self.[<$rect_name _bottom>].is_none() { self.[<$rect_name _bottom>] = self.[<declared_ $rect_name _bottom>](); }
+                    )*
+                    self.themed = None;
                 }
                 /// Fill missing properties from `other` and append its event hooks.
-                pub fn merge(mut self, other: Self) -> Self {
-
+                pub fn merge(mut self, mut other: Self) -> Self {
+                    // Public style composition also accepts an already sealed Style.
+                    self.materialize_theme();
+                    other.materialize_theme();
                     $(
                         self.$name = self.$name.or(other.$name);
                     )*
@@ -334,7 +429,8 @@ macro_rules! define_style {
 
                 /// Fill missing properties and prepend default event hooks.
                 pub fn provide_defaults(&mut self, mut default: Self) {
-
+                    self.materialize_theme();
+                    default.materialize_theme();
                     $(
                         if self.$name.is_none() {
                             self.$name = default.$name;
@@ -357,6 +453,15 @@ macro_rules! define_style {
                     self.append_theme_owners(default.theme_owners);
                 }
 
+                pub(crate) fn is_visually_empty(&self) -> bool {
+                    self.themed.is_none()
+                        $( && self.$name.is_none() )*
+                        $( && self.[<$rect_name _left>].is_none()
+                           && self.[<$rect_name _right>].is_none()
+                           && self.[<$rect_name _top>].is_none()
+                           && self.[<$rect_name _bottom>].is_none() )*
+                }
+
                 pub(crate) fn assert_visual_only(&self) {
                     assert!(self.children.is_none()
                         && self.classes.is_none()
@@ -366,19 +471,41 @@ macro_rules! define_style {
                 }
 
                 $(
-                    /// Return the declared value without applying a default.
+                    /// Return the declaration, or the node's shared lazy theme binding after seal.
                     pub fn [<declared_ $name>](&self) -> Option<Prop<$ty>> {
-                        self.$name.clone()
+                        self.$name.clone().or_else(|| self.themed.as_ref().map(|state| {
+                            state.$name.get_or_init(|| state.scope.run(|| {
+                                let value = define_style!(@project state, $name, $ty, $($default)?);
+                                define_style!(@animate state, value, $name)
+                            })).clone()
+                        }))
                     }
                     #[allow(dead_code)]
                     pub fn [<take_ $name>](&mut self) -> Prop<$ty> {
+                        if self.themed.is_some() { return self.[<declared_ $name>]().unwrap(); }
                         self.$name.take().unwrap_or_else(|| define_style!(@extract_default ($ty, $($default)?)))
                     }
                 )*
 
                 $(
+                    define_style!(@side_accessor [<$rect_name _left>], $rect_ty, $($rect_default)?);
+                    define_style!(@side_accessor [<$rect_name _right>], $rect_ty, $($rect_default)?);
+                    define_style!(@side_accessor [<$rect_name _top>], $rect_ty, $($rect_default)?);
+                    define_style!(@side_accessor [<$rect_name _bottom>], $rect_ty, $($rect_default)?);
                     #[allow(dead_code)]
                     pub fn [<take_ $rect_name>](&mut self) -> Prop<taffy::Rect<$rect_ty>> {
+                        if let Some(state) = &self.themed {
+                            return state.$rect_name.get_or_init(|| state.scope.run(|| {
+                                let left = self.[<declared_ $rect_name _left>]().unwrap();
+                                let right = self.[<declared_ $rect_name _right>]().unwrap();
+                                let top = self.[<declared_ $rect_name _top>]().unwrap();
+                                let bottom = self.[<declared_ $rect_name _bottom>]().unwrap();
+                                computed(move |_| taffy::Rect {
+                                    left: left.get_clone(), right: right.get_clone(),
+                                    top: top.get_clone(), bottom: bottom.get_clone(),
+                                }).into()
+                            })).clone();
+                        }
                         if self.[<$rect_name _left>].is_none()
                             && self.[<$rect_name _right>].is_none()
                             && self.[<$rect_name _top>].is_none()
@@ -546,6 +673,27 @@ impl Style {
         Self::default()
     }
 
+    fn themed_foreground_owned(
+        theme: ReadSignal<Rc<Style>>,
+        fallback: Rc<Style>,
+        inherited: Option<Prop<Brush>>,
+    ) -> Prop<Brush> {
+        computed(move |_| {
+            #[cfg(test)]
+            crate::runtime::record_projection();
+            let current = theme.get_clone();
+            current
+                .color
+                .as_ref()
+                .or(fallback.color.as_ref())
+                .or(inherited.as_ref())
+                .map(|value| value.get_clone())
+                .unwrap_or(Brush::Solid(Color::WHITE))
+        })
+        .into()
+    }
+
+    #[cfg(test)]
     fn themed_foreground(
         theme: ReadSignal<Rc<Style>>,
         fallback: Option<Prop<Brush>>,
@@ -610,48 +758,34 @@ impl Style {
     }
 
     pub(crate) fn build_taffy(&mut self) -> ReadSignal<taffy::Style> {
-        fn to_size<S>(width: Prop<S>, height: Prop<S>) -> Prop<taffy::Size<S>>
-        where
-            S: Clone + PartialEq + 'static,
-        {
-            if let Some((width, height)) = width.as_static().zip(height.as_static()) {
-                Prop::Static(taffy::Size {
-                    width: width.clone(),
-                    height: height.clone(),
-                })
-            } else {
-                computed(move |_| taffy::Size {
-                    width: width.get_clone(),
-                    height: height.get_clone(),
-                })
-                .into()
-            }
-        }
-
         let display = self.take_display();
         let box_sizing = self.take_box_sizing();
         let aspect_ratio = self.take_aspect_ratio();
-        let gap = to_size(self.take_column_gap(), self.take_row_gap());
+        let column_gap = self.take_column_gap();
+        let row_gap = self.take_row_gap();
 
-        let size = to_size(self.take_width(), self.take_height());
-        let min_size = to_size(self.take_min_width(), self.take_min_height());
-        let max_size = to_size(self.take_max_width(), self.take_max_height());
+        let width = self.take_width();
+        let height = self.take_height();
+        let min_width = self.take_min_width();
+        let min_height = self.take_min_height();
+        let max_width = self.take_max_width();
+        let max_height = self.take_max_height();
 
         let overflow_x = self.take_overflow_x();
         let overflow_y = self.take_overflow_y();
-        let overflow = if let Some((x, y)) = overflow_x.as_static().zip(overflow_y.as_static()) {
-            Prop::Static(Point { x: *x, y: *y })
-        } else {
-            computed(move |_| Point {
-                x: overflow_x.get_clone(),
-                y: overflow_y.get_clone(),
-            })
-            .into()
-        };
 
-        let margin = self.take_margin();
-        let padding = self.take_padding();
-        let border = self.take_border();
+        let margin_left = self.take_margin_left();
+        let margin_right = self.take_margin_right();
+        let margin_top = self.take_margin_top();
+        let margin_bottom = self.take_margin_bottom();
+        let padding_left = self.take_padding_left();
+        let padding_right = self.take_padding_right();
+        let padding_top = self.take_padding_top();
+        let padding_bottom = self.take_padding_bottom();
+        let border_left = self.take_border_left();
+        let border_right = self.take_border_right();
+        let border_top = self.take_border_top();
+        let border_bottom = self.take_border_bottom();
 
         let align_items = self.take_align_items();
         let align_self = self.take_align_self();
@@ -661,7 +795,10 @@ impl Style {
         let justify_content = self.take_justify_content();
 
         let position = self.take_position();
-        let inset = self.take_inset();
+        let inset_left = self.take_inset_left();
+        let inset_right = self.take_inset_right();
+        let inset_top = self.take_inset_top();
+        let inset_bottom = self.take_inset_bottom();
 
         let flex_direction = self.take_flex_direction();
         let flex_wrap = self.take_flex_wrap();
@@ -670,40 +807,79 @@ impl Style {
         let flex_grow = self.take_flex_grow();
         let flex_shrink = self.take_flex_shrink();
 
-        computed(move |_| taffy::Style {
-            display: display.get(),
-            box_sizing: box_sizing.get(),
-            aspect_ratio: aspect_ratio.get(),
-            gap: gap.get().map(|v| v.to_length_percentage("gap")),
+        computed(move |_| {
+            #[cfg(test)]
+            crate::layout::record_style_compute();
+            taffy::Style {
+                display: display.get(),
+                box_sizing: box_sizing.get(),
+                aspect_ratio: aspect_ratio.get(),
+                gap: taffy::Size {
+                    width: column_gap.get().to_length_percentage("gap"),
+                    height: row_gap.get().to_length_percentage("gap"),
+                },
 
-            size: size.get().map(Size::to_dimension),
-            min_size: min_size.get().map(Size::to_dimension),
-            max_size: max_size.get().map(Size::to_dimension),
+                size: taffy::Size {
+                    width: width.get().to_dimension(),
+                    height: height.get().to_dimension(),
+                },
+                min_size: taffy::Size {
+                    width: min_width.get().to_dimension(),
+                    height: min_height.get().to_dimension(),
+                },
+                max_size: taffy::Size {
+                    width: max_width.get().to_dimension(),
+                    height: max_height.get().to_dimension(),
+                },
 
-            overflow: overflow.get(),
+                overflow: Point {
+                    x: overflow_x.get(),
+                    y: overflow_y.get(),
+                },
 
-            margin: margin.get().map(Size::to_length_percentage_auto),
-            padding: padding.get().map(|v| v.to_length_percentage("padding")),
-            border: border.get().map(|v| v.to_length_percentage("border")),
+                margin: taffy::Rect {
+                    left: margin_left.get().to_length_percentage_auto(),
+                    right: margin_right.get().to_length_percentage_auto(),
+                    top: margin_top.get().to_length_percentage_auto(),
+                    bottom: margin_bottom.get().to_length_percentage_auto(),
+                },
+                padding: taffy::Rect {
+                    left: padding_left.get().to_length_percentage("padding"),
+                    right: padding_right.get().to_length_percentage("padding"),
+                    top: padding_top.get().to_length_percentage("padding"),
+                    bottom: padding_bottom.get().to_length_percentage("padding"),
+                },
+                border: taffy::Rect {
+                    left: border_left.get().to_length_percentage("border"),
+                    right: border_right.get().to_length_percentage("border"),
+                    top: border_top.get().to_length_percentage("border"),
+                    bottom: border_bottom.get().to_length_percentage("border"),
+                },
 
-            align_items: align_items.get(),
-            align_self: align_self.get(),
-            justify_items: justify_items.get(),
-            justify_self: justify_self.get(),
-            align_content: align_content.get(),
-            justify_content: justify_content.get(),
+                align_items: align_items.get(),
+                align_self: align_self.get(),
+                justify_items: justify_items.get(),
+                justify_self: justify_self.get(),
+                align_content: align_content.get(),
+                justify_content: justify_content.get(),
 
-            position: position.get(),
-            inset: inset.get().map(Size::to_length_percentage_auto),
+                position: position.get(),
+                inset: taffy::Rect {
+                    left: inset_left.get().to_length_percentage_auto(),
+                    right: inset_right.get().to_length_percentage_auto(),
+                    top: inset_top.get().to_length_percentage_auto(),
+                    bottom: inset_bottom.get().to_length_percentage_auto(),
+                },
 
-            flex_direction: flex_direction.get(),
-            flex_wrap: flex_wrap.get(),
+                flex_direction: flex_direction.get(),
+                flex_wrap: flex_wrap.get(),
 
-            flex_basis: flex_basis.get().to_dimension(),
-            flex_grow: flex_grow.get(),
-            flex_shrink: flex_shrink.get(),
+                flex_basis: flex_basis.get().to_dimension(),
+                flex_grow: flex_grow.get(),
+                flex_shrink: flex_shrink.get(),
 
-            ..Default::default()
+                ..Default::default()
+            }
         })
     }
 }

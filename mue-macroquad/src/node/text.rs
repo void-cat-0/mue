@@ -168,7 +168,7 @@ pub fn render_spans(style: &mut Style, content: Prop<Vec<Span>>) {
 
     let paint = use_paint(style);
     use_background(style, rect);
-    let declared_font_size = style.font_size;
+    let declared_font_size = style.declared_font_size();
     let font_size = crate::node::use_font_size();
     crate::node::NodeInner::with_mut(|node| {
         if node.font_size.is_none() {

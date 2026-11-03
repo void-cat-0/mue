@@ -17,6 +17,7 @@ pub(crate) struct SignalInner {
     pub effect: Option<EffectId>,
     pub subscribers: HashSet<EffectId>,
     pub comparator: Option<Comparator>,
+    pub revision: u64,
     #[cfg(debug_assertions)]
     #[allow(dead_code)]
     pub location: &'static std::panic::Location<'static>,
@@ -33,6 +34,7 @@ impl SignalInner {
             effect: None,
             subscribers: HashSet::new(),
             comparator,
+            revision: 0,
             #[cfg(debug_assertions)]
             location,
         }
@@ -109,6 +111,16 @@ impl<T> ReadSignal<T> {
             id: Runtime::with(|rt| rt.null_signal),
             _marker: PhantomData,
         }
+    }
+
+    /// Notification revision after bringing this signal up to date.
+    /// Does not subscribe; untracked writes do not advance the revision.
+    #[doc(hidden)]
+    pub fn revision_untracked(&self) -> u64 {
+        Runtime::with(|rt| {
+            rt.update_signal_if_necessary(self.id);
+            rt.signal_mut(self.id).revision
+        })
     }
 
     pub fn is_null(&self) -> bool {
@@ -326,6 +338,39 @@ mod test {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::{prelude::*, runtime::Runtime};
+
+    #[test]
+    fn notification_revisions_distinguish_equal_silent_and_computed_updates() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let initial = source.revision_untracked();
+            source.set(0);
+            assert_eq!(source.revision_untracked(), initial);
+            source.set_untracked(1);
+            assert_eq!(source.revision_untracked(), initial);
+            source.force_trigger();
+            assert_eq!(source.revision_untracked(), initial.wrapping_add(1));
+            let parity = source.map(|n| n % 2);
+            let revision = parity.revision_untracked();
+            batch(|| {
+                source.set(3);
+                assert_eq!(parity.revision_untracked(), revision);
+                source.set(4);
+                assert_ne!(parity.revision_untracked(), revision);
+            });
+            let runs = Rc::new(RefCell::new(0));
+            watch_effect({
+                let runs = runs.clone();
+                move || {
+                    source.revision_untracked();
+                    *runs.borrow_mut() += 1;
+                }
+            });
+            source.set(5);
+            assert_eq!(*runs.borrow(), 1);
+        });
+    }
 
     #[test]
     fn test_signal_basic() {

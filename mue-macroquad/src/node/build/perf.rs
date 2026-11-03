@@ -1,4 +1,8 @@
 //! Opt-in CPU baselines. Run with --release -- --ignored --nocapture.
+mod deferred_tween;
+mod empty_resolver;
+mod layout_compare;
+mod transition_compare;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -707,6 +711,116 @@ fn cpu_performance_baseline() {
     );
 }
 
+fn run_instant_transition_case(dynamic: bool) -> ResourceCounts {
+    use mue_core::prop::Prop;
+
+    use crate::transition::Transition;
+
+    let baseline = resource_counts();
+    let owner = OwnedScope::new();
+    // Keep an identical external source alive in both cases, outside measured builds.
+    let source = owner.run(|| signal(Transition::Instant));
+    let curve = if dynamic {
+        source.into()
+    } else {
+        Prop::Static(Transition::Instant)
+    };
+    let counters = Rc::new(Counters::default());
+    let mount = || {
+        AppBuildContext::with_theme(Theme::default().into(), || {
+            baseline_leaf(counters.clone())
+                .transition(curve)
+                .into_node()
+        })
+    };
+    let before = resource_counts();
+    for _ in 0..BUILD_WARMUP {
+        let node = mount();
+        measure_layout(&node);
+        drop(node);
+    }
+    assert_eq!(resource_counts(), before, "Instant warmup leaked resources");
+    counters.clear();
+    crate::runtime::reset_theme_stats();
+    let mut samples = Vec::with_capacity(BUILD_SAMPLES);
+    let mut measured_allocations = Allocations::default();
+    let mut live = before;
+    for _ in 0..BUILD_SAMPLES {
+        let allocation_before = Allocations::snapshot();
+        let start = Instant::now();
+        let node = mount();
+        measure_layout(&node);
+        let size = Runtime::with(|rt| {
+            let layout_id = rt.node(node.id).layout_id.expect("Instant baseline layout");
+            rt.taffy.borrow().layout(layout_id).unwrap().size
+        });
+        live = max_counts(live, resource_counts());
+        drop(node);
+        let elapsed = start.elapsed().as_nanos();
+        measured_allocations.add(Allocations::snapshot().since(allocation_before));
+        samples.push(elapsed);
+        assert_eq!(size.width, 120.);
+        assert_eq!(size.height, 24.);
+    }
+    let after = resource_counts();
+    assert_eq!(after, before, "Instant baseline leaked reactive resources");
+    assert_eq!(counters.prepares.get(), BUILD_SAMPLES);
+    assert_eq!(counters.mounts.get(), BUILD_SAMPLES);
+    assert!(counters.width_consumers.get() >= BUILD_SAMPLES);
+    assert!(counters.height_consumers.get() >= BUILD_SAMPLES);
+    assert!(
+        !source.is_disposed(),
+        "node drop disposed the external curve"
+    );
+    assert_eq!(source.get_clone(), Transition::Instant);
+    let name = if dynamic {
+        "Instant / explicit dynamic curve currently Instant"
+    } else {
+        "Instant / explicit static curve"
+    };
+    report_build(name, summarize(samples), &counters, before, live, after);
+    print_theme_stats();
+    measured_allocations.print("measured build + layout + node drop");
+
+    let cleanup_before = Allocations::snapshot();
+    drop(owner);
+    drop(counters);
+    crate::transition::advance(1.);
+    Allocations::snapshot()
+        .since(cleanup_before)
+        .print("post-drop cleanup + transition driver maintenance");
+    assert_eq!(
+        resource_counts(),
+        baseline,
+        "Instant baseline cleanup leaked"
+    );
+    ResourceCounts {
+        scopes: live.scopes - before.scopes,
+        signals: live.signals - before.signals,
+        effects: live.effects - before.effects,
+    }
+}
+
+#[test]
+#[ignore = "Instant transition baseline; run with --release -- --ignored instant_transition_baseline --nocapture --test-threads=1"]
+fn instant_transition_baseline() {
+    println!(
+        "Instant transitions: same-binary explicit static vs dynamic curve currently Instant; {BUILD_SAMPLES} build + layout + drop samples after {BUILD_WARMUP} warmups; Theme::default() on both paths; process-wide allocator requires this test alone and --test-threads=1; no timing thresholds"
+    );
+    // The theme's default transition is a dynamic projection. Explicitly override
+    // it here: a current Instant value alone never proves a curve stays Instant.
+    let static_curve = run_instant_transition_case(false);
+    let dynamic_curve = run_instant_transition_case(true);
+    assert!(
+        static_curve.signals < dynamic_curve.signals,
+        "static Instant did not reduce live signals"
+    );
+    assert!(
+        static_curve.effects < dynamic_curve.effects,
+        "static Instant did not reduce live effects"
+    );
+}
+
 // Resolver-only measurements leave cpu_performance_baseline unchanged.
 // Filter to this test and pass --test-threads=1: allocation counters are process-wide.
 const RESOLVER_KEYS: usize = 64;
@@ -1072,5 +1186,285 @@ fn resolver_identity_scaling() {
     }
     println!(
         "allocations: existing test-only System forwarding allocator; successful realloc counts as allocation+free; predicate/body Cell counters instrument both paths equally; no timing thresholds"
+    );
+}
+
+// Keep these demand cases separate from the eight end-to-end pipeline baselines.
+#[derive(Clone, Copy)]
+struct DemandSnapshot {
+    resources: ResourceCounts,
+    stats: crate::runtime::ThemeStats,
+    allocations: Allocations,
+}
+impl DemandSnapshot {
+    fn capture() -> Self {
+        Self {
+            resources: resource_counts(),
+            stats: crate::runtime::theme_stats(),
+            allocations: Allocations::snapshot(),
+        }
+    }
+
+    fn report(self, label: &str, before: Self, elapsed: u128) {
+        println!(
+            "theme_projection_demand {label}: elapsed={elapsed}ns; resolver_runs={} projection_runs={} transition_binds={}",
+            self.stats.resolver_runs - before.stats.resolver_runs,
+            self.stats.projection_runs - before.stats.projection_runs,
+            self.stats.transition_binds - before.stats.transition_binds,
+        );
+        print_counts(before.resources, self.resources, self.resources);
+        self.allocations
+            .since(before.allocations)
+            .print("phase allocations");
+    }
+}
+
+fn demand_phase<R>(action: impl FnOnce() -> R) -> (R, DemandSnapshot, u128) {
+    let start = Instant::now();
+    let result = std::hint::black_box(action());
+    let elapsed = start.elapsed().as_nanos();
+    (result, DemandSnapshot::capture(), elapsed)
+}
+
+fn run_sealed_projection_demand() {
+    use super::RootBuild;
+    use crate::style::Size;
+
+    let baseline = resource_counts();
+    let owner = OwnedScope::new();
+    let source = owner.run(|| signal(Theme::default()));
+    let counters = Rc::new(Counters::default());
+    let width_rule = theme_rule(
+        &counters,
+        Specificity(0, 0, 1),
+        |_| true,
+        || Style::new().width(240.),
+    );
+    let text_rule = theme_rule(
+        &counters,
+        Specificity(0, 0, 1),
+        |_| true,
+        || Style::new().font_italic(true),
+    );
+    let width_theme = Theme::new(vec![width_rule.clone()]);
+    let text_theme = Theme::new(vec![width_rule, text_rule]);
+    crate::runtime::reset_theme_stats();
+    let before = DemandSnapshot::capture();
+    let (mut prepared, sealed, seal_ns) = demand_phase(|| {
+        owner.run(|| {
+            AppBuildContext::with_theme(source.into(), || {
+                let mut root = RootBuild::new();
+                root.push_target::<Unmatched>(Rc::new(()));
+                root.finish(NodePlan::new(
+                    Style::new()
+                        .width(120.)
+                        .height(24.)
+                        .radius(4.)
+                        .font_size(16.),
+                    |_| {},
+                ))
+            })
+        })
+    });
+    assert_eq!(
+        sealed.stats.projection_runs, 0,
+        "seal projected unconsumed fields"
+    );
+    let scope = prepared.owner.scope();
+    let (width, one, one_ns) = demand_phase(|| {
+        scope.run(|| {
+            let width = prepared.style.declared_width().expect("themed width");
+            assert_eq!(width.get_clone(), Size::Px(120.));
+            width
+        })
+    });
+    assert_eq!(one.stats.projection_runs - sealed.stats.projection_runs, 1);
+    let (_, repeated, repeated_ns) = demand_phase(|| {
+        scope.run(|| {
+            for _ in 0..64 {
+                std::hint::black_box(prepared.style.declared_width().unwrap().get_clone());
+                std::hint::black_box(prepared.style.take_width().get_clone());
+            }
+        })
+    });
+    assert_eq!(
+        repeated.resources, one.resources,
+        "width access allocated another slot"
+    );
+    assert_eq!(repeated.stats.projection_runs, one.stats.projection_runs);
+
+    let (_, added, added_ns) = demand_phase(|| source.set(width_theme));
+    assert_eq!(
+        width.get_clone(),
+        Size::Px(240.),
+        "initially empty theme stopped tracking"
+    );
+    assert_eq!(
+        added.resources, repeated.resources,
+        "width rule created another slot"
+    );
+    let (_, text, text_ns) = demand_phase(|| source.set(text_theme));
+    assert_eq!(width.get_clone(), Size::Px(240.));
+    assert_eq!(
+        text.resources, added.resources,
+        "unused text declaration created slots"
+    );
+    assert_eq!(
+        text.stats.projection_runs - added.stats.projection_runs,
+        1,
+        "unused text declaration projected fields other than the demanded width",
+    );
+
+    let (_, two, two_ns) = demand_phase(|| {
+        scope.run(|| std::hint::black_box(prepared.style.declared_height().unwrap().get_clone()))
+    });
+    assert_eq!(two.stats.projection_runs - text.stats.projection_runs, 1);
+    let (_, representative, representative_ns) = demand_phase(|| {
+        scope.run(|| {
+            std::hint::black_box(prepared.style.declared_radius().unwrap().get_clone());
+            std::hint::black_box(prepared.style.declared_font_size().unwrap().get_clone());
+            std::hint::black_box(prepared.style.declared_transition().unwrap().get_clone());
+        })
+    });
+    assert_eq!(
+        representative.stats.projection_runs - two.stats.projection_runs,
+        3
+    );
+    let (_, disposed, dispose_ns) = demand_phase(|| {
+        drop(prepared);
+        drop(owner);
+        drop(counters);
+        crate::transition::advance(1.);
+    });
+    assert_eq!(
+        disposed.resources, baseline,
+        "sealed demand case leaked resources"
+    );
+
+    // Report only after sampling so stdout allocations never enter another phase.
+    sealed.report("seal / 0 fields", before, seal_ns);
+    one.report("1 field / width", sealed, one_ns);
+    repeated.report("64 repeated declared/take width pairs", one, repeated_ns);
+    added.report("dynamic empty theme -> width rule", repeated, added_ns);
+    text.report("unused text declaration change", added, text_ns);
+    two.report("2 fields / add height", text, two_ns);
+    representative.report(
+        "5 representative fields / add radius, font, transition",
+        two,
+        representative_ns,
+    );
+    disposed.report(
+        "dispose sealed owner + driver maintenance",
+        representative,
+        dispose_ns,
+    );
+    print_counts(baseline, representative.resources, disposed.resources);
+}
+
+#[mue_macros::node]
+#[theme]
+fn demand_width_leaf(counters: Rc<Counters>) -> NodePlan<impl FnOnce(&mut Style)> {
+    let counters = counters.get_clone();
+    counters.prepares.set(counters.prepares.get() + 1);
+    NodePlan::new(Style::new().width(120.).height(24.), move |style| {
+        counters.mounts.set(counters.mounts.get() + 1);
+        let width = style.declared_width().unwrap();
+        watch_effect(move || {
+            counters
+                .width_consumers
+                .set(counters.width_consumers.get() + 1);
+            std::hint::black_box(width.get_clone());
+        });
+    })
+}
+
+fn run_demand_mount_case(full_layout: bool) -> ResourceCounts {
+    let counters = Rc::new(Counters::default());
+    let theme = Theme::new(vec![theme_rule(
+        &counters,
+        Specificity(0, 0, 1),
+        |_| true,
+        || Style::new().width(121.).font_italic(true),
+    )]);
+    let mount = || {
+        AppBuildContext::with_theme(theme.clone().into(), || {
+            if full_layout {
+                baseline_leaf(counters.clone()).into_node()
+            } else {
+                demand_width_leaf(counters.clone()).into_node()
+            }
+        })
+    };
+    let before = resource_counts();
+    for _ in 0..BUILD_WARMUP {
+        drop(mount());
+    }
+    counters.clear();
+    crate::runtime::reset_theme_stats();
+    let mut samples = Vec::with_capacity(BUILD_SAMPLES);
+    let mut allocations = Allocations::default();
+    let mut live = before;
+    for _ in 0..BUILD_SAMPLES {
+        let allocation_before = Allocations::snapshot();
+        let start = Instant::now();
+        let node = mount();
+        live = max_counts(live, resource_counts());
+        drop(node);
+        let elapsed = start.elapsed().as_nanos();
+        allocations.add(Allocations::snapshot().since(allocation_before));
+        samples.push(elapsed);
+    }
+    let after = resource_counts();
+    assert_eq!(after, before, "demand mount leaked resources");
+    let timings = summarize(samples);
+    let label = if full_layout {
+        "full layout + paint baseline"
+    } else {
+        "minimal width-only leaf"
+    };
+    println!(
+        "theme_projection_demand {label}: p50={}ns p95={}ns; prepares={} mounts={} width_notify={} height_notify={} paint_build={}; layout computation excluded",
+        timings.p50,
+        timings.p95,
+        counters.prepares.get(),
+        counters.mounts.get(),
+        counters.width_consumers.get(),
+        counters.height_consumers.get(),
+        counters.paint_builds.get(),
+    );
+    print_counts(before, live, after);
+    print_theme_stats();
+    allocations.print("measured mounts incl. node drop");
+    let cleanup_before = Allocations::snapshot();
+    drop(theme);
+    drop(counters);
+    crate::transition::advance(1.);
+    Allocations::snapshot()
+        .since(cleanup_before)
+        .print("post-drop driver maintenance");
+    assert_eq!(resource_counts(), before);
+    ResourceCounts {
+        scopes: live.scopes - before.scopes,
+        signals: live.signals - before.signals,
+        effects: live.effects - before.effects,
+    }
+}
+
+#[test]
+#[ignore = "Projection demand; run with --release -- --ignored theme_projection_demand --nocapture --test-threads=1"]
+fn theme_projection_demand() {
+    println!(
+        "projection demand: sealed 0/1/2/5 representative fields (width, height, radius, font-size, transition); then {BUILD_SAMPLES} mounts after {BUILD_WARMUP} warmups; process-wide allocator requires this test alone and --test-threads=1; no timing thresholds or eager helper"
+    );
+    run_sealed_projection_demand();
+    let sparse = run_demand_mount_case(false);
+    let full = run_demand_mount_case(true);
+    assert!(
+        sparse.signals < full.signals,
+        "width-only mount did not reduce live signals"
+    );
+    assert!(
+        sparse.effects < full.effects,
+        "width-only mount did not reduce live effects"
     );
 }

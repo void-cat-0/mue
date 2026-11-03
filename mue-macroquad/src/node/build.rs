@@ -13,12 +13,14 @@ use crate::{
     theme::{ClassName, ComponentRef, Theme, ThemeKey, ThemeTarget},
 };
 use mue_core::{
-    effect::computed_always,
     prop::Prop,
     scope::{OwnedScope, Scope},
     signal::{Access, Signal, signal},
 };
 use std::{any::Any, cell::RefCell, collections::HashSet, rc::Rc};
+
+#[cfg(test)]
+pub(crate) mod resolver_reference;
 
 thread_local! {
     static THEME: RefCell<Option<Prop<Theme>>> = const { RefCell::new(None) };
@@ -182,26 +184,36 @@ impl RootBuild {
             {
                 let hovered = self.hover_owners.first().map(|owner| *owner.signal);
                 let targets = std::mem::take(&mut self.targets);
-                let resolved = computed_always(move |_| {
-                    #[cfg(test)]
-                    crate::runtime::record_resolver();
-                    let classes: Vec<_> = targets
-                        .iter()
-                        .map(|target| target.classes.get_clone())
-                        .collect();
-                    let components: Vec<_> = targets
-                        .iter()
-                        .zip(&classes)
-                        .map(|(target, classes)| {
-                            ComponentRef::new(target.key, target.options.as_ref(), classes, hovered)
-                        })
-                        .collect();
-                    // Rule expressions may create derived signals. Keep only this generation.
-                    let owner = scope.run(OwnedScope::new_inherited);
-                    let mut result = owner.run(|| theme.get_clone().resolve(&components));
-                    result.theme_owners.push(Rc::new(owner));
-                    Rc::new(result)
-                });
+                let resolved =
+                    mue_core::effect::computed_with_notify(move |previous: Option<&Rc<Style>>| {
+                        #[cfg(test)]
+                        crate::runtime::record_resolver();
+                        let classes: Vec<_> = targets
+                            .iter()
+                            .map(|target| target.classes.get_clone())
+                            .collect();
+                        let components: Vec<_> = targets
+                            .iter()
+                            .zip(&classes)
+                            .map(|(target, classes)| {
+                                ComponentRef::new(
+                                    target.key,
+                                    target.options.as_ref(),
+                                    classes,
+                                    hovered,
+                                )
+                            })
+                            .collect();
+                        // Rule expressions may create derived signals. Keep only this generation.
+                        let owner = scope.run(OwnedScope::new_inherited);
+                        let mut result = owner.run(|| theme.get_clone().resolve(&components));
+                        result.theme_owners.push(Rc::new(owner));
+                        let notify = !result.is_visually_empty()
+                            || previous.is_none_or(|style| !style.is_visually_empty());
+                        #[cfg(test)]
+                        let notify = notify || resolver_reference::enabled();
+                        (Rc::new(result), notify)
+                    });
                 self.explicit.provide_themed_defaults(resolved, defaults);
             } else {
                 self.explicit.provide_defaults(defaults);

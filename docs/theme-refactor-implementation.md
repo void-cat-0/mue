@@ -151,7 +151,7 @@ builder 配置：普通 setter / with_hovered 回调立即执行
     → 每层 prepare：求默认参数 → 收集本层 target 与显式贡献 → 调用函数一次
     → component 返回 builder：继续同一个 RootBuild
     → node 返回 NodePlan：完成当前返回链
-    → seal：统一逐属性决议并建立稳定绑定
+    → seal：固定统一逐属性决议的输入与按需绑定状态
     → 建立 Node mount 上下文与所有权 guard
     → 框架建立父 transition/paint（含 opacity）/font/transform 绑定
     → 物化父的 children：各 child 独立 prepare → seal → mount
@@ -159,7 +159,7 @@ builder 配置：普通 setter / with_hovered 回调立即执行
     → 注册 Node，提交资源所有权
 ```
 
-每个真实 Node 的布局、绘制/事件消费者和注册仅执行一次。seal 固定的是贡献集合和绑定结构，不冻结属性值；theme/options/class/hover 变化只更新既有响应式图，不重跑 prepare/mount/配置回调。
+每个真实 Node 的布局、绘制/事件消费者和注册仅执行一次。seal 固定的是贡献集合、fallback、继承输入和绑定策略，不冻结属性值；属性投影在消费者首次读取时建立并复用，theme/options/class/hover 变化只更新既有响应式图，不重跑 prepare/mount/配置回调。
 
 prebuilt Node 仍实现最终 IntoNode identity 转换，但不能作为 component 返回链继续贡献的终点：首版 component 必须返回可 prepare 的 builder/plan。直接作为 child 的 prebuilt Node 原样接入，不借此承诺重建样式或改变其主题输入。
 
@@ -169,7 +169,7 @@ prebuilt Node 仍实现最终 IntoNode identity 转换，但不能作为 compone
 
 当前 OwnedScope 拥有 detached scope，Drop 时 dispose；new_inherited 只继承 context lookup，不把资源所有权交给当前配置 scope。RootBuild 的 owner 和 Style 中提前创建的 hover owners 在 mount 时移交 Node。Scope::run、AppBuildContext::run 使用 RAII 恢复当前 scope/theme；Node mount 的 MountGuard 在失败时清理未提交节点并恢复构建栈。外部 Signal 仍由其原 scope 管理，不随节点销毁。
 
-core scheduler 另有 effect 临时状态与 batch depth 的 unwind 恢复，不能由 scope guard 代替；相关代码见 [core runtime](../mue-core/src/runtime.rs) 与 [更新上下文](../mue-core/src/update_context.rs)。本轮保证限定为构建所拥有资源回收、构建 scope/context 与 Node 栈恢复，不承诺任意用户响应式 callback panic 后整个 Runtime 可继续工作。
+core scheduler 另有 effect 临时状态与 batch depth 的 unwind 恢复，不能由 scope guard 代替；Check 依赖检查逐项短借用读取，递归期间不持 arena 借用；动态依赖移除/重建使用依赖版本检测，从零重扫变化后的列表，不创建临时依赖快照；版本递增的 effect slot Borrow 必须短于后续依赖遍历，因为 recursive check 不能在持有 arena Ref/RefMut 时进行；相关代码见 [core runtime](../mue-core/src/runtime.rs) 与 [更新上下文](../mue-core/src/update_context.rs)。本轮保证限定为构建所拥有资源回收、构建 scope/context 与 Node 栈恢复，不承诺任意用户响应式 callback panic 后整个 Runtime 可继续工作。
 
 没有实例 ID，首版最终 IntoNode 仍返回 Node；构建 panic 的 unwind 清理回收构建所拥有的资源并恢复构建上下文，不在本轮引入全库 Result&lt;Node&gt; API 或任意响应式回调 panic 的全局恢复承诺。外部资产等既有 Result 保持其本来错误通道；panic=abort 不承诺运行析构。
 
@@ -215,11 +215,11 @@ Theme 共享有序的 `Rc<[Rule]>` 与不可变 identity 索引；Rule 持有 `V
 
 ### 7.3 动态绑定与回退
 
-安装顶层主题且同根链包含 target 时，Node 建立一个 computed_always 总 resolver；否则不创建主题响应式图。最终显式 Style 已提供的属性保留原 Prop 绑定；对没有显式值的可主题化属性建立稳定 computed 投影，按当前主题 → fallback → 框架默认/继承取值。动态 Prop&lt;Theme&gt; 不按当前主题声明并集或首次命中裁剪，允许以后新增任何属性或删除规则。静态 Theme 也可能在谓词/style Rust 表达式中读取 Signal，不能据此推断无依赖；完全静态专用优化后置。
+安装顶层主题且同根链包含 target 时，Node 建立一个总 resolver；每次更新都解析并替换 generation，仅前后均无视觉声明时抑制下游通知，否则照常通知；无主题或无 target 不创建主题响应式图。最终显式 Style 已提供的属性保留原 Prop 绑定；seal 保存主题信号、owned fallback 快照、当前 scope 与继承输入，不分配属性投影。没有显式值的可主题化属性在 declared_*/take_* 首次消费时才建立稳定 computed 投影，按当前主题 → fallback → 框架默认/继承取值。每字段缓存投影与 transition 包装后的最终 Prop，重复消费复用；矩形四边和合成值分别复用，side/axis/rect setter 使合成缓存失效。节点必需的 opacity/font-size/transform 在 mount 建立，layout、paint、text 消费其余所需字段，未消费字段不创建响应式资源。动态 Prop&lt;Theme&gt; 不按当前主题声明并集或首次命中裁剪，允许以后新增任何属性或删除规则。静态 Theme 也可能在谓词/style Rust 表达式中读取 Signal，不能据此推断无依赖；完全静态专用优化后置。
 
-resolver 订阅整体动态 Theme、动态 class、实际读取的 option/hover；每次重算保留稀疏未声明状态。规则声明闭包中创建的派生计算归本次 resolver generation 的 OwnedScope 所有，结果 Style 持有 owner，旧结果释放时清理旧派生图。属性消费者计算显式 &gt; 当前 theme &gt; fallback；规则退出时恢复低层值，包括原有字体/前景继承，不能用过早填充的引擎默认遮蔽继承。Style.take_* 等消费一次后，绑定仍必须持续读取当前候选，而不是保留失效的快照。显式值自身也是 Prop，不能把它读成常量再丢掉依赖。
+resolver 订阅整体动态 Theme、动态 class、实际读取的 option/hover；每次重算保留稀疏未声明状态。规则声明闭包中创建的派生计算归本次 resolver generation 的 OwnedScope 所有，结果 Style 持有 owner，旧结果释放时清理旧派生图。属性消费者计算显式 &gt; 当前 theme &gt; fallback；规则退出时恢复低层值，包括原有字体/前景继承，不能用过早填充的引擎默认遮蔽继承。按需初始化在 seal 捕获的 scope 中执行，不能归临时调用方 scope 所有；fallback 由独立 Rc 快照保留其派生值 owner，投影不反向持有缓存本身。公共 merge/provide_defaults/.style 合并已 seal 的 Style 时先物化其字段以保留优先级，常规 prepare 返回链不走该路径。Style.take_* 等消费一次后，绑定仍必须持续读取当前候选，而不是保留失效的快照。显式值自身也是 Prop，不能把它读成常量再丢掉依赖。
 
-总 resolver 使用 computed_always；可比较的最终属性用 computed 阻止相同值向 layout/paint/transition 无效传播。不新增不可靠 PartialEq；不可比较字段保持现有传播并量化成本。无顶层主题/无 target 不分配主题响应式资源；空但动态 Theme 不等于永久无主题，仍需响应后来新增规则。
+总 resolver 每轮保留新结果及其 owner；仅前后均无视觉声明时跳过通知，任何涉及非空结果的转换都通知，保证属性重新绑定新 generation。可比较的最终属性用 computed 阻止相同值向 layout/paint/transition 无效传播。不新增不可靠 PartialEq；不可比较字段保持现有传播并量化成本。无顶层主题/无 target 不分配主题响应式资源；空但动态 Theme 不等于永久无主题，仍需响应后来新增规则。
 
 ## 8. 新 selector（Q24）
 
@@ -293,7 +293,7 @@ fn with_hovered(self, f: impl FnOnce(Self, ReadSignal<bool>) -> Self) -> Self;
 
 本轮量化无主题、空静态 Theme、有主题无匹配、静态命中、class/hover 高频、option 改变但结果相同、动态主题新增/撤销字段。记录构建次数、resolver/投影运行与通知、signals/effects、layout/paint/transition、分配与清理后存量及 p50/p95，不编造耗时门槛。
 
-identity 规则候选索引已接入，规模基准以同一二进制中的线性参照验证收益与通用/密集场景成本，结果见性能记录。完全静态专用路径、只绑定可证明封闭的属性集合、per-class 跟踪、interning 与 Rc&lt;HashSet&gt; 快照仍后置。优化不能改变首次未命中后来命中、规则退出回退和动态主题覆盖语义。
+identity 规则候选索引、属性按需投影及 Taffy 聚合 computed 合并已接入，基准分别记录候选规模、实际消费字段与布局输入资源。Static Instant 仍绕过 presentation binding；动态曲线保留 source computed，但 frame/tween/driver 延后至实际发生可插值的动画才创建，并归原绑定 scope 复用至销毁。presentation 使用 source/frame 依赖的 computed 合并同轮更新。source 通知版本用于区分重定向与帧更新，NaN 等非自反值不因帧更新反复重启；曲线仍只在目标变化时采样。构建成本与更新收益分别见性能记录。完全静态主题专用 resolver、per-class 跟踪、interning 与 Rc&lt;HashSet&gt; 快照仍后置。优化不能改变首次未命中后来命中、规则退出回退和动态主题覆盖语义。
 
 ## 11. 代码落点与迁移索引
 

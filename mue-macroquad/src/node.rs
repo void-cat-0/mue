@@ -394,12 +394,18 @@ impl Node {
                 let mut guard = MountGuard { depth, armed: true };
                 crate::transition::bind_style(&mut style);
                 crate::paint::bind_node_style(&mut style);
+                // Lazy projection initialization can run user computations; do it
+                // before borrowing the node build stack.
+                let declared_font_size = style.declared_font_size();
+                let matrix_transform = style.take_matrix_transform();
+                let transform_list = style.take_transform_list();
+                let transform_origin = style.take_transform_origin();
                 NodeInner::with_mut(|node| {
                     node.computed_font_size = signal(FontSize::DEFAULT_PX);
-                    node.font_size = style.font_size;
-                    node.matrix_transform = style.take_matrix_transform();
-                    node.transform_list = style.take_transform_list();
-                    node.transform_origin = style.take_transform_origin();
+                    node.font_size = declared_font_size;
+                    node.matrix_transform = matrix_transform;
+                    node.transform_list = transform_list;
+                    node.transform_origin = transform_origin;
                 });
                 // Parent bindings exist before every independent child is materialized.
                 if let Some(children) = style.children.take() {

@@ -127,6 +127,53 @@ fn dynamic_theme_adds_and_removes_properties_without_rebuilding() {
 }
 
 #[test]
+fn empty_resolver_updates_skip_projections_but_keep_future_matches_and_generations() {
+    reset();
+    let baseline = mue_core::runtime::resource_counts();
+    let owner = OwnedScope::new();
+    let source = owner.run(|| Signal::shallow(Theme::default()));
+    let derived = Rc::new(RefCell::new(Vec::new()));
+    let empty_rule = {
+        let derived = derived.clone();
+        Theme::new(vec![Rule::new(
+            vec![Selector::new(Specificity(0, 0, 1), |_| true)],
+            move || {
+                derived.borrow_mut().push(*signal(42));
+                Style::new()
+            },
+        )])
+    };
+    let node = AppBuildContext::with_theme(source.into(), || probe_leaf().into_node());
+    let initial = crate::runtime::theme_stats();
+    source.set(empty_rule.clone());
+    source.set(empty_rule);
+    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
+    let unchanged = crate::runtime::theme_stats();
+    assert_eq!(unchanged.resolver_runs, initial.resolver_runs + 2);
+    assert_eq!(unchanged.projection_runs, initial.projection_runs);
+    assert!(derived.borrow()[0].is_disposed());
+    assert!(!derived.borrow()[1].is_disposed());
+    source.set(rule(47.));
+    assert_eq!(dimensions().0, Size::Px(47.));
+    assert!(derived.borrow()[1].is_disposed());
+    source.set(Theme::default());
+    assert_eq!(dimensions().0, Size::Px(10.));
+    let removed = crate::runtime::theme_stats();
+    source.set(Theme::default());
+    assert_eq!(
+        crate::runtime::theme_stats().projection_runs,
+        removed.projection_runs
+    );
+    TRACE.with_borrow(|trace| {
+        assert_eq!(trace.prepares, 1);
+        assert_eq!(trace.mounts, 1);
+    });
+    drop(node);
+    drop(owner);
+    assert_eq!(mue_core::runtime::resource_counts(), baseline);
+}
+
+#[test]
 fn one_rule_matched_by_multiple_targets_runs_once_and_uses_matched_specificity() {
     reset();
     let runs = Rc::new(Cell::new(0));

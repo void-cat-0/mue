@@ -59,7 +59,7 @@
 - **Q03**：正确生成泛型声明/实参，限定主题能力的 'static 边界；具体 alias/关联类型由 Rust 正向 trait 证明。宏不能承诺透视任意 alias 和自定义字段。
 - **Q06**：PropValue + Clone + 'static，方案 B 不变；非 Clone 不进入首版，不重做所有权模型。
 - **Q15**：NodePlan 与消耗式 prepare 协议；scope/context 使用 owned 关系和 RAII guard，不依赖正常路径 push/pop。内部名字可调整，不能退回宏自动拆旧函数体。
-- **Q23**：共享总 resolver + 稳定字段绑定，可比较最终属性用 computed 抑制重复通知；无主题 fast path 保留。identity 规则候选索引已接入，并以独立规模基准对照线性 resolver；完全静态路径、per-class、interning 等仍需测量后再做。
+- **Q23**：共享总 resolver + 消费时创建并复用的稳定字段绑定，可比较最终属性用 computed 抑制重复通知；无主题 fast path 保留。identity 规则候选索引已接入，并以独立规模基准对照线性 resolver；完全静态路径、per-class、interning 等仍需测量后再做。
 - **旧入口**：factory、旧 first-match theme callback/match 管线与嵌套 provider 已从首版 API 移除；主题只从应用顶层接入。
 
 ## 4. Q 编号结案索引
