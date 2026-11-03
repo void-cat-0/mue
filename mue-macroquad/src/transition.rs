@@ -8,7 +8,7 @@ use std::{
 };
 
 use mue_core::{
-    effect::watch,
+    effect::computed,
     runtime::batch,
     signal::{Access, ReadSignal, Signal, signal},
 };
@@ -250,6 +250,11 @@ mod lengths {
     length!(Dimension, LengthPercentage, LengthPercentageAuto);
 }
 
+#[cfg(test)]
+pub(crate) mod eager_reference;
+#[cfg(test)]
+pub(crate) mod reference;
+
 thread_local! {
     static DRIVERS: RefCell<Vec<Weak<dyn Driver>>> = RefCell::new(Vec::new());
 }
@@ -267,8 +272,8 @@ struct Tween<T> {
     to: T,
     elapsed: f32,
     transition: Option<Transition>,
-    value: Signal<T>,
-    _running: Signal<bool>,
+    value: T,
+    frame: Signal<()>,
     registration: Option<Weak<dyn Driver>>,
 }
 
@@ -287,7 +292,7 @@ impl<T> Drop for Tween<T> {
 impl<T: Interpolatable> Driver for RefCell<Tween<T>> {
     fn advance(&self, dt: f32) {
         let mut tween = self.borrow_mut();
-        if tween.value.is_disposed() {
+        if tween.frame.is_disposed() {
             return;
         }
         let Some(transition) = tween.transition else {
@@ -303,9 +308,10 @@ impl<T: Interpolatable> Driver for RefCell<Tween<T>> {
         if progress >= 1. {
             tween.transition = None;
         }
-        let presentation = tween.value;
+        tween.value = value;
+        let frame = tween.frame;
         drop(tween);
-        presentation.set(value);
+        frame.force_trigger();
     }
 }
 
@@ -313,41 +319,76 @@ fn transition_value<T: Interpolatable>(
     source: ReadSignal<T>,
     curve: mue_core::prop::Prop<Transition>,
 ) -> ReadSignal<T> {
-    let initial = source.get_clone_untracked();
-    let value = signal(initial.clone());
-    let running = signal(false);
-    let tween = Rc::new(RefCell::new(Tween {
-        from: initial.clone(),
-        to: initial,
-        elapsed: 0.,
-        transition: None,
-        value,
-        _running: running,
-        registration: None,
-    }));
-    let driver: Rc<dyn Driver> = tween.clone();
-    tween.borrow_mut().registration = Some(Rc::downgrade(&driver));
-    register_driver(&driver);
-    watch(source, move |source| {
-        let destination = source.get_clone_untracked();
-        let curve = curve.get_clone_untracked();
-        let curve = (curve.duration().is_finite() && curve.duration() > 0.).then_some(curve);
-        let mut tween = tween.borrow_mut();
-        if tween.to == destination {
-            return;
+    #[cfg(test)]
+    if reference::enabled() {
+        return reference::transition_value(source, curve);
+    }
+    #[cfg(test)]
+    if eager_reference::enabled() {
+        return eager_reference::bind(source, curve);
+    }
+    let scope = mue_core::scope::current_scope();
+    let mut target = source.get_clone_untracked();
+    let mut revision = source.revision_untracked();
+    let mut tween: Option<Rc<RefCell<Tween<T>>>> = None;
+    // Keep the source -> presentation edge visible to the scheduler, but defer
+    // frame state and driver registration until a value actually animates.
+    computed(move |previous: Option<&T>| {
+        let destination = source.get_clone();
+        let source_revision = source.revision_untracked();
+        if revision != source_revision {
+            revision = source_revision;
+            if target != destination {
+                target = destination.clone();
+                let from = tween
+                    .as_ref()
+                    .map(|tween| tween.borrow().value.clone())
+                    .or_else(|| previous.cloned())
+                    .unwrap_or_else(|| destination.clone());
+                let curve = curve.get_clone_untracked();
+                let transition = (curve.duration().is_finite()
+                    && curve.duration() > 0.
+                    && from != destination
+                    && T::can_interpolate(&from, &destination))
+                .then_some(curve);
+                if transition.is_some() && tween.is_none() {
+                    // Updates may originate in a temporary caller scope. The
+                    // animation belongs to the original style binding's scope.
+                    let frame = scope.run(|| signal(()));
+                    let state = Rc::new(RefCell::new(Tween {
+                        from: from.clone(),
+                        to: destination.clone(),
+                        elapsed: 0.,
+                        transition,
+                        value: from.clone(),
+                        frame,
+                        registration: None,
+                    }));
+                    let driver: Rc<dyn Driver> = state.clone();
+                    state.borrow_mut().registration = Some(Rc::downgrade(&driver));
+                    register_driver(&driver);
+                    tween = Some(state);
+                }
+                if let Some(state) = &tween {
+                    let mut state = state.borrow_mut();
+                    state.from = from;
+                    state.to = destination.clone();
+                    state.elapsed = 0.;
+                    state.transition = transition;
+                    if transition.is_none() {
+                        state.value = destination.clone();
+                    }
+                }
+            }
         }
-        tween.from = value.get_clone_untracked();
-        tween.to = destination.clone();
-        tween.elapsed = 0.;
-        tween.transition = curve
-            .filter(|_| tween.from != destination && T::can_interpolate(&tween.from, &destination));
-        let is_running = tween.transition.is_some();
-        drop(tween);
-        if !is_running {
-            value.set(destination);
+        if let Some(state) = &tween {
+            let state = state.borrow();
+            state.frame.track();
+            state.value.clone()
+        } else {
+            target.clone()
         }
-    });
-    *value
+    })
 }
 
 /// Advance active transitions by elapsed seconds. The app calls this before layout.
@@ -386,9 +427,164 @@ impl Interpolatable for crate::math::Rect {
     }
 }
 
-fn bind<T: Interpolatable>(value: &mut Option<Prop<T>>, transition: Prop<Transition>) {
-    if let Some(Prop::Dynamic(source)) = value {
-        *value = Some(transition_value(*source, transition).into());
+// Theme projections use the same transition policy as explicit fields, on demand.
+macro_rules! bind_property {
+    (width, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (height, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (min_width, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (min_height, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (max_width, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (max_height, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (flex_basis, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (flex_grow, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (flex_shrink, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (opacity, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (radius, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (font_size, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (line_height, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (line_height_multiplier, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (transform_list, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (transform_origin, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (letter_spacing, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (paragraph_spacing, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (column_gap, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (row_gap, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (aspect_ratio, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (background, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (color, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (margin_left, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (margin_right, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (margin_top, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (margin_bottom, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (padding_left, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (padding_right, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (padding_top, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (padding_bottom, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (border_left, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (border_right, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (border_top, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (border_bottom, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (inset_left, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (inset_right, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (inset_top, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (inset_bottom, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (matrix_transform, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected_matrix($value, $transition)
+    };
+    ($field:ident, $value:expr, $transition:expr) => {
+        $value
+    };
+}
+pub(crate) use bind_property;
+
+pub(crate) fn bind_projected<T: Interpolatable>(
+    value: Prop<T>,
+    transition: Option<Prop<Transition>>,
+) -> Prop<T> {
+    // Only the static variant proves that this binding can never animate.
+    // A dynamic curve currently equal to Instant can change on a later update.
+    if matches!(transition, Some(Prop::Static(Transition::Instant))) {
+        return value;
+    }
+    match (value, transition) {
+        (Prop::Dynamic(source), Some(transition)) => transition_value(source, transition).into(),
+        (value, _) => value,
+    }
+}
+pub(crate) fn bind_projected_matrix(
+    value: Prop<Matrix>,
+    transition: Option<Prop<Transition>>,
+) -> Prop<Matrix> {
+    // Bypass before either matrix conversion: the original signal is sufficient.
+    if matches!(transition, Some(Prop::Static(Transition::Instant))) {
+        return value;
+    }
+    match (value, transition) {
+        (Prop::Dynamic(source), Some(transition)) => {
+            let columns = source.map(|m| m.to_cols_array());
+            transition_value(columns, transition)
+                .map(|m| Matrix::from_cols_array(&m))
+                .into()
+        }
+        (value, _) => value,
     }
 }
 
@@ -397,56 +593,8 @@ pub(crate) fn bind_style(style: &mut Style) {
     #[cfg(test)]
     crate::runtime::record_transition_bind();
     let transition = style.take_transition();
-    macro_rules! bind_fields { ($($field:ident),*) => { $(bind(&mut style.$field, transition.clone());)* }; }
-    bind_fields!(
-        width,
-        height,
-        min_width,
-        min_height,
-        max_width,
-        max_height,
-        flex_basis,
-        flex_grow,
-        flex_shrink,
-        opacity,
-        radius,
-        font_size,
-        line_height,
-        line_height_multiplier,
-        transform_list,
-        transform_origin,
-        letter_spacing,
-        paragraph_spacing,
-        column_gap,
-        row_gap,
-        aspect_ratio,
-        background,
-        color,
-        margin_left,
-        margin_right,
-        margin_top,
-        margin_bottom,
-        padding_left,
-        padding_right,
-        padding_top,
-        padding_bottom,
-        border_left,
-        border_right,
-        border_top,
-        border_bottom,
-        inset_left,
-        inset_right,
-        inset_top,
-        inset_bottom
-    );
-    if let Some(Prop::Dynamic(source)) = &style.matrix_transform {
-        let columns = source.map(|m| m.to_cols_array());
-        style.matrix_transform = Some(
-            transition_value(columns, transition)
-                .map(|m| Matrix::from_cols_array(&m))
-                .into(),
-        );
-    }
+    style.bind_theme_transition(transition);
+    style.bind_explicit_transitions(transition);
 }
 
 #[cfg(test)]
@@ -455,14 +603,234 @@ mod ownership_tests {
     use mue_core::{runtime::resource_counts, scope::OwnedScope};
 
     #[test]
+    fn static_instant_returns_source_without_presentation_resources() {
+        let before = resource_counts();
+        let drivers = DRIVERS.with_borrow(Vec::len);
+        let owner = OwnedScope::new();
+        let source = owner.run(|| signal(4.0f32));
+        let matrix = owner.run(|| signal(Matrix::IDENTITY));
+        let baseline = resource_counts();
+        let (value, transform) = owner.run(|| {
+            (
+                bind_projected(
+                    Prop::Dynamic(*source),
+                    Some(Prop::Static(Transition::Instant)),
+                ),
+                bind_projected_matrix(
+                    Prop::Dynamic(*matrix),
+                    Some(Prop::Static(Transition::Instant)),
+                ),
+            )
+        });
+        assert!(matches!(value, Prop::Dynamic(_)));
+        assert!(matches!(transform, Prop::Dynamic(_)));
+        assert_eq!(resource_counts(), baseline);
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers);
+        source.set(7.);
+        let destination = Matrix::from_translation(crate::math::Vector::new(2., 3.));
+        matrix.set(destination);
+        assert_eq!(value.get(), 7.);
+        assert_eq!(transform.get(), destination);
+        drop(owner);
+        assert_eq!(resource_counts(), before);
+    }
+
+    #[test]
+    fn dynamic_curve_currently_instant_can_switch_to_animation() {
+        let before = resource_counts();
+        let external = OwnedScope::new();
+        let (source, curve) = external.run(|| (signal(1.0f32), signal(Transition::Instant)));
+        let owner = OwnedScope::new();
+        let value =
+            owner.run(|| bind_projected(Prop::Dynamic(*source), Some(Prop::Dynamic(*curve))));
+        let value = match value {
+            Prop::Dynamic(value) => value,
+            Prop::Static(_) => panic!("dynamic curve needs presentation binding"),
+        };
+        source.set(2.);
+        assert_eq!(value.get(), 2.);
+        curve.set(Transition::linear(1.));
+        source.set(4.);
+        assert_eq!(value.get(), 2.);
+        advance(0.5);
+        assert_eq!(value.get(), 3.);
+        advance(0.5);
+        assert_eq!(value.get(), 4.);
+        drop(owner);
+        assert!(value.is_disposed());
+        assert!(!source.is_disposed());
+        assert!(!curve.is_disposed());
+        drop(external);
+        assert_eq!(resource_counts(), before);
+    }
+
+    #[test]
+    fn frame_resources_are_lazy_reused_and_owned_by_the_binding_scope() {
+        let baseline = resource_counts();
+        let drivers = DRIVERS.with_borrow(Vec::len);
+        let external = OwnedScope::new();
+        let (source, curve) = external.run(|| (signal(1.0f32), signal(Transition::Instant)));
+        let owner = OwnedScope::new();
+        let before = resource_counts();
+        let value = owner.run(|| transition_value(*source, curve.into()));
+        assert_eq!(resource_counts().signals, before.signals + 1);
+        assert_eq!(resource_counts().effects, before.effects + 1);
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers);
+        source.set(2.);
+        assert_eq!(value.get(), 2.);
+        assert_eq!(resource_counts().signals, before.signals + 1);
+        let temporary = OwnedScope::new();
+        temporary.run(|| {
+            curve.set(Transition::linear(1.));
+            source.set(4.);
+        });
+        drop(temporary);
+        assert_eq!(resource_counts().signals, before.signals + 2);
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers + 1);
+        advance(0.5);
+        assert_eq!(value.get(), 3.);
+        curve.set(Transition::Instant);
+        source.set(5.);
+        assert_eq!(value.get(), 5.);
+        curve.set(Transition::linear(1.));
+        source.set(7.);
+        assert_eq!(resource_counts().signals, before.signals + 2);
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers + 1);
+        advance(1.);
+        assert_eq!(value.get(), 7.);
+        drop(owner);
+        assert!(value.is_disposed());
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers);
+        assert!(!source.is_disposed());
+        drop(external);
+        assert_eq!(resource_counts(), baseline);
+    }
+
+    #[test]
+    fn first_animation_obeys_batch_reads_before_frame_advance() {
+        let baseline = resource_counts();
+        for read_before_advance in [false, true] {
+            let owner = OwnedScope::new();
+            owner.run(|| {
+                let source = signal(0.0f32);
+                let value = transition_value(*source, Prop::Static(Transition::linear(1.)));
+                batch(|| {
+                    source.set(10.);
+                    if read_before_advance {
+                        assert_eq!(value.get(), 0.);
+                    }
+                    advance(0.5);
+                });
+                assert_eq!(value.get(), if read_before_advance { 5. } else { 0. });
+                advance(0.5);
+                assert_eq!(value.get(), if read_before_advance { 10. } else { 5. });
+            });
+            drop(owner);
+            assert_eq!(resource_counts(), baseline);
+        }
+    }
+
+    #[test]
+    fn interrupted_transition_retargets_from_presented_value_and_keeps_curve_snapshot() {
+        let before = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0.0f32);
+            let curve = signal(Transition::linear(1.));
+            let value = transition_value(*source, curve.into());
+            source.set(10.);
+            advance(0.5);
+            assert_eq!(value.get(), 5.);
+            source.set(20.);
+            advance(0.5);
+            assert_eq!(value.get(), 12.5);
+            // A curve-only change does not alter the current animation.
+            curve.set(Transition::Instant);
+            advance(0.25);
+            assert_eq!(value.get(), 16.25);
+            source.set(30.);
+            assert_eq!(value.get(), 30.);
+            advance(1.);
+            assert_eq!(value.get(), 30.);
+        });
+        drop(owner);
+        assert_eq!(resource_counts(), before);
+    }
+
+    #[test]
+    fn synchronous_reads_inside_batch_and_update_metadata_remain_current() {
+        let before = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0.0f32);
+            let curve = signal(Transition::Instant);
+            let value = transition_value(*source, curve.into());
+            let observed = Rc::new(RefCell::new(Vec::new()));
+            mue_core::effect::watch(value, {
+                let observed = observed.clone();
+                move |value| {
+                    observed.borrow_mut().push((
+                        value.get(),
+                        mue_core::update_context::UpdateContext::current()
+                            .get::<u32>()
+                            .copied(),
+                    ))
+                }
+            });
+            mue_core::update_context::with_update_context(42u32, || {
+                batch(|| {
+                    source.set(2.);
+                    assert_eq!(value.get(), 2.);
+                    source.set(3.);
+                    assert_eq!(value.get(), 3.);
+                });
+            });
+            assert_eq!(&*observed.borrow(), &[(3., Some(42))]);
+            source.set(4.);
+            assert_eq!(observed.borrow().last(), Some(&(4., None)));
+        });
+        drop(owner);
+        assert_eq!(resource_counts(), before);
+    }
+
+    #[test]
+    fn nan_destination_does_not_restart_on_every_animation_frame() {
+        let before = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0.0f32);
+            let value = transition_value(*source, Prop::Static(Transition::linear(1.)));
+            source.set(f32::NAN);
+            advance(0.5);
+            assert!(value.get().is_nan());
+            advance(0.5);
+            assert!(value.get().is_nan());
+            let notifications = Rc::new(std::cell::Cell::new(0));
+            mue_core::effect::watch(value, {
+                let notifications = notifications.clone();
+                move |_| notifications.set(notifications.get() + 1)
+            });
+            advance(0.5);
+            assert_eq!(notifications.get(), 0);
+        });
+        drop(owner);
+        assert_eq!(resource_counts(), before);
+    }
+
+    #[test]
     fn dropping_the_owner_removes_tween_registrations_without_another_frame() {
         let before = resource_counts();
         let drivers = DRIVERS.with_borrow(Vec::len);
         let owner = OwnedScope::new();
-        let value = owner.run(|| {
+        let (source, value) = owner.run(|| {
             let source = signal(1.0f32);
-            transition_value(*source, Prop::Static(Transition::Instant))
+            (
+                source,
+                transition_value(*source, Prop::Static(Transition::linear(1.))),
+            )
         });
+        assert_eq!(DRIVERS.with_borrow(Vec::len), drivers);
+        source.set(2.);
         assert_eq!(DRIVERS.with_borrow(Vec::len), drivers + 1);
         assert!(!value.is_disposed());
         drop(owner);

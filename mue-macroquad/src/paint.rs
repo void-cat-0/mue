@@ -113,7 +113,10 @@ fn combine_opacity(inherited: Option<Prop<f32>>, local: Prop<f32>) -> Prop<f32> 
 /// while publishing the effective alpha for both this node and its descendants.
 pub(crate) fn bind_node_style(style: &mut Style) {
     let inherited = inject::<PaintContext>().map(|context| context.opacity);
-    let opacity = combine_opacity(inherited, style.opacity.unwrap_or(Prop::Static(1.)));
+    let opacity = combine_opacity(
+        inherited,
+        style.declared_opacity().unwrap_or(Prop::Static(1.)),
+    );
     provide(PaintContext { opacity });
 }
 
@@ -175,9 +178,9 @@ pub fn use_paint(style: &mut Style) -> Paint {
         // Preserve direct use outside the node mount protocol.
         (
             style
-                .matrix_transform
+                .declared_matrix_transform()
                 .unwrap_or(Prop::Static(Matrix::IDENTITY)),
-            style.opacity.unwrap_or(Prop::Static(1.)),
+            style.declared_opacity().unwrap_or(Prop::Static(1.)),
         )
     };
     let tolerance = transform.map(|t| {

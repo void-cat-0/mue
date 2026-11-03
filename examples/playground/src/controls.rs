@@ -11,6 +11,24 @@ use std::rc::Rc;
 
 thread_local! {
     static DARK_THEME: Signal<bool> = Scope::null().run(|| signal(true));
+    static THEMED_BRUSHES: (ReadSignal<Brush>, ReadSignal<Brush>, ReadSignal<Brush>) =
+        Scope::null().run(|| DARK_THEME.with(|theme| (
+            theme.map(|dark| Brush::Solid(if dark {
+                Color::from_rgba(19, 23, 32, 255)
+            } else {
+                Color::from_rgba(242, 245, 250, 255)
+            })),
+            theme.map(|dark| Brush::Solid(if dark {
+                Color::from_rgba(33, 42, 57, 255)
+            } else {
+                Color::WHITE
+            })),
+            theme.map(|dark| Brush::Solid(if dark {
+                Color::from_rgba(240, 244, 250, 255)
+            } else {
+                Color::from_rgba(31, 41, 55, 255)
+            })),
+        )));
 }
 
 pub const BLUE: Color = Color::from_rgba(110, 160, 245, 255);
@@ -18,47 +36,23 @@ pub const CORAL: Color = Color::from_rgba(245, 165, 112, 255);
 pub const SPRING: Transition = Transition::spring(0.3, 0.1);
 
 pub fn dark_theme() -> ReadSignal<bool> {
-    DARK_THEME.with(|dark| dark.map(|value| value))
+    DARK_THEME.with(|dark| **dark)
 }
 
 pub fn toggle_theme() {
     DARK_THEME.with(|dark| dark.toggle());
 }
 
-fn themed_brush(dark: impl Fn(bool) -> Color + 'static) -> Prop<Brush> {
-    DARK_THEME
-        .with(|theme| theme.map(move |is_dark| Brush::Solid(dark(is_dark))))
-        .into()
-}
-
 pub fn background() -> Prop<Brush> {
-    themed_brush(|dark| {
-        if dark {
-            Color::from_rgba(19, 23, 32, 255)
-        } else {
-            Color::from_rgba(242, 245, 250, 255)
-        }
-    })
+    THEMED_BRUSHES.with(|brushes| brushes.0.into())
 }
 
 pub fn panel_brush() -> Prop<Brush> {
-    themed_brush(|dark| {
-        if dark {
-            Color::from_rgba(33, 42, 57, 255)
-        } else {
-            Color::from_rgba(255, 255, 255, 255)
-        }
-    })
+    THEMED_BRUSHES.with(|brushes| brushes.1.into())
 }
 
 pub fn foreground() -> Prop<Brush> {
-    themed_brush(|dark| {
-        if dark {
-            Color::from_rgba(240, 244, 250, 255)
-        } else {
-            Color::from_rgba(31, 41, 55, 255)
-        }
-    })
+    THEMED_BRUSHES.with(|brushes| brushes.2.into())
 }
 
 pub fn background_color() -> Color {
@@ -157,6 +151,55 @@ pub fn controls(nodes: Vec<Node>) -> Node {
         .children(nodes)
         .into_node()
 }
+
+#[cfg(test)]
+mod theme_brush_tests {
+    use super::*;
+    use mue_core::runtime::resource_counts;
+
+    #[test]
+    fn theme_brushes_share_three_reactive_projections() {
+        let _ = dark_theme();
+        let before = resource_counts();
+        let background_value = background();
+        let panel = panel_brush();
+        let foreground_value = foreground();
+        let initialized = resource_counts();
+        assert_eq!(initialized.signals - before.signals, 3);
+        assert_eq!(initialized.effects - before.effects, 3);
+        for _ in 0..4 {
+            let _ = background();
+            let _ = panel_brush();
+            let _ = foreground();
+        }
+        assert_eq!(resource_counts(), initialized);
+        assert_eq!(
+            background_value.get_clone(),
+            Brush::Solid(Color::from_rgba(19, 23, 32, 255))
+        );
+        assert_eq!(
+            panel.get_clone(),
+            Brush::Solid(Color::from_rgba(33, 42, 57, 255))
+        );
+        assert_eq!(
+            foreground_value.get_clone(),
+            Brush::Solid(Color::from_rgba(240, 244, 250, 255))
+        );
+        toggle_theme();
+        assert_eq!(
+            background_value.get_clone(),
+            Brush::Solid(Color::from_rgba(242, 245, 250, 255))
+        );
+        assert_eq!(panel.get_clone(), Brush::Solid(Color::WHITE));
+        assert_eq!(
+            foreground_value.get_clone(),
+            Brush::Solid(Color::from_rgba(31, 41, 55, 255))
+        );
+        toggle_theme();
+        assert_eq!(resource_counts(), initialized);
+    }
+}
+
 pub fn section(title: &str, content: impl IntoChildren) -> Node {
     stack()
         .style(mue_macroquad::style! {

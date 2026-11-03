@@ -12,6 +12,10 @@ use crate::{
     signal::{SignalId, SignalInner, Value},
 };
 
+#[cfg(test)]
+#[path = "runtime/check_bench.rs"]
+mod check_bench;
+
 thread_local! {
     static RUNTIME: Runtime = Runtime::new();
 }
@@ -98,6 +102,7 @@ impl Drop for EffectRun<'_> {
                     }
                 }
                 effect.dependencies = Dependencies::Dynamic(tracker.dependencies);
+                effect.dependency_revision = effect.dependency_revision.wrapping_add(1);
             }
         } else if let Some(tracker) = tracker {
             for signal_id in tracker.dependencies.iter().chain(&tracker.new_dependencies) {
@@ -171,7 +176,10 @@ impl Runtime {
     }
 
     pub fn on_update(&self, signal_id: SignalId) {
-        let mut subscribers = mem::take(&mut self.signal_mut(signal_id).subscribers);
+        let mut signal = self.signal_mut(signal_id);
+        signal.revision = signal.revision.wrapping_add(1);
+        let mut subscribers = mem::take(&mut signal.subscribers);
+        drop(signal);
         for effect_id in &subscribers {
             self.mark_stale(*effect_id, EffectState::Dirty);
         }
@@ -217,7 +225,11 @@ impl Runtime {
 
         let tracker = match &mut effect.dependencies {
             Dependencies::Static(_) => None,
-            Dependencies::Dynamic(deps) => Some(DependencyTracker::new(mem::take(deps))),
+            Dependencies::Dynamic(deps) => {
+                let tracker = DependencyTracker::new(mem::take(deps));
+                effect.dependency_revision = effect.dependency_revision.wrapping_add(1);
+                Some(tracker)
+            }
         };
         let prev_tracker = self.tracker.replace(tracker);
 
@@ -262,47 +274,62 @@ impl Runtime {
     }
 
     pub fn update_effect_if_necessary(&self, effect_id: EffectId) {
-        if effect_id.is_null() || !self.effects.borrow().contains_key(effect_id) {
+        #[cfg(test)]
+        if check_bench::use_snapshot() {
+            return self.update_effect_snapshot(effect_id);
+        }
+        if effect_id.is_null() {
             return;
         }
-
-        let mut effect = self.effect_mut(effect_id);
-        if effect.state == EffectState::Check {
-            let dependencies = effect.dependencies.to_vec();
-            drop(effect);
-
-            for dependency_signal_id in &*dependencies {
-                // Updating a parent can remove keyed children and their signals.
-                let effect = self
-                    .signals
-                    .borrow()
-                    .get(*dependency_signal_id)
-                    .and_then(|signal| signal.effect);
-                if let Some(parent_effect_id) = effect {
-                    self.update_effect_if_necessary(parent_effect_id);
+        let mut index = 0;
+        loop {
+            let (dependency, revision) = {
+                let effects = self.effects.borrow();
+                let Some(effect) = effects.get(effect_id) else {
+                    return;
+                };
+                match effect.state {
+                    EffectState::Clean => return,
+                    EffectState::Dirty => {
+                        drop(effects);
+                        self.update(effect_id);
+                        return;
+                    }
+                    EffectState::Check => {}
                 }
-
-                if self
-                    .effects
-                    .borrow()
-                    .get(effect_id)
-                    .is_some_and(|it| it.state == EffectState::Dirty)
+                (
+                    effect.dependencies.get(index).copied(),
+                    effect.dependency_revision,
+                )
+            };
+            let Some(dependency) = dependency else {
+                if let Some(effect) = self.effects.borrow_mut().get_mut(effect_id)
+                    && effect.state == EffectState::Check
                 {
-                    break;
+                    effect.state = EffectState::Clean;
                 }
-            }
-
-            if !self.effects.borrow().contains_key(effect_id) {
                 return;
+            };
+            // No arena borrow crosses recursive updates or user callbacks.
+            let parent = self
+                .signals
+                .borrow()
+                .get(dependency)
+                .and_then(|signal| signal.effect);
+            if let Some(parent) = parent {
+                self.update_effect_if_necessary(parent);
             }
-            effect = self.effect_mut(effect_id);
-        }
-
-        if effect.state == EffectState::Dirty {
-            drop(effect);
-            self.update(effect_id);
-        } else {
-            effect.state = EffectState::Clean;
+            let effects = self.effects.borrow();
+            let Some(effect) = effects.get(effect_id) else {
+                return;
+            };
+            // Disposal can remove dependencies before the current position;
+            // nested reruns can replace the entire list. Recheck the new list.
+            if effect.dependency_revision != revision {
+                index = 0;
+            } else {
+                index += 1;
+            }
         }
     }
 
@@ -390,7 +417,11 @@ impl Runtime {
             if let Some(effect) = self.effects.borrow_mut().get_mut(effect_id) {
                 // Remove signal from effect's dependencies
                 if let Dependencies::Dynamic(deps) = &mut effect.dependencies {
+                    let previous_len = deps.len();
                     deps.retain(|&mut id| id != signal_id);
+                    if deps.len() != previous_len {
+                        effect.dependency_revision = effect.dependency_revision.wrapping_add(1);
+                    }
                 }
             }
         }
@@ -479,6 +510,146 @@ mod tests {
             assert!(rt.current_effect.borrow().is_none());
             assert!(rt.tracker.borrow().is_none());
         });
+    }
+
+    #[test]
+    fn check_restarts_after_upstream_removes_multiple_earlier_dependencies() {
+        let baseline = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let first = signal(0);
+            let second = signal(0);
+            let source = signal(0);
+            let armed = Rc::new(Cell::new(false));
+            let parent = computed({
+                let armed = armed.clone();
+                move |_| {
+                    source.get();
+                    if armed.get() {
+                        first.dispose();
+                        second.dispose();
+                    }
+                    0
+                }
+            });
+            let tail_runs = Rc::new(Cell::new(0));
+            let tail = computed({
+                let runs = tail_runs.clone();
+                move |_| {
+                    source.get();
+                    runs.set(runs.get() + 1);
+                    0
+                }
+            });
+            let child_runs = Rc::new(Cell::new(0));
+            let child = computed({
+                let runs = child_runs.clone();
+                move |_| {
+                    runs.set(runs.get() + 1);
+                    if !first.is_disposed() {
+                        first.get();
+                    }
+                    if !second.is_disposed() {
+                        second.get();
+                    }
+                    parent.get() + tail.get()
+                }
+            });
+            armed.set(true);
+            batch(|| {
+                source.set(1);
+                // Pull in dependency order before the pending queue can pick a parent.
+                assert_eq!(child.get(), 0);
+                assert_eq!(tail_runs.get(), 2);
+                assert_eq!(child_runs.get(), 1);
+            });
+            assert!(first.is_disposed() && second.is_disposed());
+            Runtime::with(|rt| {
+                let id = rt.signal_mut(child.id).effect.unwrap();
+                assert_eq!(&*rt.effect_mut(id).dependencies, &[parent.id, tail.id]);
+            });
+        });
+        drop(owner);
+        assert_eq!(resource_counts(), baseline);
+    }
+
+    #[test]
+    fn check_returns_if_upstream_disposes_the_checking_effect() {
+        let baseline = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let target = Rc::new(Cell::new(None::<ReadSignal<i32>>));
+            let parent = computed({
+                let target = target.clone();
+                move |_| {
+                    source.get();
+                    if let Some(child) = target.get() {
+                        child.dispose();
+                    }
+                    0
+                }
+            });
+            let child = computed(move |_| parent.get());
+            target.set(Some(child));
+            batch(|| {
+                source.set(1);
+                Runtime::with(|rt| {
+                    let id = rt.signal_mut(child.id).effect.unwrap();
+                    rt.update_effect_if_necessary(id);
+                });
+                assert!(child.is_disposed());
+            });
+        });
+        drop(owner);
+        assert_eq!(resource_counts(), baseline);
+    }
+
+    #[test]
+    fn check_respects_nested_rerun_and_replaced_dependencies() {
+        let baseline = resource_counts();
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let replacement = signal(7);
+            let use_replacement = Rc::new(Cell::new(false));
+            let target = Rc::new(Cell::new(None::<EffectId>));
+            let parent = computed({
+                let target = target.clone();
+                let branch = use_replacement.clone();
+                move |_| {
+                    source.get();
+                    if let Some(id) = target.get() {
+                        branch.set(true);
+                        Runtime::with(|rt| rt.update(id));
+                    }
+                    0
+                }
+            });
+            let runs = Rc::new(Cell::new(0));
+            let child = computed({
+                let runs = runs.clone();
+                move |_| {
+                    runs.set(runs.get() + 1);
+                    if use_replacement.get() {
+                        replacement.get()
+                    } else {
+                        parent.get()
+                    }
+                }
+            });
+            Runtime::with(|rt| target.set(rt.signal_mut(child.id).effect));
+            batch(|| {
+                source.set(1);
+                assert_eq!(child.get(), 7);
+            });
+            assert_eq!(runs.get(), 2);
+            replacement.set(8);
+            assert_eq!(child.get(), 8);
+            assert_eq!(runs.get(), 3);
+        });
+        drop(owner);
+        assert_eq!(resource_counts(), baseline);
     }
 
     #[test]
