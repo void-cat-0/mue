@@ -141,13 +141,14 @@ impl Drop for OwnedScope {
 
 impl Default for Scope {
     fn default() -> Self {
-        Self::new()
+        Self::new_attached()
     }
 }
 
 impl Scope {
+    /// Create a scope owned by the current scope; drop the current scope to dispose it.
     #[track_caller]
-    pub fn new() -> Self {
+    pub fn new_attached() -> Self {
         let scope = Self::new_detached();
         current_scope().push_subscope(scope);
         scope
@@ -235,18 +236,13 @@ impl Scope {
         });
     }
 
-    /// Run with this current scope, restoring the previous scope on unwind.
+    /// Run with this current scope, restoring the previous scope afterwards.
     pub fn run<R>(self, f: impl FnOnce() -> R) -> R {
-        struct RestoreScope(Scope);
-        impl Drop for RestoreScope {
-            fn drop(&mut self) {
-                CURRENT_SCOPE.set(self.0);
-            }
-        }
-
         assert!(self.is_null() || self.is_alive(), "Scope has been disposed");
-        let _restore = RestoreScope(CURRENT_SCOPE.replace(self));
-        f()
+        let previous = CURRENT_SCOPE.replace(self);
+        let value = f();
+        CURRENT_SCOPE.set(previous);
+        value
     }
 
     pub fn provide<T: 'static>(&self, value: T) {
@@ -342,14 +338,6 @@ pub fn current_scope() -> Scope {
     CURRENT_SCOPE.with_borrow(|s| *s)
 }
 
-pub fn create_scope(f: impl FnOnce()) -> Scope {
-    let owner = OwnedScope {
-        scope: Scope::new(),
-    };
-    owner.run(f);
-    owner.into_scope()
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -378,7 +366,7 @@ mod test {
         parent.provide(7u32);
         let detached = parent.run(OwnedScope::new);
         let inherited = parent.run(OwnedScope::new_inherited);
-        let attached = parent.run(Scope::new);
+        let attached = parent.run(Scope::new_attached);
         assert_eq!(detached.inject::<u32>(), None);
         assert_eq!(inherited.inject::<u32>(), Some(7));
         assert_eq!(attached.inject::<u32>(), Some(7));
@@ -390,52 +378,6 @@ mod test {
         assert_eq!(value.get(), 1);
         drop(inherited);
         assert!(value.is_disposed());
-    }
-
-    #[test]
-    fn scope_and_context_restore_after_failed_build() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        let parent = OwnedScope::new();
-        parent.provide(3u32);
-        parent.run(|| {
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                let builder = OwnedScope::new_inherited();
-                builder.provide(9u32);
-                builder.run(|| {
-                    assert_eq!(inject::<u32>(), Some(9));
-                    panic!("failed build");
-                });
-            }));
-            assert!(result.is_err());
-            assert_eq!(current_scope().id, parent.scope().id);
-            assert_eq!(inject::<u32>(), Some(3));
-            let child = Scope::new();
-            assert_eq!(child.inject::<u32>(), Some(3));
-        });
-        assert!(current_scope().is_null());
-        assert!(!Scope::null().is_alive());
-    }
-
-    #[test]
-    fn failed_create_scope_cleans_up_unreturned_resources() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        let resource = Rc::new(());
-        let parent = OwnedScope::new();
-        parent.run(|| {
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                create_scope(|| {
-                    Signal::shallow(resource.clone());
-                    panic!("cannot return scope");
-                });
-            }));
-            assert!(result.is_err());
-            assert_eq!(Rc::strong_count(&resource), 1);
-            crate::runtime::Runtime::with(|rt| {
-                assert!(rt.scopes.borrow()[parent.scope().id].subscopes.is_empty());
-            });
-        });
     }
 
     #[test]
@@ -472,7 +414,8 @@ mod test {
         let runs = Rc::new(RefCell::new(0));
         let runs_clone = runs.clone();
 
-        let scope = create_scope(|| {
+        let scope = OwnedScope::new();
+        scope.run(|| {
             watch_effect(move || {
                 count.get();
                 *runs_clone.borrow_mut() += 1;
@@ -485,7 +428,7 @@ mod test {
             count.set(1);
             assert_eq!(*runs.borrow(), 2);
         });
-        scope.dispose();
+        drop(scope);
 
         // Update should not trigger effect anymore
         count.set(2);
@@ -501,13 +444,15 @@ mod test {
 
         let count = signal(0);
 
-        let scope_outer = create_scope(|| {
+        let scope_outer = OwnedScope::new();
+        scope_outer.run(|| {
             watch_effect(move || {
                 count.get();
                 *outer_clone.borrow_mut() += 1;
             });
 
-            let scope_inner = create_scope(|| {
+            let scope_inner = OwnedScope::new();
+            scope_inner.run(|| {
                 watch_effect(move || {
                     count.get();
                     *inner_clone.borrow_mut() += 1;
@@ -515,14 +460,14 @@ mod test {
             });
             // Inner effect runs
             assert_eq!(*inner_runs.borrow(), 1);
-            scope_inner.dispose();
+            drop(scope_inner);
 
             // Update triggers only outer effect
             count.set(1);
             assert_eq!(*outer_runs.borrow(), 2);
             assert_eq!(*inner_runs.borrow(), 1);
         });
-        scope_outer.dispose();
+        drop(scope_outer);
 
         count.set(2);
         // Neither effect should run
@@ -537,26 +482,28 @@ mod test {
 
         let count = signal(0);
 
-        let scope_outer = create_scope(|| {
+        let scope_outer = OwnedScope::new();
+        scope_outer.run(|| {
             watch_effect(move || {
                 count.get();
                 *runs_clone.borrow_mut() += 1;
             });
 
-            let scope_inner = create_scope({
-                let runs_clone = runs.clone();
-                || {
+            let scope_inner = OwnedScope::new();
+            scope_inner.run({
+                let runs = runs.clone();
+                move || {
                     watch_effect(move || {
                         count.get();
-                        *runs_clone.borrow_mut() += 1;
+                        *runs.borrow_mut() += 1;
                     });
                 }
             });
             // Both effects run
             assert_eq!(*runs.borrow(), 2);
-            scope_inner.dispose();
+            drop(scope_inner);
         });
-        scope_outer.dispose();
+        drop(scope_outer);
 
         count.set(1);
         // No effects should run

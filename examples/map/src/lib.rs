@@ -10,7 +10,7 @@ use mue_macroquad::{
     color::Color as UiColor,
     event::pointer::{PointerAction, PointerId},
     layout::use_layout,
-    node::NodePlan,
+    node::{BuildNode, Node, NodeContext},
     style::{Style, Styleable},
 };
 
@@ -180,156 +180,168 @@ fn apply_control(state: &mut MapState, control: Control) {
     }
 }
 
-fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(
-        Style::new().style(mue_macroquad::style! {
-        width: 100%;
-        height: 100%;
-        font-size: {responsive::root_font()};
-        }),
-        move |style| {
-            let rect = use_layout(style).rect;
-            let input = state.clone();
-            style.on_pointer_event.append(move |event| {
-                let mut state = input.borrow_mut();
-                let point = vec2(event.position().x, event.position().y);
-                if event.action() == PointerAction::Down
-                    && let Some((_, control, _)) =
-                        controls().into_iter().find(|(r, _, _)| r.contains(point))
-                {
-                    apply_control(&mut state, control);
-                    return;
-                }
-                let r = rect.get();
-                let center = vec2(r.x + r.w * 0.5, r.y + r.h * 0.5);
-                let index = state
-                    .contacts
-                    .iter()
-                    .position(|c| c.id == event.pointer_id());
-                match event.action() {
-                    PointerAction::Down if index.is_none() && state.contacts.len() < 2 => {
-                        state.velocity = Vec2::ZERO;
-                        state.last_move = event.time();
-                        state.contacts.push(Contact {
-                            id: event.pointer_id(),
-                            position: point,
-                        });
-                        state.transforming = state.contacts.len() == 2;
+struct MapBuilder {
+    texture: Texture2D,
+    state: Rc<RefCell<MapState>>,
+}
+
+fn map_node(texture: Texture2D, state: Rc<RefCell<MapState>>) -> MapBuilder {
+    MapBuilder { texture, state }
+}
+
+impl BuildNode for MapBuilder {
+    fn build(self, ctx: NodeContext) -> Node {
+        let Self { texture, state } = self;
+        ctx.finish(
+            Style::new().style(mue_macroquad::style! {
+            width: 100%;
+            height: 100%;
+            font-size: {responsive::root_font()};
+            }),
+            move |style| {
+                let rect = use_layout(style).rect;
+                let input = state.clone();
+                style.on_pointer_event.append(move |event| {
+                    let mut state = input.borrow_mut();
+                    let point = vec2(event.position().x, event.position().y);
+                    if event.action() == PointerAction::Down
+                        && let Some((_, control, _)) =
+                            controls().into_iter().find(|(r, _, _)| r.contains(point))
+                    {
+                        apply_control(&mut state, control);
+                        return;
                     }
-                    PointerAction::Move => {
-                        if let Some(index) = index {
-                            state.move_contact(index, point, center, event.time());
+                    let r = rect.get();
+                    let center = vec2(r.x + r.w * 0.5, r.y + r.h * 0.5);
+                    let index = state
+                        .contacts
+                        .iter()
+                        .position(|c| c.id == event.pointer_id());
+                    match event.action() {
+                        PointerAction::Down if index.is_none() && state.contacts.len() < 2 => {
+                            state.velocity = Vec2::ZERO;
+                            state.last_move = event.time();
+                            state.contacts.push(Contact {
+                                id: event.pointer_id(),
+                                position: point,
+                            });
+                            state.transforming = state.contacts.len() == 2;
                         }
-                    }
-                    PointerAction::Up | PointerAction::Cancel => {
-                        if let Some(index) = index {
-                            if event.action() == PointerAction::Up {
+                        PointerAction::Move => {
+                            if let Some(index) = index {
                                 state.move_contact(index, point, center, event.time());
                             }
-                            if event.action() == PointerAction::Cancel
-                                || state.transforming
-                                || event.time() - state.last_move > 0.1
-                            {
-                                state.velocity = Vec2::ZERO;
+                        }
+                        PointerAction::Up | PointerAction::Cancel => {
+                            if let Some(index) = index {
+                                if event.action() == PointerAction::Up {
+                                    state.move_contact(index, point, center, event.time());
+                                }
+                                if event.action() == PointerAction::Cancel
+                                    || state.transforming
+                                    || event.time() - state.last_move > 0.1
+                                {
+                                    state.velocity = Vec2::ZERO;
+                                }
+                                state.contacts.remove(index);
+                                state.transforming = false;
+                                state.last_move = event.time();
                             }
-                            state.contacts.remove(index);
-                            state.transforming = false;
-                            state.last_move = event.time();
+                        }
+                        _ => {}
+                    }
+                });
+                let wheel = state.clone();
+                style.on_wheel_event.append(move |event| {
+                    if controls()
+                        .iter()
+                        .any(|(r, _, _)| r.contains(vec2(event.position.x, event.position.y)))
+                    {
+                        return;
+                    }
+                    let r = rect.get();
+                    let anchor = vec2(
+                        event.position.x - r.x - r.w * 0.5,
+                        event.position.y - r.y - r.h * 0.5,
+                    );
+                    let mut state = wheel.borrow_mut();
+                    state.velocity = Vec2::ZERO;
+                    if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
+                        state.transform(anchor, anchor, 1., event.delta.y * 0.08);
+                    } else {
+                        state.transform(anchor, anchor, (event.delta.y * 0.12).exp(), 0.);
+                    }
+                });
+                style.on_render.append(move |_| {
+                    let mut state = state.borrow_mut();
+                    if state.contacts.is_empty() {
+                        let dt = get_frame_time().min(0.05);
+                        let decay = (-5. * dt).exp();
+                        let velocity = state.velocity;
+                        state.offset += velocity * ((1. - decay) / 5.);
+                        state.velocity *= decay;
+                        if state.velocity.length() < 5. {
+                            state.velocity = Vec2::ZERO;
                         }
                     }
-                    _ => {}
-                }
-            });
-            let wheel = state.clone();
-            style.on_wheel_event.append(move |event| {
-                if controls()
-                    .iter()
-                    .any(|(r, _, _)| r.contains(vec2(event.position.x, event.position.y)))
-                {
-                    return;
-                }
-                let r = rect.get();
-                let anchor = vec2(
-                    event.position.x - r.x - r.w * 0.5,
-                    event.position.y - r.y - r.h * 0.5,
-                );
-                let mut state = wheel.borrow_mut();
-                state.velocity = Vec2::ZERO;
-                if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
-                    state.transform(anchor, anchor, 1., event.delta.y * 0.08);
-                } else {
-                    state.transform(anchor, anchor, (event.delta.y * 0.12).exp(), 0.);
-                }
-            });
-            style.on_render.append(move |_| {
-                let mut state = state.borrow_mut();
-                if state.contacts.is_empty() {
-                    let dt = get_frame_time().min(0.05);
-                    let decay = (-5. * dt).exp();
-                    let velocity = state.velocity;
-                    state.offset += velocity * ((1. - decay) / 5.);
-                    state.velocity *= decay;
-                    if state.velocity.length() < 5. {
-                        state.velocity = Vec2::ZERO;
-                    }
-                }
-                let r = rect.get();
-                let center = vec2(r.x + r.w * 0.5, r.y + r.h * 0.5) + state.offset;
-                let screen = |world: Vec2| center + rotate(world, state.rotation) * state.scale;
-                let extent = HALF_GRID as f32 * CELL;
-                for i in -HALF_GRID..=HALF_GRID {
-                    let n = i as f32 * CELL;
-                    for (a, b) in [
-                        (vec2(n, -extent), vec2(n, extent)),
-                        (vec2(-extent, n), vec2(extent, n)),
-                    ] {
-                        let a = screen(a);
-                        let b = screen(b);
-                        draw_line(a.x, a.y, b.x, b.y, 1., HOVER.into());
-                    }
-                }
-                let aspect = texture.width() / texture.height();
-                let image_size = if aspect > 1. {
-                    vec2(116., 116. / aspect)
-                } else {
-                    vec2(116. * aspect, 116.)
-                } * state.scale;
-                for y in -HALF_GRID..HALF_GRID {
-                    for x in -HALF_GRID..HALF_GRID {
-                        let p = screen(vec2((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL));
-                        if p.x < -CELL * state.scale
-                            || p.x > r.w + CELL * state.scale
-                            || p.y < -CELL * state.scale
-                            || p.y > r.h + CELL * state.scale
-                        {
-                            continue;
+                    let r = rect.get();
+                    let center = vec2(r.x + r.w * 0.5, r.y + r.h * 0.5) + state.offset;
+                    let screen = |world: Vec2| center + rotate(world, state.rotation) * state.scale;
+                    let extent = HALF_GRID as f32 * CELL;
+                    for i in -HALF_GRID..=HALF_GRID {
+                        let n = i as f32 * CELL;
+                        for (a, b) in [
+                            (vec2(n, -extent), vec2(n, extent)),
+                            (vec2(-extent, n), vec2(extent, n)),
+                        ] {
+                            let a = screen(a);
+                            let b = screen(b);
+                            draw_line(a.x, a.y, b.x, b.y, 1., HOVER.into());
                         }
-                        draw_texture_ex(
-                            &texture,
-                            p.x - image_size.x * 0.5,
-                            p.y - image_size.y * 0.5,
-                            WHITE,
-                            DrawTextureParams {
-                                dest_size: Some(image_size),
-                                rotation: state.rotation,
-                                pivot: Some(p),
-                                ..Default::default()
-                            },
+                    }
+                    let aspect = texture.width() / texture.height();
+                    let image_size = if aspect > 1. {
+                        vec2(116., 116. / aspect)
+                    } else {
+                        vec2(116. * aspect, 116.)
+                    } * state.scale;
+                    for y in -HALF_GRID..HALF_GRID {
+                        for x in -HALF_GRID..HALF_GRID {
+                            let p = screen(vec2((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL));
+                            if p.x < -CELL * state.scale
+                                || p.x > r.w + CELL * state.scale
+                                || p.y < -CELL * state.scale
+                                || p.y > r.h + CELL * state.scale
+                            {
+                                continue;
+                            }
+                            draw_texture_ex(
+                                &texture,
+                                p.x - image_size.x * 0.5,
+                                p.y - image_size.y * 0.5,
+                                WHITE,
+                                DrawTextureParams {
+                                    dest_size: Some(image_size),
+                                    rotation: state.rotation,
+                                    pivot: Some(p),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                    for contact in &state.contacts {
+                        draw_circle_lines(
+                            contact.position.x,
+                            contact.position.y,
+                            22. * responsive::scale(),
+                            2. * responsive::scale(),
+                            HIGHLIGHT.into(),
                         );
                     }
-                }
-                for contact in &state.contacts {
-                    draw_circle_lines(
-                        contact.position.x,
-                        contact.position.y,
-                        22. * responsive::scale(),
-                        2. * responsive::scale(),
-                        HIGHLIGHT.into(),
-                    );
-                }
-            });
-        },
-    )
+                });
+            },
+        )
+    }
 }
 
 #[cfg(target_os = "android")]

@@ -1,7 +1,7 @@
 use super::{Gesture, GesturePhase};
 use crate::{
     event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId, PointerType},
-    hook::HookFn,
+    hook::CallbackList,
     math::Vector,
 };
 use std::f32::consts::{PI, TAU};
@@ -216,7 +216,7 @@ pub struct PinchGesture {
     threshold: f32,
     pointers: TwoPointers,
     previous: f32,
-    pub(crate) on_pinch: HookFn<PinchEvent>,
+    pub(crate) on_pinch: CallbackList<PinchEvent>,
 }
 
 impl Default for PinchGesture {
@@ -233,7 +233,7 @@ impl PinchGesture {
             threshold,
             pointers: TwoPointers::default(),
             previous: 1.0,
-            on_pinch: HookFn::default(),
+            on_pinch: CallbackList::default(),
         }
     }
 
@@ -271,7 +271,7 @@ pub struct RotateGesture {
     threshold: f32,
     pointers: TwoPointers,
     previous: f32,
-    pub(crate) on_rotate: HookFn<RotateEvent>,
+    pub(crate) on_rotate: CallbackList<RotateEvent>,
 }
 
 pub struct TransformGesture {
@@ -281,7 +281,7 @@ pub struct TransformGesture {
     previous_scale: f32,
     previous_rotation: f32,
     previous_translation: Vector,
-    pub(crate) on_transform: HookFn<TransformEvent>,
+    pub(crate) on_transform: CallbackList<TransformEvent>,
 }
 
 impl Default for TransformGesture {
@@ -293,7 +293,7 @@ impl Default for TransformGesture {
             previous_scale: 1.,
             previous_rotation: 0.,
             previous_translation: Vector::ZERO,
-            on_transform: HookFn::default(),
+            on_transform: CallbackList::default(),
         }
     }
 }
@@ -356,7 +356,7 @@ impl RotateGesture {
             threshold,
             pointers: TwoPointers::default(),
             previous: 0.0,
-            on_rotate: HookFn::default(),
+            on_rotate: CallbackList::default(),
         }
     }
 

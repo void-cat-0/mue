@@ -1,17 +1,16 @@
 use mue_core::signal::Access;
+use mue_macroquad::node::{Node, NodeContext};
 
 use mue_macroquad::{
     layout::{Layout, use_layout},
-    node::NodePlan,
     paint::use_paint,
     style::Style,
 };
 
 /// Fill an inscribed circle using the node's background brush.
 #[mue_macros::node]
-#[theme]
-pub fn circle() -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(Style::new(), move |style| {
+pub fn circle(ctx: NodeContext) -> Node {
+    ctx.finish(Style::new(), move |style| {
         let Layout { rect, .. } = use_layout(style);
         let paint = use_paint(style);
         let color = style

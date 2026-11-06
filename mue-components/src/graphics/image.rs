@@ -1,10 +1,10 @@
 use mue_core::{prelude::Access, prop::PropValue};
+use mue_macroquad::node::{Node, NodeContext};
 use taffy::{AvailableSpace, Size};
 
 use mue_macroquad::{
     layout::use_layout,
     math::{Rect, Vector, vec2},
-    node::NodePlan,
     paint::use_background,
     paint::use_paint,
     shader::SharedTexture,
@@ -27,14 +27,14 @@ impl PropValue for ObjectFit {}
 /// Display a texture with reactive sizing, cropping, fit, and foreground tint.
 /// Without an explicit size, the node uses the texture region's natural size.
 #[mue_macros::node]
-#[theme(object_fit)]
 pub fn image(
+    ctx: NodeContext,
     texture: SharedTexture,
     #[default] object_fit: ObjectFit,
     #[default(vec2(0.5, 0.5))] object_position: Vector,
     #[default] region: Option<Rect>,
-) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(Style::new(), move |style| {
+) -> Node {
+    ctx.finish(Style::new(), move |style| {
         let layout = use_layout(style);
         let rect = layout.rect;
         let paint = use_paint(style);

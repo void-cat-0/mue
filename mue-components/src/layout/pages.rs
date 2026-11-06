@@ -4,10 +4,9 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     layout::use_layout,
     math::Vector,
-    node::{self, IntoNode, Node, NodePlan, NodeRef, PrepareNode, PreparedNode, RootBuild},
+    node::{BuildNode, IntoNode, Node, NodeContext, NodeRef},
     paint::use_background,
     style::{Style, Styleable, StyleableExt},
-    theme::ThemeTarget,
     transition::{self, Driver, Transition as Curve},
 };
 use std::{cell::RefCell, rc::Rc};
@@ -28,12 +27,7 @@ pub struct PagesBuilder<I> {
     curve: Curve,
 }
 
-/// Theme selector alias for the concrete pages builder.
 pub type Pages<I> = PagesBuilder<I>;
-
-impl<I: 'static> ThemeTarget for PagesBuilder<I> {
-    type Options = ();
-}
 
 /// Display a fixed list of pages, retaining every page's state until disposal.
 /// Increasing the index slides left (up vertically); decreasing it reverses direction.
@@ -186,22 +180,12 @@ impl Driver for PresentationDriver {
     }
 }
 
-impl<I> IntoNode for PagesBuilder<I>
+impl<I> BuildNode for PagesBuilder<I>
 where
-    I: IntoIterator + 'static,
+    I: IntoIterator,
     I::Item: IntoNode + 'static,
 {
-    fn into_node(self) -> Node {
-        node::build(self)
-    }
-}
-
-impl<I> PrepareNode for PagesBuilder<I>
-where
-    I: IntoIterator + 'static,
-    I::Item: IntoNode + 'static,
-{
-    fn prepare(self, mut root: RootBuild) -> PreparedNode {
+    fn build(self, mut ctx: NodeContext) -> Node {
         let Self {
             selected,
             pages,
@@ -209,12 +193,9 @@ where
             transition,
             curve,
         } = self;
-        root.push_style(style);
-        if root.has_theme() {
-            root.push_target::<Self>(Rc::new(()));
-        }
+        ctx.push_style(style);
         let defaults = Style::new().size_full();
-        root.finish(NodePlan::new(defaults, move |style| {
+        ctx.finish(defaults, move |style| {
             let position = signal(0.);
             let size = signal(Vector::ZERO);
             let visible = signal(Rc::<[NodeRef]>::default());
@@ -277,11 +258,11 @@ where
                     return;
                 }
                 if let Some(page) = interactive.get_untracked() {
-                    mue_macroquad::event::hit_test::do_hit_test(page, pos, result);
+                    mue_macroquad::event::hit_test::hit_test_into(page, pos, result);
                 }
                 result.hit_self(node);
             }));
             use_background(style, layout.rect);
-        }))
+        })
     }
 }

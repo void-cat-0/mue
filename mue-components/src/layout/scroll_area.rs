@@ -12,10 +12,9 @@ use mue_macroquad::{
     gesture::Gesture,
     layout::use_layout,
     math::{Rect, Vector},
-    node::{self, IntoChildren, IntoNode, Node, NodePlan, PrepareNode, PreparedNode, RootBuild},
+    node::{BuildNode, IntoChildren, IntoNode, Node, NodeContext},
     paint::{use_background, use_paint},
     style::{Style, Styleable, StyleableExt},
-    theme::ThemeTarget,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -103,10 +102,6 @@ pub struct ScrollAreaBuilder {
 
 pub type ScrollArea = ScrollAreaBuilder;
 
-impl ThemeTarget for ScrollAreaBuilder {
-    type Options = ();
-}
-
 impl ScrollAreaBuilder {
     pub fn axis(mut self, axis: ScrollAxis) -> Self {
         self.options.axis = axis;
@@ -137,14 +132,8 @@ impl Styleable for ScrollAreaBuilder {
     }
 }
 
-impl IntoNode for ScrollAreaBuilder {
-    fn into_node(self) -> Node {
-        node::build(self)
-    }
-}
-
-impl PrepareNode for ScrollAreaBuilder {
-    fn prepare(self, mut root: RootBuild) -> PreparedNode {
+impl BuildNode for ScrollAreaBuilder {
+    fn build(self, mut ctx: NodeContext) -> Node {
         let Self {
             style,
             mut content_style,
@@ -155,17 +144,14 @@ impl PrepareNode for ScrollAreaBuilder {
         assert!(options.drag_threshold.is_finite() && options.drag_threshold >= 0.);
         assert!(options.friction.is_finite() && options.friction > 0.);
         assert!(options.max_velocity.is_finite() && options.max_velocity >= 0.);
-        root.push_style(style);
-        if root.has_theme() {
-            root.push_target::<Self>(Rc::new(()));
-        }
+        ctx.push_style(style);
         let defaults = Style::new()
             .flex_column()
             .min_width(0.)
             .min_height(0.)
             .overflow_x(Overflow::Scroll)
             .overflow_y(Overflow::Scroll);
-        root.finish(NodePlan::new(defaults, move |style| {
+        ctx.finish(defaults, move |style| {
             let offset = offset.unwrap_or_else(|| signal(Vector::ZERO));
             let clip_rect = signal(Rect::default());
             let state = Rc::new(RefCell::new(ScrollState {
@@ -285,7 +271,7 @@ impl PrepareNode for ScrollAreaBuilder {
                 }
             });
             let paint = use_paint(style);
-            mue_macroquad::node::after_children({
+            mue_macroquad::node::on_after_children({
                 let state = state.clone();
                 move |_| {
                     let state = state.borrow();
@@ -324,12 +310,12 @@ impl PrepareNode for ScrollAreaBuilder {
                 if !on_bar {
                     let children = node.children();
                     for child in children.get_clone().iter().rev() {
-                        mue_macroquad::event::hit_test::do_hit_test(*child, pos, result);
+                        mue_macroquad::event::hit_test::hit_test_into(*child, pos, result);
                     }
                 }
                 result.hit_self(node);
             }));
-        }))
+        })
     }
 }
 

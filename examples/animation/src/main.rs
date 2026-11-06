@@ -108,13 +108,10 @@ async fn run() {
                         min-height: {responsive::ui(44.)};
                         padding: {(responsive::ui(16.), responsive::ui(8.))};
                         background: {hovered.select(Brush::Solid(HIGHLIGHT), Brush::Solid(ACTIVE))};
-                        transition: {computed(move |_| {
-                                                if spring.get() {
-                                                    Transition::spring(0.8, 0.35)
-                                                } else {
-                                                    Transition::ease_in_out(0.65)
-                                                }
-                                            })};
+                        transition: {spring.select(
+                            Transition::spring(0.8, 0.35),
+                            Transition::ease_in_out(0.65),
+                        )};
                         })
                     })
                     .on_activate(move || expanded.toggle())

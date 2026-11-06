@@ -1,3 +1,4 @@
+use super::{Node, NodeContext};
 use mue_core::prelude::Access;
 
 use crate::{
@@ -10,9 +11,8 @@ use std::rc::Rc;
 
 /// Draw prebuilt shapes in local coordinates within a node's layout and lifetime.
 #[mue_macros::node]
-#[theme]
-pub fn shape(shapes: Rc<Shapes>) -> super::NodePlan<impl FnOnce(&mut Style)> {
-    super::NodePlan::new(Style::new(), move |style| {
+pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
+    ctx.finish(Style::new(), move |style| {
         let rect = use_layout(style).rect;
         let paint = use_paint(style);
         style.on_render.append(move |_| {

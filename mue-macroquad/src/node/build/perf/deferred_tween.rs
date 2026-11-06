@@ -5,8 +5,14 @@ const WARMUP: usize = 32;
 const SAMPLES: usize = 1000;
 fn build(eager: bool, counters: Rc<Counters>) -> Node {
     let f = || {
-        AppBuildContext::with_theme(Theme::default().into(), || {
-            baseline_leaf(counters).into_node()
+        let ctx = NodeContext::new();
+        let scope = ctx.scope();
+        scope.run(|| {
+            let source = signal(crate::style::Size::Px(120.));
+            baseline_leaf(counters)
+                .width(source)
+                .transition(signal(transition::Transition::Instant))
+                .build(ctx)
         })
     };
     if eager {

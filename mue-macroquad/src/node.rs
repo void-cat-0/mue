@@ -1,6 +1,6 @@
-mod build;
+pub(crate) mod build;
 pub(crate) use build::HoverOwner;
-pub use build::{AppBuildContext, NodePlan, PrepareNode, PreparedNode, RootBuild, build};
+pub use build::{BuildNode, NodeContext};
 pub mod atlas;
 pub mod children;
 pub mod flexbox;
@@ -317,70 +317,44 @@ impl Node {
     pub fn retain_scope(&self, scope: Scope) {
         Runtime::with(|rt| rt.nodes.borrow_mut()[self.id].retained_scopes.push(scope));
     }
-    /// Build a custom node within its own reactive scope.
-    pub fn build(f: impl FnOnce()) -> Self {
-        Self::build_with_style(Style::default(), |_style| f())
+    /// Create a leaf node without styles.
+    pub fn empty() -> Self {
+        Self::leaf(Style::new(), |_| {})
     }
 
     pub fn retain_owned_scope(&self, scope: OwnedScope) {
         Runtime::with(|rt| rt.nodes.borrow_mut()[self.id].owned_scopes.push(scope));
     }
 
-    /// Build a custom node. Its style is sealed before consumers execute.
-    pub fn build_with_style(style: Style, f: impl FnOnce(&mut Style)) -> Self {
-        let mut root = RootBuild::new();
-        root.push_style(style);
-        // This convenience entry has no declaration target or prepare defaults.
-        let owner = root.into_untyped();
-        Self::mount_parts(owner.0, owner.1, owner.2, owner.3, f)
+    /// Create a leaf node with the given styles, configuring it in `body`.
+    pub fn leaf(style: Style, body: impl FnOnce(&mut Style)) -> Self {
+        let mut context = NodeContext::new();
+        context.push_style(style);
+        context.finish(Style::new(), body)
     }
 
-    pub(super) fn mount_prepared(prepared: PreparedNode) -> Self {
-        let PreparedNode {
-            owner,
-            environment,
-            style,
-            hover_owners,
-            mount,
-        } = prepared;
-        Self::mount_parts(owner, environment, style, hover_owners, mount)
-    }
-
-    fn mount_parts(
-        owner: OwnedScope,
-        environment: AppBuildContext,
-        mut style: Style,
-        hover_owners: Vec<Rc<HoverOwner>>,
-        f: impl FnOnce(&mut Style),
-    ) -> Self {
-        struct MountGuard {
-            depth: usize,
-            armed: bool,
-        }
-        impl Drop for MountGuard {
-            fn drop(&mut self) {
-                if self.armed {
-                    loop {
-                        let node = CONTEXT.with_borrow_mut(|stack| {
-                            if stack.len() > self.depth {
-                                stack.pop()
-                            } else {
-                                None
-                            }
-                        });
-                        match node {
-                            Some(node) => dispose_inner(*node),
-                            None => break,
-                        }
-                    }
-                }
-            }
-        }
+    fn finish_parts(owner: OwnedScope, mut style: Style, body: impl FnOnce(&mut Style)) -> Node {
+        // A panic inside `body` unwinds out of the application: the runtime does not
+        // attempt to recover, so the node stays on the CONTEXT stack and is not disposed.
         let scope = owner.scope();
-        environment.run(|| {
-            scope.run(|| {
-                let children = ().into_children();
-                let mut node = NodeInner::new(scope, children);
+        scope.run(|| {
+            let children = ().into_children();
+            let mut node = NodeInner::new(scope, children);
+            node.owned_scopes.push(owner);
+            CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
+            crate::transition::bind_style(&mut style);
+            crate::paint::bind_node_style(&mut style);
+            let font_size = style.declared_font_size();
+            let matrix = style.take_matrix_transform();
+            let transforms = style.take_transform_list();
+            let origin = style.take_transform_origin();
+            let hover_owners = std::mem::take(&mut style.hover_owners);
+            NodeInner::with_mut(|node| {
+                node.computed_font_size = signal(FontSize::DEFAULT_PX);
+                node.font_size = font_size;
+                node.matrix_transform = matrix;
+                node.transform_list = transforms;
+                node.transform_origin = origin;
                 node.hovered = hover_owners.first().map(|owner| owner.signal);
                 node.hovered_aliases = hover_owners
                     .iter()
@@ -388,46 +362,26 @@ impl Node {
                     .map(|owner| owner.signal)
                     .collect();
                 node.hover_owners = hover_owners;
-                node.owned_scopes.push(owner);
-                let depth = CONTEXT.with_borrow(|stack| stack.len());
-                CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
-                let mut guard = MountGuard { depth, armed: true };
-                crate::transition::bind_style(&mut style);
-                crate::paint::bind_node_style(&mut style);
-                // Lazy projection initialization can run user computations; do it
-                // before borrowing the node build stack.
-                let declared_font_size = style.declared_font_size();
-                let matrix_transform = style.take_matrix_transform();
-                let transform_list = style.take_transform_list();
-                let transform_origin = style.take_transform_origin();
-                NodeInner::with_mut(|node| {
-                    node.computed_font_size = signal(FontSize::DEFAULT_PX);
-                    node.font_size = declared_font_size;
-                    node.matrix_transform = matrix_transform;
-                    node.transform_list = transform_list;
-                    node.transform_origin = transform_origin;
-                });
-                // Parent bindings exist before every independent child is materialized.
-                if let Some(children) = style.children.take() {
-                    let children = children.mount();
-                    NodeInner::with_mut(|node| node.children = children);
-                }
-                f(&mut style);
-                NodeInner::with_mut(|node| {
-                    let after_children = std::mem::take(&mut node.hooks.after_children);
-                    node.hooks = style.build_hooks();
-                    node.hooks.after_children = after_children;
-                    append_hooks(node, &mut style);
-                });
-                // Acquire the arena before removing the guarded node from its stack.
-                let id = Runtime::with(|rt| {
-                    let mut nodes = rt.nodes.borrow_mut();
-                    let node = CONTEXT.with_borrow_mut(|stack| stack.pop().unwrap());
-                    nodes.insert(*node)
-                });
-                guard.armed = false;
-                Self(NodeRef { id }.owned())
-            })
+            });
+            if let Some(plan) = style.take_children_plan() {
+                let children = plan.into_children();
+                NodeInner::with_mut(|node| node.children = children);
+            }
+            body(&mut style);
+            NodeInner::with_mut(|node| {
+                let after_children = std::mem::take(&mut node.hooks.after_children);
+                node.hooks = style.build_hooks();
+                node.hooks.after_children = after_children;
+                append_hooks(node, &mut style);
+            });
+            // Acquire arena access before removing the node from its stack.
+            let id = Runtime::with(|rt| {
+                let mut nodes = rt.nodes.borrow_mut();
+                let node = CONTEXT
+                    .with_borrow_mut(|stack| stack.pop().expect("node being finished is missing"));
+                nodes.insert(*node)
+            });
+            Self(NodeRef { id }.owned())
         })
     }
 }
@@ -490,6 +444,10 @@ impl Deref for Node {
     }
 }
 
+/// Anything that produces one real node.
+///
+/// Implemented for [`Node`] itself and, through a blanket impl, for every
+/// [`BuildNode`].
 pub trait IntoNode {
     fn into_node(self) -> Node;
 
@@ -501,14 +459,17 @@ pub trait IntoNode {
     }
 }
 
+// A prebuilt node owns the context it was built in, so it keeps its own honest
+// identity impl. `Node` deliberately does not implement `BuildNode`: the
+// blanket impl would then conflict with this one.
 impl IntoNode for Node {
     fn into_node(self) -> Node {
         self
     }
 }
 
-pub trait Component: IntoNode + PrepareNode + Styleable + StyleableExt {}
-impl<T: IntoNode + PrepareNode + Styleable + StyleableExt> Component for T {}
+pub trait Component: BuildNode + Styleable + StyleableExt {}
+impl<T: BuildNode + Styleable + StyleableExt> Component for T {}
 
 /// Take the current node's children so a component can wrap or reorder them.
 pub fn take_children() -> Owned<Children> {
@@ -542,7 +503,7 @@ pub fn set_layout_sync(sync: impl Fn(Vector) -> bool + 'static) {
     NodeInner::with_mut(|node| node.layout_sync = Some(Rc::new(sync)));
 }
 
-pub fn after_children(hook: impl FnMut(&()) + 'static) {
+pub fn on_after_children(hook: impl FnMut(&()) + 'static) {
     NodeInner::with_mut(|node| node.hooks.after_children.append(hook));
 }
 

@@ -1,8 +1,8 @@
 use super::{document::Document, text::render_text};
 use mue_core::signal::Access;
+use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
     math::Rect,
-    node::NodePlan,
     paint::use_paint,
     style::{Style, Styleable},
 };
@@ -10,14 +10,13 @@ use std::rc::Rc;
 
 /// An italic quotation with an inset rule using the foreground brush.
 #[mue_macros::node]
-#[theme]
-pub fn blockquote(text: Rc<str>) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(
+pub fn blockquote(ctx: NodeContext, text: Rc<str>) -> Node {
+    ctx.finish(
         Style::new().font_italic(true).padding_left(18.),
         move |style| {
             let color = style
                 .declared_color()
-                .or_else(mue_macroquad::theme::inherited_foreground)
+                .or_else(mue_macroquad::inherit::inherited_foreground)
                 .unwrap_or_else(|| mue_macroquad::color::Color::WHITE.into());
             let paint = use_paint(style);
             render_text(style, text.map(|text| Document::plain(text.to_string())));

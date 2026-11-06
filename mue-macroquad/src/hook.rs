@@ -2,17 +2,22 @@ use crate::event::{pointer::PointerEvent, wheel::WheelEvent};
 
 type CallbackFunction<T> = Option<Box<dyn FnMut(&T) + 'static>>;
 
-pub struct HookFn<T> {
+/// A growable chain of callbacks invoked in registration order.
+///
+/// The chained callbacks are stored as one boxed closure rather than a vector, so
+/// `append` / `extend` compose instead of pushing: appending to a non-empty list
+/// re-wraps the existing callback.
+pub struct CallbackList<T> {
     callback: CallbackFunction<T>,
 }
 
-impl<T> Default for HookFn<T> {
+impl<T> Default for CallbackList<T> {
     fn default() -> Self {
         Self { callback: None }
     }
 }
 
-impl<T: 'static> HookFn<T> {
+impl<T: 'static> CallbackList<T> {
     pub fn is_empty(&self) -> bool {
         self.callback.is_none()
     }
@@ -46,9 +51,9 @@ impl<T: 'static> HookFn<T> {
 
 #[derive(Default)]
 pub(crate) struct NodeHooks {
-    pub render: HookFn<()>,
-    pub after_children: HookFn<()>,
-    pub pointer_event: HookFn<PointerEvent>,
-    pub hover_event: HookFn<PointerEvent>,
-    pub wheel_event: HookFn<WheelEvent>,
+    pub render: CallbackList<()>,
+    pub after_children: CallbackList<()>,
+    pub pointer_event: CallbackList<PointerEvent>,
+    pub hover_event: CallbackList<PointerEvent>,
+    pub wheel_event: CallbackList<WheelEvent>,
 }

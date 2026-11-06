@@ -57,7 +57,7 @@ fn transition_declarations_accept_ease_strength_and_spring_bounce() {
 
 #[test]
 fn expressions_remain_reactive_and_shorthands_evaluate_once() {
-    let scope = Scope::new();
+    let scope = Scope::new_attached();
     scope.run(|| {
         let width = signal(24f32);
         let calls = std::cell::Cell::new(0);

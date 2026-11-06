@@ -1,23 +1,24 @@
-use std::{
-    cell::{Cell, RefCell},
-    panic::{AssertUnwindSafe, catch_unwind},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
-use mue_core::{prop::PropValue, scope::current_scope, signal::ReadSignal};
+use mue_core::{
+    prop::{Prop, PropValue},
+    scope::{OwnedScope, current_scope},
+    signal::{Access, ReadSignal, signal},
+};
 
 use super::*;
 use crate::{
-    node::Component,
+    layout::use_layout,
+    node::{Component, IntoNode, map_keyed},
     runtime::Runtime,
     style::{Size, Styleable, StyleableExt},
-    theme::{Rule, Selector, Specificity},
 };
 
 #[derive(Default)]
 struct Trace {
-    prepares: usize,
-    mounts: usize,
+    builds: usize,
+    inits: usize,
+    components: usize,
     width: Option<Prop<Size>>,
     height: Option<Prop<Size>>,
     resources: Vec<ReadSignal<i32>>,
@@ -25,8 +26,6 @@ struct Trace {
     aliases: Vec<ReadSignal<bool>>,
     defaults: usize,
     clones: usize,
-    panic_prepare: bool,
-    panic_mount: bool,
 }
 
 thread_local! {
@@ -46,54 +45,40 @@ fn dimensions() -> (Size, Size) {
 }
 
 #[mue_macros::node]
-#[theme]
-fn probe_leaf() -> NodePlan<impl FnOnce(&mut Style)> {
+fn probe_leaf(ctx: NodeContext) -> Node {
     TRACE.with_borrow_mut(|trace| {
-        trace.prepares += 1;
+        trace.builds += 1;
         trace.resources.push(*signal(1));
-        assert!(!trace.panic_prepare, "probe prepare panic");
     });
-    NodePlan::new(Style::new().width(10.).height(20.), move |style| {
+    ctx.finish(Style::new().width(10.).height(20.), move |style| {
         TRACE.with_borrow_mut(|trace| {
-            trace.mounts += 1;
+            trace.inits += 1;
             trace.width = Some(style.take_width());
             trace.height = Some(style.take_height());
             trace.resources.push(*signal(2));
-            assert!(!trace.panic_mount, "probe mount panic");
         });
     })
 }
 
 #[mue_macros::component]
-#[theme]
 fn probe_outer() -> impl Component {
+    TRACE.with_borrow_mut(|trace| {
+        trace.components += 1;
+        trace.resources.push(*signal(3));
+    });
     probe_leaf().width(30.)
 }
 
-fn rule(width: f32) -> Theme {
-    Theme::new(vec![Rule::new(
-        vec![Selector::new(Specificity(0, 0, 1), |target| {
-            target.is::<ProbeLeaf>()
-        })],
-        move || Style::new().width(width),
-    )])
-}
-
 #[test]
-fn explicit_layers_precede_theme_then_prepare_fallback() {
+fn outer_explicit_styles_precede_inner_styles_and_node_defaults() {
     reset();
-    let outer =
-        AppBuildContext::with_theme(rule(40.).into(), || probe_outer().width(50.).into_node());
+    let outer = probe_outer().width(50.).into_node();
     assert_eq!(dimensions(), (Size::Px(50.), Size::Px(20.)));
     drop(outer);
     reset();
-    let inner = AppBuildContext::with_theme(rule(40.).into(), || probe_outer().into_node());
+    let inner = probe_outer().into_node();
     assert_eq!(dimensions(), (Size::Px(30.), Size::Px(20.)));
     drop(inner);
-    reset();
-    let themed = AppBuildContext::with_theme(rule(40.).into(), || probe_leaf().into_node());
-    assert_eq!(dimensions(), (Size::Px(40.), Size::Px(20.)));
-    drop(themed);
     reset();
     let fallback = probe_leaf().into_node();
     assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
@@ -101,150 +86,51 @@ fn explicit_layers_precede_theme_then_prepare_fallback() {
 }
 
 #[test]
-fn dynamic_theme_adds_and_removes_properties_without_rebuilding() {
+fn configuration_is_lazy_and_into_node_builds_and_initializes_once_synchronously() {
     reset();
-    let source_owner = OwnedScope::new();
-    let theme = source_owner.run(|| signal(Theme::default()));
-    let node = AppBuildContext::with_theme(theme.into(), || probe_leaf().into_node());
-    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
-    theme.set(rule(42.));
-    assert_eq!(dimensions(), (Size::Px(42.), Size::Px(20.)));
-    theme.set(Theme::new(vec![Rule::new(
-        vec![Selector::new(Specificity(0, 0, 1), |target| {
-            target.is::<ProbeLeaf>()
-        })],
-        || Style::new().height(88.),
-    )]));
-    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(88.)));
-    theme.set(Theme::default());
-    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
+    let builder = probe_outer().width(50.).height(60.);
     TRACE.with_borrow(|trace| {
-        assert_eq!(trace.prepares, 1);
-        assert_eq!(trace.mounts, 1);
+        assert_eq!((trace.components, trace.builds, trace.inits), (0, 0, 0));
+        assert!(trace.resources.is_empty());
+        assert!(trace.width.is_none());
     });
-    drop(node);
-    assert!(!theme.is_disposed());
-}
-
-#[test]
-fn empty_resolver_updates_skip_projections_but_keep_future_matches_and_generations() {
-    reset();
-    let baseline = mue_core::runtime::resource_counts();
-    let owner = OwnedScope::new();
-    let source = owner.run(|| Signal::shallow(Theme::default()));
-    let derived = Rc::new(RefCell::new(Vec::new()));
-    let empty_rule = {
-        let derived = derived.clone();
-        Theme::new(vec![Rule::new(
-            vec![Selector::new(Specificity(0, 0, 1), |_| true)],
-            move || {
-                derived.borrow_mut().push(*signal(42));
-                Style::new()
-            },
-        )])
-    };
-    let node = AppBuildContext::with_theme(source.into(), || probe_leaf().into_node());
-    let initial = crate::runtime::theme_stats();
-    source.set(empty_rule.clone());
-    source.set(empty_rule);
-    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
-    let unchanged = crate::runtime::theme_stats();
-    assert_eq!(unchanged.resolver_runs, initial.resolver_runs + 2);
-    assert_eq!(unchanged.projection_runs, initial.projection_runs);
-    assert!(derived.borrow()[0].is_disposed());
-    assert!(!derived.borrow()[1].is_disposed());
-    source.set(rule(47.));
-    assert_eq!(dimensions().0, Size::Px(47.));
-    assert!(derived.borrow()[1].is_disposed());
-    source.set(Theme::default());
-    assert_eq!(dimensions().0, Size::Px(10.));
-    let removed = crate::runtime::theme_stats();
-    source.set(Theme::default());
-    assert_eq!(
-        crate::runtime::theme_stats().projection_runs,
-        removed.projection_runs
-    );
+    let node = builder.into_node();
+    assert_eq!(dimensions(), (Size::Px(50.), Size::Px(60.)));
     TRACE.with_borrow(|trace| {
-        assert_eq!(trace.prepares, 1);
-        assert_eq!(trace.mounts, 1);
+        assert_eq!((trace.components, trace.builds, trace.inits), (1, 1, 1));
+        assert_eq!(trace.resources.len(), 3);
+        assert!(trace.resources.iter().all(|value| !value.is_disposed()));
     });
     drop(node);
-    drop(owner);
-    assert_eq!(mue_core::runtime::resource_counts(), baseline);
+    TRACE.with_borrow(|trace| {
+        assert!(trace.resources.iter().all(|value| value.is_disposed()));
+    });
 }
 
 #[test]
-fn one_rule_matched_by_multiple_targets_runs_once_and_uses_matched_specificity() {
-    reset();
-    let runs = Rc::new(Cell::new(0));
-    let capture = runs.clone();
-    let theme = Theme::new(vec![
-        Rule::new(
-            vec![
-                Selector::new(Specificity(0, 0, 1), |target| {
-                    target.is::<ProbeLeaf>() || target.is::<ProbeOuter>()
-                }),
-                Selector::new(Specificity(0, 50, 1), |_| false),
-            ],
-            move || {
-                capture.set(capture.get() + 1);
-                Style::new().height(31.)
-            },
-        ),
-        Rule::new(
-            vec![Selector::new(Specificity(0, 1, 1), |target| {
-                target.is::<ProbeLeaf>()
-            })],
-            || Style::new().height(41.),
-        ),
-    ]);
-    let node = AppBuildContext::with_theme(theme.into(), || probe_outer().into_node());
-    assert_eq!(runs.get(), 1);
-    assert_eq!(dimensions().1, Size::Px(41.));
-    drop(node);
-}
-
-#[test]
-fn comma_selectors_use_only_the_highest_actually_matching_branch() {
-    use crate::theme::Themeable;
-
-    reset();
-    let theme = mue_macros::theme! {
-        ProbeLeaf, ProbeOuter.never {
-            height: 31px;
-        }
-        ProbeLeaf.selected {
-            height: 41px;
-        }
-    };
-    let node = AppBuildContext::with_theme(theme.into(), || {
-        probe_leaf()
-            .classes(std::collections::HashSet::from([mue_macros::class!(
-                "selected"
-            )]))
-            .into_node()
+fn node_build_mount_borrows_local_data_and_retains_only_its_own_resources() {
+    let parent = OwnedScope::new();
+    parent.provide(17u32);
+    let external = parent.run(|| signal(99));
+    let ctx = parent.run(NodeContext::new);
+    let body_resource = ctx.scope().run(|| signal(1));
+    let label = String::from("local init");
+    let mut calls = 0;
+    let mut init_resource = None;
+    let node = ctx.finish(Style::new(), |_| {
+        calls += 1;
+        assert_eq!(label.as_str(), "local init");
+        assert_eq!(current_scope().inject::<u32>(), Some(17));
+        init_resource = Some(signal(2));
     });
-    assert_eq!(dimensions().1, Size::Px(41.));
+    assert_eq!(calls, 1);
+    assert_eq!(body_resource.get(), 1);
+    let init_resource = init_resource.unwrap();
+    assert_eq!(init_resource.get(), 2);
     drop(node);
-
-    reset();
-    let theme = mue_macros::theme! {
-        ProbeLeaf, ProbeLeaf.selected {
-            height: 51px;
-        }
-        ProbeLeaf {
-            height: 61px;
-        }
-    };
-    let node = AppBuildContext::with_theme(theme.into(), || {
-        probe_leaf()
-            .classes(std::collections::HashSet::from([mue_macros::class!(
-                "selected"
-            )]))
-            .into_node()
-    });
-    assert_eq!(dimensions().1, Size::Px(51.));
-    drop(node);
+    assert!(body_resource.is_disposed());
+    assert!(init_resource.is_disposed());
+    assert_eq!(external.get(), 99);
 }
 
 #[derive(PartialEq)]
@@ -262,45 +148,30 @@ fn default_probe() -> CloneProbe {
 }
 
 #[mue_macros::node]
-#[theme(option)]
-fn option_leaf(
-    #[default(default_probe())] option: CloneProbe,
-) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(Style::new().width(10.), move |style| {
+fn option_leaf(ctx: NodeContext, #[default(default_probe())] option: CloneProbe) -> Node {
+    ctx.finish(Style::new().width(10.), move |style| {
         let _ = &option;
         TRACE.with_borrow_mut(|trace| trace.width = Some(style.take_width()));
     })
 }
 
 #[test]
-fn defaults_are_evaluated_once_and_no_theme_does_not_clone_options() {
+fn defaults_are_lazy_evaluated_once_and_skipped_for_explicit_options_without_cloning() {
     reset();
-    let node = option_leaf().into_node();
-    TRACE.with_borrow(|trace| {
-        assert_eq!(trace.defaults, 1);
-        assert_eq!(trace.clones, 0);
-    });
+    let builder = option_leaf();
+    TRACE.with_borrow(|trace| assert_eq!((trace.defaults, trace.clones), (0, 0)));
+    let node = builder.into_node();
+    TRACE.with_borrow(|trace| assert_eq!((trace.defaults, trace.clones), (1, 0)));
     drop(node);
     reset();
-    let theme = Theme::new(vec![Rule::new(
-        vec![Selector::new(Specificity(0, 0, 1), |target| {
-            target
-                .options::<OptionLeaf>()
-                .is_some_and(|options| options.option().0 == 7)
-        })],
-        || Style::new().width(71.),
-    )]);
-    let node = AppBuildContext::with_theme(theme.into(), || option_leaf().into_node());
-    TRACE.with_borrow(|trace| {
-        assert_eq!(trace.defaults, 1);
-        assert_eq!(trace.clones, 2);
-        assert_eq!(trace.width.as_ref().unwrap().get(), Size::Px(71.));
-    });
+    let node = option_leaf()
+        .option(Prop::Static(CloneProbe(11)))
+        .into_node();
+    TRACE.with_borrow(|trace| assert_eq!((trace.defaults, trace.clones), (0, 0)));
     drop(node);
 }
 
 #[mue_macros::component]
-#[theme]
 fn hover_outer() -> impl Component {
     probe_leaf().with_hovered(|builder, hovered| {
         TRACE.with_borrow_mut(|trace| trace.aliases.push(hovered));
@@ -354,149 +225,77 @@ fn early_hover_aliases_survive_configuration_scope_then_drop_with_the_node() {
 }
 
 #[test]
-fn unmounted_hover_builder_drop_releases_its_early_resources() {
+fn unbuilt_hover_builder_drop_releases_early_resources_without_executing_bodies() {
     reset();
     let builder = probe_leaf().with_hovered(|builder, hovered| {
         TRACE.with_borrow_mut(|trace| trace.early_hover.push(hovered));
-        builder
+        builder.width(hovered.map(|value| if value { 73. } else { 13. }))
     });
     drop(builder);
     TRACE.with_borrow(|trace| {
         assert!(trace.early_hover[0].is_disposed());
-        assert_eq!(trace.prepares, 0);
-        assert_eq!(trace.mounts, 0);
+        assert_eq!((trace.builds, trace.inits), (0, 0));
+        assert!(trace.resources.is_empty());
     });
-}
-
-#[test]
-fn prepare_and_mount_panics_release_owned_resources_and_restore_context() {
-    for during_mount in [false, true] {
-        reset();
-        let parent = OwnedScope::new();
-        parent.provide(17u32);
-        let external = parent.run(|| signal(99));
-        TRACE.with_borrow_mut(|trace| {
-            trace.panic_prepare = !during_mount;
-            trace.panic_mount = during_mount;
-        });
-        parent.run(|| {
-            let failed = catch_unwind(AssertUnwindSafe(|| {
-                AppBuildContext::with_theme(rule(40.).into(), || probe_leaf().into_node())
-            }));
-            assert!(failed.is_err());
-            assert_eq!(current_scope().inject::<u32>(), Some(17));
-            assert!(!RootBuild::new().has_theme());
-            crate::node::CONTEXT.with_borrow(|stack| assert!(stack.is_empty()));
-        });
-        TRACE.with_borrow(|trace| {
-            assert!(trace.resources.iter().all(|value| value.is_disposed()));
-        });
-        assert_eq!(external.get(), 99);
-        assert!(!external.is_disposed());
-    }
-}
-
-fn classes(names: &[&str]) -> std::collections::HashSet<ClassName> {
-    names
-        .iter()
-        .map(|name| ClassName::try_from(*name).unwrap())
-        .collect()
-}
-
-#[mue_macros::component]
-#[theme]
-fn class_outer() -> impl Component {
-    use crate::theme::Themeable;
-    probe_leaf().classes(classes(&["inner"]))
-}
-
-#[test]
-fn compound_classes_and_identity_must_match_one_target() {
-    use crate::theme::Themeable;
-
-    reset();
-    let theme = mue_macros::theme! {
-        .outer.inner { height: 81px; }
-        ClassOuter.inner { width: 82px; }
-        ProbeLeaf.outer { height: 83px; }
-    };
-    let node = AppBuildContext::with_theme(theme.into(), || {
-        class_outer().classes(classes(&["outer"])).into_node()
-    });
-    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
-    drop(node);
-
-    reset();
-    let theme = mue_macros::theme! { ClassOuter.outer { height: 84px; } };
-    let node = AppBuildContext::with_theme(theme.into(), || {
-        class_outer().classes(classes(&["outer"])).into_node()
-    });
-    assert_eq!(dimensions().1, Size::Px(84.));
-    drop(node);
-}
-
-#[test]
-fn pure_class_rules_follow_the_replacement_dynamic_source_only() {
-    use crate::theme::Themeable;
-
-    reset();
-    let owner = OwnedScope::new();
-    let previous = owner.run(|| signal(classes(&["selected"])));
-    let current = owner.run(|| signal(classes(&[])));
-    let rules = Rc::new(Cell::new(0));
-    let count = rules.clone();
-    let theme = Theme::new(vec![Rule::new(
-        vec![Selector::new(Specificity(0, 1, 0), |target| {
-            target.has_class("selected")
-        })],
-        move || {
-            count.set(count.get() + 1);
-            Style::new().height(85.)
-        },
-    )]);
-    let node = AppBuildContext::with_theme(theme.into(), || {
-        probe_leaf().classes(previous).classes(current).into_node()
-    });
-    assert_eq!(dimensions().1, Size::Px(20.));
-    assert_eq!(rules.get(), 0);
-    current.set(classes(&["selected"]));
-    assert_eq!(dimensions().1, Size::Px(85.));
-    assert_eq!(rules.get(), 1);
-    previous.set(classes(&[]));
-    assert_eq!(dimensions().1, Size::Px(85.));
-    assert_eq!(rules.get(), 1);
-    current.set(classes(&[]));
-    assert_eq!(dimensions().1, Size::Px(20.));
-    assert_eq!(rules.get(), 1);
-    drop(node);
-    assert!(!previous.is_disposed());
-    assert!(!current.is_disposed());
 }
 
 #[mue_macros::node]
-#[theme()]
-fn empty_optin() -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(Style::new().width(10.).height(20.), |style| {
-        TRACE.with_borrow_mut(|trace| {
-            trace.width = Some(style.take_width());
-            trace.height = Some(style.take_height());
-        });
+fn keyed_leaf(ctx: NodeContext, key: i32) -> Node {
+    TRACE.with_borrow_mut(|trace| {
+        trace.builds += 1;
+        trace.resources.push(*signal(key.get()));
+    });
+    ctx.finish(Style::new().width(key.get() as f32), move |style| {
+        TRACE.with_borrow_mut(|trace| trace.inits += 1);
+        use_layout(style);
     })
 }
 
 #[test]
-fn empty_theme_optin_has_unit_options_and_hover_rules_do_not_enable_tracking() {
-    fn unit_options<T: ThemeTarget<Options = ()>>() {}
-    unit_options::<EmptyOptin>();
+fn dynamic_subtrees_build_new_keys_synchronously_and_dispose_only_removed_nodes() {
     reset();
-    let theme = mue_macros::theme! { EmptyOptin:hover { height: 91px; } };
-    let node = AppBuildContext::with_theme(theme.into(), || empty_optin().into_node());
-    assert_eq!(dimensions(), (Size::Px(10.), Size::Px(20.)));
-    assert!(node.hovered().is_none());
-    Runtime::with(|rt| {
-        let nodes = rt.nodes.borrow();
-        assert!(nodes[node.id].hover_owners.is_empty());
-        assert!(nodes[node.id].hovered_aliases.is_empty());
+    let owner = OwnedScope::new();
+    let keys = owner.run(|| signal(Rc::<[i32]>::from([10, 20])));
+    let builder = crate::node::flexbox().width(77.).children(map_keyed(
+        keys,
+        |key| *key,
+        |key| keyed_leaf(*key),
+    ));
+    TRACE.with_borrow(|trace| assert_eq!(trace.builds, 0));
+    let node = builder.into_node();
+    let initial = node.children().get_clone();
+    assert_eq!(initial.len(), 2);
+    let widths = |children: &[crate::node::NodeRef]| {
+        Runtime::with(|rt| {
+            children
+                .iter()
+                .map(|child| {
+                    let layout = rt.node(child.id).layout_id.unwrap();
+                    rt.taffy.borrow().style(layout).unwrap().size.width
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        widths(&initial),
+        vec![taffy::Dimension::length(10.), taffy::Dimension::length(20.)]
+    );
+    keys.set(Rc::from([20, 30]));
+    let updated = node.children().get_clone();
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[0].id, initial[1].id);
+    assert_ne!(updated[1].id, initial[0].id);
+    assert_eq!(
+        widths(&updated),
+        vec![taffy::Dimension::length(20.), taffy::Dimension::length(30.)]
+    );
+    TRACE.with_borrow(|trace| {
+        assert_eq!((trace.builds, trace.inits), (3, 3));
+        assert!(trace.resources[0].is_disposed());
+        assert!(!trace.resources[1].is_disposed());
+        assert!(!trace.resources[2].is_disposed());
     });
     drop(node);
+    TRACE.with_borrow(|trace| assert!(trace.resources.iter().all(|value| value.is_disposed())));
+    assert!(!keys.is_disposed());
 }

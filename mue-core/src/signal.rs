@@ -2,7 +2,7 @@ use std::{any::Any, collections::HashSet, marker::PhantomData, ops::Deref};
 
 use slotmap::new_key_type;
 
-use crate::{Disposable, effect::EffectId, runtime::Runtime, scope::CURRENT_SCOPE};
+use crate::{Disposable, effect::EffectId, prop::Prop, runtime::Runtime, scope::CURRENT_SCOPE};
 
 new_key_type! {
     pub(crate) struct SignalId;
@@ -169,6 +169,19 @@ impl ReadSignal<bool> {
             }
         })
     }
+
+    /// Choose between two properties whenever this boolean changes.
+    ///
+    /// Unlike [`ReadSignal::select`], the branches are properties, so a reactive
+    /// branch keeps updating while it is selected.
+    pub fn pick<T, A, B>(self, when_true: A, when_false: B) -> Prop<T>
+    where
+        T: Clone + PartialEq + 'static,
+        A: Into<Prop<T>>,
+        B: Into<Prop<T>>,
+    {
+        Prop::from(self).pick(when_true, when_false)
+    }
 }
 
 impl<T> Disposable for ReadSignal<T> {
@@ -240,8 +253,12 @@ impl<T: 'static> Signal<T> {
         ))
     }
 
+    /// Create a signal without a comparator: every set notifies, even for equal values.
+    ///
+    /// Use this for payloads that are not `PartialEq` (handles, `Rc<dyn Trait>`, closures),
+    /// or when an expensive or unreliable comparison is undesirable.
     #[track_caller]
-    pub fn shallow(value: T) -> Self {
+    pub fn new_always(value: T) -> Self {
         create_signal(SignalInner::new(
             Some(Box::new(value)),
             None,
@@ -338,6 +355,26 @@ mod test {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::{prelude::*, runtime::Runtime};
+
+    #[test]
+    fn new_always_notifies_even_when_the_value_is_equal() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let value = Signal::new_always(1u32);
+            let read = *value;
+            let runs = Rc::new(RefCell::new(0));
+            watch_effect({
+                let runs = runs.clone();
+                move || {
+                    read.get();
+                    *runs.borrow_mut() += 1;
+                }
+            });
+            assert_eq!(*runs.borrow(), 1);
+            value.set(1);
+            assert_eq!(*runs.borrow(), 2);
+        });
+    }
 
     #[test]
     fn notification_revisions_distinguish_equal_silent_and_computed_updates() {

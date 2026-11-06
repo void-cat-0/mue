@@ -2,88 +2,71 @@ use super::{controls::*, responsive};
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    style::Styleable,
-    theme::{Theme, Themeable, class, theme},
+    shader::Brush,
+    style::{Styleable, StyleableExt, Transform, TransformOp},
 };
-use std::{collections::HashSet, rc::Rc};
+use std::rc::Rc;
 
+// Only the component's own state lives here; the theme is application tokens.
 #[component]
-#[theme(accent)]
-fn tile(caption: Rc<str>, #[default] accent: bool) -> impl Component {
-    let _ = accent;
-    center().children(text(caption).style(style! {
-        font-size: {responsive::font(22.)};
-        line-height: {responsive::ui(32.)};
-    }))
+fn tile(caption: Rc<str>, #[default] accent: bool, #[default] selected: bool) -> impl Component {
+    let theme = Theme::current().expect("theme installed");
+    let panel = theme.get::<Brush>("tile.panel");
+    let accent_brush = theme.get::<Brush>("tile.accent");
+    let scale = accent.pick(
+        theme.get::<f32>("tile.scale.accent"),
+        theme.get::<f32>("tile.scale.panel"),
+    );
+    center()
+        .style(style! {
+            background: {accent.pick(accent_brush, panel)};
+            transform: {scale.map(|scale| Transform(vec![TransformOp::Scale(scale, scale)]))};
+            transition: 220ms spring;
+        })
+        .with_hovered(move |view, hovered| {
+            view.opacity(computed(move |_| {
+                if accent.get() && hovered.get() {
+                    0.65
+                } else if selected.get() {
+                    0.82
+                } else {
+                    1.
+                }
+            }))
+        })
+        .children(text(caption).style(style! {
+            font-size: {responsive::font(22.)};
+            line-height: {responsive::ui(32.)};
+        }))
 }
 
-// Installed once by the playground's App::with_theme entry point. New pages
-// inherit that application context, including pages built by map_keyed.
-pub fn appearance() -> ReadSignal<Theme> {
-    let light = theme! {
-        Tile { background: {BLUE}; transform: scale(1.02); }
-        Tile[$accent] { background: {CORAL}; transform: scale(1.04); }
-    };
-    let dark = theme! {
-        Tile { background: {panel_brush()}; transform: scale(1.); }
-        Tile[$accent] { background: {BLUE}; transform: scale(1.); }
-    };
-    let shared = theme! {
-        Tile.selected { opacity: 82%; }
-        Tile[$accent]:hover { opacity: 65%; }
-        Tile { transition: 220ms spring; }
-    };
-    dark_theme().select(
-        Theme::compose([dark, shared.clone()]),
-        Theme::compose([light, shared]),
-    )
+fn token_examples(selected: Signal<bool>) -> Node {
+    stack()
+        .children((
+            tile("Default"),
+            tile("Accent").accent(true),
+            tile("Selected accent").accent(true).selected(selected),
+        ))
+        .into_node()
 }
 
 pub fn page() -> Node {
     let dark = dark_theme();
     let selected = signal(true);
-    let classes = selected.map(|active| {
-        if active {
-            HashSet::from([class!("selected")])
-        } else {
-            HashSet::new()
-        }
-    });
-    let sample = r#"use std::{collections::HashSet, rc::Rc};
-use mue_core::prelude::*;
-use mue_components::prelude::*;
-use mue_macroquad::App;
+    let sample = r#"// Tokens live in the application, not in the component.
+let theme = Theme::current().expect("theme installed");
 
-#[component]
-#[theme(accent)]
-fn tile(caption: Rc<str>, #[default] accent: bool) -> impl Component {
-    let _ = accent;
-    center().children(text(caption))
-}
+center()
+    .background(accent.pick(
+        theme.get::<Brush>("tile.accent"),
+        theme.get::<Brush>("tile.panel"),
+    ))
+    .transform(scale.map(|scale| {
+        Transform(vec![TransformOp::Scale(scale, scale)])
+    }))
 
-let light = theme! {
-    Tile { background: blue; }
-    Tile[$accent] { background: coral; }
-};
-let dark = theme! {
-    Tile { background: #263244; }
-    Tile[$accent] { background: blue; }
-};
-let shared = theme! {
-    Tile.selected { opacity: 82%; }
-    Tile[$accent]:hover { opacity: 65%; }
-};
-let dark_mode = signal(false);
-let theme = dark_mode.select(
-    Theme::compose([dark, shared.clone()]),
-    Theme::compose([light, shared]),
-);
-let mut app = App::with_theme(theme, || {
-    tile("Accent")
-        .accent(true)
-        .classes(HashSet::from([class!("selected")]))
-        .enable_hovered()
-});"#;
+// Switching a theme writes new values into the same signals.
+toggle_theme();"#;
     stack()
         .style(style! {
             width: 100%; min-width: 0px;
@@ -91,17 +74,12 @@ let mut app = App::with_theme(theme, || {
         })
         .children((
             button(
-                dark.map(|is_dark| format!("Theme: {}", if is_dark { "Dark" } else { "Light" })),
+                dark.map(|is_dark| format!("Appearance: {}", if is_dark { "Dark" } else { "Light" })),
                 toggle_theme,
             ),
-            button("Toggle selected class", move || selected.toggle()),
-            tile("Default"),
-            tile("Accent").accent(true).enable_hovered(),
-            tile("Selected accent")
-                .accent(true)
-                .classes(classes)
-                .enable_hovered(),
-            text("Theme changes update existing styles. Class sets replace the whole set; hover is enabled explicitly."),
+            button("Toggle selected state", move || selected.toggle()),
+            token_examples(selected),
+            text("Local state stays local. Each tile picks between two token handles, and switching the theme rewrites every token in place."),
             code_block(sample).style(style! {
                 width: 100%; min-width: 0px;
                 text-wrap: {true};

@@ -45,7 +45,7 @@ impl DependencyTracker {
     }
 }
 
-/// Restores the runtime stack and temporarily removed effect data on unwind.
+/// Restores the runtime stack and the temporarily removed effect data when the run ends.
 struct EffectRun<'a> {
     runtime: &'a Runtime,
     effect_id: EffectId,
@@ -55,7 +55,6 @@ struct EffectRun<'a> {
     callback: Option<EffectCallback>,
     value: Option<Value>,
     took_callback: bool,
-    completed: bool,
 }
 
 impl Drop for EffectRun<'_> {
@@ -79,20 +78,16 @@ impl Drop for EffectRun<'_> {
             if self.took_callback {
                 effect.callback = self.callback.take();
             }
-            if self.completed {
-                effect.state = EffectState::Clean;
-            }
+            effect.state = EffectState::Clean;
             if let Some(mut tracker) = tracker {
-                if self.completed {
-                    for signal_id in tracker.dependencies.drain(tracker.index..) {
-                        if let Some(signal) = signals.get_mut(signal_id) {
-                            signal.subscribers.remove(&self.effect_id);
-                        }
+                for signal_id in tracker.dependencies.drain(tracker.index..) {
+                    if let Some(signal) = signals.get_mut(signal_id) {
+                        signal.subscribers.remove(&self.effect_id);
                     }
                 }
                 tracker.dependencies.retain(|id| signals.contains_key(*id));
-                // On unwind retain old and newly observed dependencies so that
-                // disposing the failed build can remove every subscription.
+                // Merge newly observed dependencies so the effect keeps every
+                // subscription it established during this run.
                 for signal_id in tracker.new_dependencies {
                     if let Some(signal) = signals.get_mut(signal_id) {
                         signal.subscribers.insert(self.effect_id);
@@ -253,7 +248,6 @@ impl Runtime {
             callback,
             value: None,
             took_callback,
-            completed: false,
         };
         let mut result = None;
         let updated = if let Some(track_fn) = track_fn {
@@ -263,7 +257,6 @@ impl Runtime {
             run.value = self.signal_mut(signal_id).value.take();
             update_context.run(|| run.callback.as_mut().unwrap()(&mut run.value))
         };
-        run.completed = true;
         drop(run);
 
         if updated {
@@ -377,27 +370,14 @@ impl Runtime {
     }
 
     pub fn batch(&self, f: impl FnOnce()) {
-        struct RestoreDepth<'a> {
-            depth: &'a Cell<usize>,
-            previous: usize,
-        }
-        impl Drop for RestoreDepth<'_> {
-            fn drop(&mut self) {
-                self.depth.set(self.previous);
-            }
-        }
-
         let depth = self.batch_depth.get();
         self.batch_depth.set(depth + 1);
-        let _restore = RestoreDepth {
-            depth: &self.batch_depth,
-            previous: depth,
-        };
         f();
 
         if depth == 0 {
             self.flush_updates();
         }
+        self.batch_depth.set(depth);
     }
 
     /// Dispose a signal, removing it and cleaning up all dependencies.
@@ -669,124 +649,6 @@ mod tests {
         assert_eq!(live.effects - baseline.effects, 2);
         drop(owner);
         assert_eq!(resource_counts(), baseline);
-    }
-
-    #[test]
-    fn initial_effect_and_computed_panics_release_owned_resources() {
-        let external_owner = OwnedScope::new();
-        let source = external_owner.run(|| signal(1));
-        let baseline = resource_counts();
-        for computed_build in [false, true] {
-            let resource = Rc::new(());
-            let cleanup_runs = Rc::new(Cell::new(0));
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                let build = OwnedScope::new();
-                build.run(|| {
-                    batch(|| {
-                        let resource = resource.clone();
-                        let cleanup_runs = cleanup_runs.clone();
-                        if computed_build {
-                            computed::<i32>(move |_| {
-                                let _resource = &resource;
-                                source.get();
-                                let cleanup_runs = cleanup_runs.clone();
-                                on_cleanup(move || cleanup_runs.set(cleanup_runs.get() + 1));
-                                panic!("initial computed build failed");
-                            });
-                        } else {
-                            watch_effect(move || {
-                                let _resource = &resource;
-                                source.get();
-                                let cleanup_runs = cleanup_runs.clone();
-                                on_cleanup(move || cleanup_runs.set(cleanup_runs.get() + 1));
-                                panic!("initial effect build failed");
-                            });
-                        }
-                    })
-                });
-            }));
-            assert!(result.is_err());
-            assert_eq!(cleanup_runs.get(), 1);
-            assert_eq!(Rc::strong_count(&resource), 1);
-            assert_eq!(resource_counts(), baseline);
-            assert!(!source.is_disposed());
-            Runtime::with(|rt| assert!(rt.signal_mut(source.id).subscribers.is_empty()));
-            assert!(current_scope().is_null());
-            assert_context_restored();
-            source.set(source.get() + 1);
-        }
-    }
-
-    #[test]
-    fn nested_batch_depth_restores_without_running_callbacks_during_unwind() {
-        let owner = OwnedScope::new();
-        owner.run(|| {
-            let source = signal(0);
-            let observed = Rc::new(Cell::new(0));
-            watch(*source, {
-                let observed = observed.clone();
-                move |value| observed.set(value.get())
-            });
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                batch(|| {
-                    source.set(1);
-                    let inner = catch_unwind(AssertUnwindSafe(|| {
-                        batch(|| panic!("inner batch failed"));
-                    }));
-                    assert!(inner.is_err());
-                    Runtime::with(|rt| assert_eq!(rt.batch_depth.get(), 1));
-                    panic!("outer batch failed");
-                });
-            }));
-            assert!(result.is_err());
-            assert_eq!(observed.get(), 0);
-            assert_context_restored();
-            source.set(2);
-            assert_eq!(observed.get(), 2);
-        });
-    }
-
-    #[test]
-    fn callback_value_and_context_restore_when_batch_flush_panics() {
-        let owner = OwnedScope::new();
-        owner.run(|| {
-            let source = signal(1);
-            let fail = Rc::new(Cell::new(false));
-            let previous = Rc::new(Cell::new(None));
-            let derived = computed({
-                let fail = fail.clone();
-                let previous = previous.clone();
-                move |old: Option<&i32>| {
-                    let value = source.get();
-                    assert!(!fail.get(), "computed update failed");
-                    previous.set(old.copied());
-                    value * 10
-                }
-            });
-            assert_eq!(derived.get(), 10);
-            fail.set(true);
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                batch(|| source.set(2));
-            }));
-            assert!(result.is_err());
-            assert_context_restored();
-            Runtime::with(|rt| {
-                let signals = rt.signals.borrow();
-                let inner = &signals[derived.id];
-                assert_eq!(
-                    inner.value.as_ref().unwrap().downcast_ref::<i32>(),
-                    Some(&10)
-                );
-                assert!(
-                    rt.effects.borrow()[inner.effect.unwrap()]
-                        .callback
-                        .is_some()
-                );
-            });
-            fail.set(false);
-            assert_eq!(derived.get(), 20);
-            assert_eq!(previous.get(), Some(10));
-        });
     }
 
     #[test]

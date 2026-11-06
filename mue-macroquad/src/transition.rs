@@ -427,7 +427,7 @@ impl Interpolatable for crate::math::Rect {
     }
 }
 
-// Theme projections use the same transition policy as explicit fields, on demand.
+// Bind animatable style fields to their configured transition.
 macro_rules! bind_property {
     (width, $value:expr, $transition:expr) => {
         crate::transition::bind_projected($value, $transition)
@@ -588,12 +588,11 @@ pub(crate) fn bind_projected_matrix(
     }
 }
 
-/// Called once after seal, inside the node's lifetime scope.
+/// Bind final style inputs once, inside the node's lifetime scope.
 pub(crate) fn bind_style(style: &mut Style) {
-    #[cfg(test)]
-    crate::runtime::record_transition_bind();
-    let transition = style.take_transition();
-    style.bind_theme_transition(transition);
+    let transition = style
+        .declared_transition()
+        .unwrap_or(crate::transition::Transition::Instant.into());
     style.bind_explicit_transitions(transition);
 }
 

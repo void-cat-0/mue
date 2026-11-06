@@ -1,7 +1,7 @@
 use super::{Gesture, GesturePhase};
 use crate::{
     event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId},
-    hook::HookFn,
+    hook::CallbackList,
     math::Vector,
 };
 
@@ -20,7 +20,7 @@ pub struct PanEvent {
 pub struct PanGesture {
     threshold: f32,
     active: Option<(PointerId, Vector, Vector, bool)>,
-    pub(crate) on_pan: HookFn<PanEvent>,
+    pub(crate) on_pan: CallbackList<PanEvent>,
 }
 
 impl Default for PanGesture {
@@ -35,7 +35,7 @@ impl PanGesture {
         Self {
             threshold,
             active: None,
-            on_pan: HookFn::default(),
+            on_pan: CallbackList::default(),
         }
     }
 

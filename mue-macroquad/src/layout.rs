@@ -114,7 +114,6 @@ fn bind_layout(style: ReadSignal<taffy::Style>) -> Layout {
 
         let layout_id =
             Runtime::with_taffy_mut(|taffy| taffy.new_leaf(Default::default()).unwrap());
-        // Register ownership before the first reactive read can unwind.
         node.layout_id = Some(layout_id);
         watch_effect(move || {
             Runtime::with_taffy_mut(|taffy| {

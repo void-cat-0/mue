@@ -4,5 +4,5 @@ pub use mue_macroquad::node::text::{TextOverflow, TextVerticalAlign, TextWrap, t
 use mue_macroquad::style::Style;
 
 pub(super) fn render_text(style: &mut Style, content: Prop<Document>) {
-    mue_macroquad::node::text::render_spans(style, content.map(|document| document.spans));
+    mue_macroquad::node::text::use_spans(style, content.map(|document| document.spans));
 }

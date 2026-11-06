@@ -284,21 +284,6 @@ pub fn computed<T: PartialEq + 'static>(
     }))
 }
 
-/// Internal derived value whose callback chooses whether to notify subscribers.
-/// The new value and tracked dependencies are retained even without notification.
-/// Returning false requires that dependents can keep their previous result.
-#[doc(hidden)]
-#[track_caller]
-pub fn computed_with_notify<T: 'static>(
-    mut f: impl FnMut(Option<&T>) -> (T, bool) + 'static,
-) -> ReadSignal<T> {
-    create_computed(Box::new(move |value| {
-        let (new_value, notify) = f(value.as_mut().and_then(|value| value.downcast_ref::<T>()));
-        *value = Some(Box::new(new_value));
-        notify
-    }))
-}
-
 #[track_caller]
 /// Derive a cached value and notify dependents after every recomputation.
 pub fn computed_always<T: 'static>(mut f: impl FnMut(Option<&T>) -> T + 'static) -> ReadSignal<T> {
@@ -354,38 +339,6 @@ mod test {
     };
 
     use crate::prelude::*;
-
-    #[test]
-    fn suppressed_computed_updates_replace_values_and_dependencies() {
-        let baseline = crate::runtime::resource_counts();
-        let owner = OwnedScope::new();
-        owner.run(|| {
-            let choose = signal(false);
-            let a = signal(1);
-            let b = signal(2);
-            let runs = Rc::new(Cell::new(0));
-            let count = runs.clone();
-            let value = super::computed_with_notify(move |_| {
-                count.set(count.get() + 1);
-                (if choose.get() { a.get() } else { b.get() }, false)
-            });
-            let notifications = Rc::new(Cell::new(0));
-            let count = notifications.clone();
-            watch(value, move |_| count.set(count.get() + 1));
-            assert_eq!(value.get(), 2);
-            choose.set(true);
-            assert_eq!(value.get(), 1);
-            assert_eq!(runs.get(), 2);
-            b.set(3);
-            assert_eq!(runs.get(), 2);
-            a.set(4);
-            assert_eq!(value.get(), 4);
-            assert_eq!(runs.get(), 3);
-            assert_eq!(notifications.get(), 0);
-        });
-        drop(owner);
-        assert_eq!(crate::runtime::resource_counts(), baseline);
-    }
 
     #[test]
     fn test_computed_basic() {

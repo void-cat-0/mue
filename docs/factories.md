@@ -1,37 +1,22 @@
 # Reusable component declarations
 
-> The former factory API has been removed without a compatibility layer. Use declarations and a top-level theme as described here; the [finalized design](theme-refactor.md) and [implementation specification](theme-refactor-implementation.md) explain the migration. This page keeps its existing URL for links.
-
-Declare a reusable component directly. Parameters and defaults belong to the function, and the theme allowlist identifies the values that selectors may read:
+This page keeps the former factory guide's URL. Reuse ordinary Rust functions and component declarations, with parameters for content, appearance, and behavior.
 
 ```rust
-use std::{collections::HashSet, rc::Rc};
+use std::rc::Rc;
 use mue_components::prelude::*;
-use mue_macroquad::{App, theme::{Themeable, class, theme}};
 
 #[component]
-#[theme(accent)]
 fn tile(caption: Rc<str>, #[default] accent: bool) -> impl Component {
-    let _ = accent;
-    center().children(text(caption))
+    let opacity = accent.map(|active| if active { 1. } else { 0.7 });
+    center().padding((12.,)).opacity(opacity).children(text(caption))
 }
 
-let colors = theme! {
-    Tile { background: blue; }
-    Tile[$accent] { background: coral; }
-    Tile.selected { opacity: 85%; }
-};
-let app = App::with_theme(colors, || {
-    tile("Example")
-        .accent(true)
-        .classes(HashSet::from([class!("selected")]))
-});
+let view = tile("Example").accent(true);
 ```
 
-Call `tile(...)` for each view. Set optional parameters with generated setters such as `.accent(true)`; a setter also accepts a reactive value. `Tile` is the generated alias for the concrete builder type, with the same visibility as the declaration. There is no separate value-level handle to clone, pass to the theme, or use to create instances.
+Call `tile(...)` for each view. Set optional parameters with generated setters such as `.accent(true)`; these also accept a signal or `Prop`. A `#[component]` parameter written as an ordinary value type becomes `Prop<T>` inside the body. Use its `map` method or a `computed` binding to derive style values. Use `#[model]` for a writable `Signal<T>`. Content and callbacks remain ordinary application concerns.
 
-Theme rules supply visual declarations, while ordinary component code supplies content and behavior. A plain wrapper function can return a configured builder for reuse. Add `#[component] #[theme(...)]` only when that wrapper needs its own theme identity and options. Only explicitly listed value parameters enter theme metadata; captions, children, callbacks, and resources should remain ordinary parameters.
+A plain wrapper function can return a configured builder for reuse. Both `#[component]` and `#[node]` generate builders; constructor and setter calls do not execute their declaration bodies. A terminal `#[node]` declaration receives `NodeContext` positionally as its first parameter and returns `Node` through `ctx.finish(defaults, body)`. The first parameter may have any simple name, such as `ctx`, while its declared type is preserved for Rust to check (including qualified paths and aliases). Non-first ordinary parameters named `build` or `style` remain reserved for now; the injected first parameter may use either name or another simple identifier. It is excluded from constructor inputs and setters; `#[default]` and `#[model]` are not allowed on it, and defaults cannot refer to its name because they run before injection. `finish` merges defaults, binds parent state, materializes declared children in the parent scope, and then runs `body`. Use `#[component]` for generated reactive parameter setters and a body that returns another builder. Consuming the outer builder with `into_node` executes the component body once, synchronously in the resulting node's scope, and continues through its returned builder. The returned builder keeps the same owner and accumulated style. Local `provide`, `map`, `computed`, signals, and effects use that owner and are released with the node; helpers called during ordinary setup use the scope active at that call. Reading a parameter and branching with an ordinary `if` samples its current value rather than installing a binding.
 
-Classes use `.classes(...)` with a complete `HashSet<ClassName>`, including a signal or derived set. A later call replaces the entire previous set. Use `class!("selected")` for compile-time validation, then match `Tile.selected`. Options and classes are separate: `Tile[$accent]` reads the parameter, and `Tile.selected` reads the class set.
-
-Install themes through `App::with_theme` at the root and combine modules with `Theme::compose`. Existing nodes update their styles when the top-level theme or reactive options/classes change; local component state is retained. See [themes and selectors](themes.md) and [component/node authoring](components.md).
+Share an application-defined tokens struct through explicit parameters or ordinary `mue_core::scope::provide` / `inject` context. The component chooses the tokens it consumes and passes them directly to style setters. Live changes come from the signals or dynamic `Prop` fields within those tokens. See [application tokens and context](themes.md) for a full example, including ownership and async boundaries, and [component/node authoring](components.md) for the injected `NodeContext`, explicit finish and body ordering, deferred children, and public hook fields. Set up shared `provide` / context in the node author body before `ctx.finish(...)`, or in the component body before returning its builder.

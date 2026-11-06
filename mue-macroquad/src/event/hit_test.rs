@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// A custom hit test receives a point in the node's untransformed canvas space.
-/// Visit direct children in reverse paint order with `do_hit_test`, then call
+/// Visit direct children in reverse paint order with `hit_test_into`, then call
 /// `hit_self` if the node itself accepts the point. An empty result is pass-through.
 pub type HitTestFn = Rc<dyn Fn(NodeRef, Vector, &mut HitTestResult)>;
 
@@ -33,13 +33,13 @@ impl HitTestResult {
 
 pub fn hit_test(node: NodeRef, pos: Vector) -> IndexSet<NodeRef> {
     let mut result = HitTestResult::default();
-    do_hit_test(node, pos, &mut result);
+    hit_test_into(node, pos, &mut result);
     result.path
 }
 
 /// Visit a direct child from a custom hit test. Returns whether a target exists.
 /// Once a target is found, later siblings cannot replace it or join its path.
-pub fn do_hit_test(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
+pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
     if !result.path.is_empty() {
         return true;
     }
@@ -82,7 +82,7 @@ pub fn do_hit_test(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bo
     } else {
         // Render has already baked scroll offsets into children's canvas rects.
         for &child in children.iter().rev() {
-            if do_hit_test(child, pos, result) {
+            if hit_test_into(child, pos, result) {
                 break;
             }
         }
@@ -113,7 +113,7 @@ pub(crate) mod tests {
     pub(crate) struct TestNode(pub NodeRef);
     impl TestNode {
         pub(crate) fn new(bounds: Option<Rect>, children: &[NodeRef]) -> Self {
-            let scope = Scope::new();
+            let scope = Scope::new_attached();
             let id = scope.run(|| {
                 let children = (*signal(Rc::from(children))).owned();
                 let mut node = NodeInner::new(scope, children);
@@ -186,9 +186,9 @@ pub(crate) mod tests {
         let (a, b, outside) = (front.0, back.0, foreign.0);
         Runtime::with(|rt| {
             rt.nodes.borrow_mut()[root.0.id].hit_test = Some(Rc::new(move |node, pos, result| {
-                assert!(!do_hit_test(outside, pos, result));
-                do_hit_test(a, pos, result);
-                do_hit_test(b, pos, result);
+                assert!(!hit_test_into(outside, pos, result));
+                hit_test_into(a, pos, result);
+                hit_test_into(b, pos, result);
                 result.hit_self(node);
             }))
         });

@@ -4,6 +4,7 @@ pub mod event;
 pub mod font;
 pub mod gesture;
 pub mod hook;
+pub mod inherit;
 pub mod layout;
 pub mod math;
 pub mod node;
@@ -11,13 +12,10 @@ pub mod paint;
 pub mod runtime;
 pub mod shader;
 pub mod style;
-pub mod theme;
 pub mod transition;
 mod viewport;
 
 pub use app::App;
-pub use mue_macros::{class, theme};
-pub use theme::{ClassName, Theme, ThemeTarget, Themeable};
 
 pub use mue_macros::style;
 
