@@ -1,6 +1,6 @@
 //! Same-binary comparison; run this ignored test alone with --test-threads=1.
 use super::*;
-use crate::{style::Size, transition::Transition};
+use crate::{node::Node, style::Size, transition::Transition};
 use mue_core::{prop::Prop, signal::Signal};
 use std::hint::black_box;
 
@@ -10,15 +10,14 @@ const TOGGLES: usize = 2048;
 const ROUNDS: usize = 3;
 
 #[mue_macros::node]
-#[theme]
-fn compare_leaf(reference: bool, counters: Rc<Counters>) -> NodePlan<impl FnOnce(&mut Style)> {
+fn compare_leaf(ctx: NodeContext, reference: bool, counters: Rc<Counters>) -> Node {
     let reference = reference.get_clone();
     let counters = counters.get_clone();
-    counters.prepares.set(counters.prepares.get() + 1);
-    NodePlan::new(Style::new().width(120.).height(24.), move |style| {
-        counters.mounts.set(counters.mounts.get() + 1);
-        let width = style.declared_width().unwrap();
-        let height = style.declared_height().unwrap();
+    counters.builds.set(counters.builds.get() + 1);
+    ctx.finish(Style::new().width(120.).height(24.), move |style| {
+        counters.inits.set(counters.inits.get() + 1);
+        let width = style.width.clone().unwrap();
+        let height = style.height.clone().unwrap();
         let counter = counters.clone();
         watch_effect(move || {
             counter
@@ -48,42 +47,24 @@ fn compare_leaf(reference: bool, counters: Rc<Counters>) -> NodePlan<impl FnOnce
 #[derive(Clone, Copy, Debug)]
 enum Case {
     Static,
-    EmptyTheme,
-    InstantTheme,
     Raw,
 }
 impl Case {
-    fn mount(
-        self,
-        reference: bool,
-        counters: Rc<Counters>,
-        value: Signal<Size>,
-        theme: Signal<Theme>,
-    ) -> Node {
-        let build = || {
-            let builder = compare_leaf(reference, counters);
-            match self {
-                Self::Raw => builder
-                    .width(value)
-                    .height(value)
-                    .column_gap(value)
-                    .row_gap(value)
-                    .margin((value,))
-                    .padding((value,))
-                    .border((value,))
-                    .inset((value,))
-                    .transition(Prop::Static(Transition::Instant))
-                    .into_node(),
-                Self::InstantTheme => builder
-                    .transition(Prop::Static(Transition::Instant))
-                    .into_node(),
-                _ => builder.into_node(),
-            }
-        };
-        if matches!(self, Self::EmptyTheme | Self::InstantTheme) {
-            AppBuildContext::with_theme(theme.into(), build)
-        } else {
-            build()
+    fn mount(self, reference: bool, counters: Rc<Counters>, value: Signal<Size>) -> Node {
+        let builder = compare_leaf(reference, counters);
+        match self {
+            Self::Raw => builder
+                .width(value)
+                .height(value)
+                .column_gap(value)
+                .row_gap(value)
+                .margin((value,))
+                .padding((value,))
+                .border((value,))
+                .inset((value,))
+                .transition(Prop::Static(Transition::Instant))
+                .into_node(),
+            _ => builder.into_node(),
         }
     }
 }
@@ -121,11 +102,11 @@ impl Arm {
     fn report(self, label: &str, baseline: ResourceCounts, after: ResourceCounts) {
         let timing = summarize(self.times);
         println!(
-            "    {label}: p50={}ns p95={}ns prepares={} mounts={} width_notify={} height_notify={} paint_build={} taffy_style_writes={} taffy_computes={}",
+            "    {label}: p50={}ns p95={}ns builds={} initializers={} width_notify={} height_notify={} paint_build={} taffy_style_writes={} taffy_computes={}",
             timing.p50,
             timing.p95,
-            self.counters.prepares.get(),
-            self.counters.mounts.get(),
+            self.counters.builds.get(),
+            self.counters.inits.get(),
             self.counters.width_consumers.get(),
             self.counters.height_consumers.get(),
             self.counters.paint_builds.get(),
@@ -141,12 +122,11 @@ fn build_round(case: Case, round: usize) {
     let baseline = resource_counts();
     let owner = OwnedScope::new();
     let value = owner.run(|| signal(Size::Px(24.)));
-    let theme = owner.run(|| signal(Theme::default()));
     let before = resource_counts();
     let mut arms = [Arm::new(SAMPLES, before), Arm::new(SAMPLES, before)];
     for sample in 0..WARMUP {
         for index in [sample % 2, 1 - sample % 2] {
-            let node = case.mount(index == 0, arms[index].counters.clone(), value, theme);
+            let node = case.mount(index == 0, arms[index].counters.clone(), value);
             measure_layout(&node);
             black_box(read_layout(&node));
             drop(node);
@@ -164,7 +144,7 @@ fn build_round(case: Case, round: usize) {
             let writes = crate::layout::style_writes();
             let computes = crate::layout::style_computes();
             let start = Instant::now();
-            let node = case.mount(index == 0, arm.counters.clone(), value, theme);
+            let node = case.mount(index == 0, arm.counters.clone(), value);
             measure_layout(&node);
             let output = black_box(read_layout(&node));
             arm.live = max_counts(arm.live, resource_counts());
@@ -201,22 +181,15 @@ fn build_round(case: Case, round: usize) {
 }
 
 fn update_round(case: Case, round: usize) {
-    let raw = matches!(case, Case::Raw);
     let baseline = resource_counts();
     let owner = OwnedScope::new();
     let values = owner.run(|| [signal(Size::Px(24.)), signal(Size::Px(24.))]);
-    let themes = owner.run(|| [signal(Theme::default()), signal(Theme::default())]);
     let before = resource_counts();
     let mut arms = [Arm::new(TOGGLES, before), Arm::new(TOGGLES, before)];
     let mut nodes = Vec::with_capacity(2);
     for index in 0..2 {
         let prior = resource_counts();
-        nodes.push(case.mount(
-            index == 0,
-            arms[index].counters.clone(),
-            values[index],
-            themes[index],
-        ));
+        nodes.push(case.mount(index == 0, arms[index].counters.clone(), values[index]));
         let live = resource_counts();
         arms[index].live = ResourceCounts {
             scopes: before.scopes + live.scopes - prior.scopes,
@@ -225,20 +198,6 @@ fn update_round(case: Case, round: usize) {
         };
         measure_layout(&nodes[index]);
     }
-    let theme_for = |wide: bool| {
-        Theme::new(vec![Rule::new(
-            vec![Selector::new(Specificity(0, 0, 1), |target| {
-                target.is::<CompareLeaf>()
-            })],
-            move || {
-                Style::new()
-                    .width(if wide { 121. } else { 120. })
-                    .height(if wide { 25. } else { 24. })
-                    .padding((if wide { 3. } else { 2. },))
-            },
-        )])
-    };
-    let matched_themes = [theme_for(false), theme_for(true)];
     for sample in 0..WARMUP + TOGGLES {
         if sample == WARMUP {
             for arm in &arms {
@@ -250,13 +209,9 @@ fn update_round(case: Case, round: usize) {
             let writes = crate::layout::style_writes();
             let computes = crate::layout::style_computes();
             let start = Instant::now();
-            if raw {
-                mue_core::batch(|| {
-                    values[index].set(Size::Px(if sample % 2 == 0 { 25. } else { 24. }))
-                });
-            } else {
-                themes[index].set(matched_themes[sample % 2].clone());
-            }
+            mue_core::batch(|| {
+                values[index].set(Size::Px(if sample % 2 == 0 { 25. } else { 24. }))
+            });
             measure_layout(&nodes[index]);
             black_box(read_layout(&nodes[index]));
             if sample >= WARMUP {
@@ -270,14 +225,7 @@ fn update_round(case: Case, round: usize) {
         }
         let reference = read_layout(&nodes[0]);
         let folded = read_layout(&nodes[1]);
-        assert_eq!(reference, folded, "raw={raw} update {sample} mismatch");
-        if !raw {
-            assert_eq!(
-                reference.0.size.width,
-                taffy::Dimension::length(if sample % 2 == 1 { 121. } else { 120. })
-            );
-            assert_eq!(reference.1.width, if sample % 2 == 1 { 121. } else { 120. });
-        }
+        assert_eq!(reference, folded, "raw update {sample} mismatch");
     }
     assert_eq!(
         arms[0].counters.width_consumers.get(),
@@ -318,16 +266,9 @@ fn layout_aggregation_compare() {
         "layout aggregation: {ROUNDS} rounds, {WARMUP} warmups, {SAMPLES} builds and {TOGGLES} updates per arm; alternating order; no timing thresholds"
     );
     for round in 0..ROUNDS {
-        for case in [
-            Case::Static,
-            Case::EmptyTheme,
-            Case::InstantTheme,
-            Case::Raw,
-        ] {
+        for case in [Case::Static, Case::Raw] {
             build_round(case, round);
         }
-        update_round(Case::EmptyTheme, round);
-        update_round(Case::InstantTheme, round);
         update_round(Case::Raw, round);
     }
 }

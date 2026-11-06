@@ -4,13 +4,9 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     layout::use_layout,
     math::Vector,
-    node::{
-        self, AppBuildContext, IntoNode, Node, NodePlan, NodeRef, PrepareNode, PreparedNode,
-        RootBuild,
-    },
+    node::{BuildNode, IntoNode, Node, NodeContext, NodeRef},
     paint::use_background,
     style::{Style, Styleable, StyleableExt},
-    theme::ThemeTarget,
     transition::{self, Driver, Transition as Curve},
 };
 use std::{cell::RefCell, rc::Rc};
@@ -34,12 +30,7 @@ pub struct NavigationStackBuilder<T, R, F> {
     curve: Curve,
 }
 
-/// Theme selector alias for the concrete navigation builder.
 pub type Navigation<T, R, F> = NavigationStackBuilder<T, R, F>;
-
-impl<T: 'static, R: 'static, F: 'static> ThemeTarget for NavigationStackBuilder<T, R, F> {
-    type Options = ();
-}
 
 /// Append/pop a typed path to navigate. Screens at equal path entries retain state.
 /// Removed screens stay alive through their exit transition, then release their scope.
@@ -99,7 +90,7 @@ struct Screen {
     position: Signal<Vector>,
 }
 impl Screen {
-    fn new(build: impl FnOnce() -> Node) -> Rc<Self> {
+    fn new(view: impl FnOnce() -> Node) -> Rc<Self> {
         let owner = OwnedScope::new_inherited();
         let screen = owner.run(|| {
             let width = signal(0.);
@@ -111,7 +102,7 @@ impl Screen {
                 .width(width)
                 .inset_left(computed(move |_| left.get() + position.get().x))
                 .inset_top(computed(move |_| position.get().y))
-                .children(build())
+                .children(view())
                 .into_node();
             Self {
                 node,
@@ -360,28 +351,15 @@ impl Driver for PresentationDriver {
     }
 }
 
-impl<T, R, F, Root, Destination> IntoNode for NavigationStackBuilder<T, R, F>
+impl<T, R, F, Root, Destination> BuildNode for NavigationStackBuilder<T, R, F>
 where
     T: Clone + PartialEq + 'static,
-    R: FnOnce() -> Root + 'static,
+    R: FnOnce() -> Root,
     F: FnMut(&T) -> Destination + 'static,
     Root: IntoNode,
     Destination: IntoNode,
 {
-    fn into_node(self) -> Node {
-        node::build(self)
-    }
-}
-
-impl<T, R, F, Root, Destination> PrepareNode for NavigationStackBuilder<T, R, F>
-where
-    T: Clone + PartialEq + 'static,
-    R: FnOnce() -> Root + 'static,
-    F: FnMut(&T) -> Destination + 'static,
-    Root: IntoNode,
-    Destination: IntoNode,
-{
-    fn prepare(self, mut build: RootBuild) -> PreparedNode {
+    fn build(self, mut ctx: NodeContext) -> Node {
         let Self {
             path,
             root,
@@ -391,14 +369,10 @@ where
             transition,
             curve,
         } = self;
-        build.push_style(style);
-        if build.has_theme() {
-            build.push_target::<Self>(Rc::new(()));
-        }
+        ctx.push_style(style);
         let defaults = Style::new().size_full();
-        build.finish(NodePlan::new(defaults, move |style| {
+        ctx.finish(defaults, move |style| {
             let scope = current_scope();
-            let environment = AppBuildContext::capture();
             let root = Screen::new(|| root().into_node());
             let visible = signal(Rc::<[NodeRef]>::default());
             let interactive = signal(Rc::<[NodeRef]>::default());
@@ -429,8 +403,7 @@ where
                     let back = values.len() < screens.len() && common == values.len();
                     screens.truncate(common);
                     for value in &values[common..] {
-                        let screen = environment
-                            .run(|| scope.run(|| Screen::new(|| destination(value).into_node())));
+                        let screen = scope.run(|| Screen::new(|| destination(value).into_node()));
                         screens.push((value.clone(), screen));
                     }
                     presentation
@@ -455,13 +428,13 @@ where
                     return;
                 }
                 for child in interactive.get_clone().iter().rev() {
-                    if mue_macroquad::event::hit_test::do_hit_test(*child, pos, result) {
+                    if mue_macroquad::event::hit_test::hit_test_into(*child, pos, result) {
                         break;
                     }
                 }
                 result.hit_self(node);
             }));
             use_background(style, layout.rect);
-        }))
+        })
     }
 }

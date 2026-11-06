@@ -2,7 +2,7 @@ use super::*;
 use mue_core::{
     effect::watch_effect,
     runtime::{batch, resource_counts},
-    signal::{Signal, signal},
+    signal::signal,
 };
 use taffy::{Dimension, LengthPercentage, LengthPercentageAuto};
 
@@ -189,68 +189,37 @@ fn equal_lowered_style_suppresses_notifications_across_distinct_source_units() {
 }
 
 #[test]
-fn one_theme_binding_accepts_new_fields_and_restores_removed_fallbacks() {
-    let before = resource_counts();
-    let owner = OwnedScope::new();
-    owner.run(|| {
-        let theme = Signal::shallow(Rc::new(Style::new()));
-        let fallback = Style::new()
-            .width(12.)
-            .padding_left(7.)
-            .margin_top(Size::Auto);
-        let mut raw = Style::themed_defaults(*theme, fallback);
-        let style = raw.build_taffy();
-        let count = notifications(style);
-        let initial = style.get_clone();
-        assert_eq!(initial.size.width, Dimension::length(12.));
-        assert_eq!(initial.padding.left, LengthPercentage::length(7.));
-        assert_eq!(initial.margin.top, LengthPercentageAuto::auto());
-        theme.set(Rc::new(
-            Style::new()
-                .width(percent(60.))
-                .height(20.)
-                .row_gap(3.)
-                .overflow_y(Overflow::Hidden)
-                .padding_left(percent(5.))
-                .margin_top(9.)
-                .border_right(2.)
-                .inset_bottom(percent(25.)),
-        ));
-        let current = style.get_clone();
-        assert_eq!(count.get(), 2);
-        assert_eq!(current.size.width, Dimension::percent(0.6));
-        assert_eq!(current.size.height, Dimension::length(20.));
-        assert_eq!(current.gap.height, LengthPercentage::length(3.));
-        assert_eq!(current.overflow.y, Overflow::Hidden);
-        assert_eq!(current.padding.left, LengthPercentage::percent(0.05));
-        assert_eq!(current.margin.top, LengthPercentageAuto::length(9.));
-        assert_eq!(current.border.right, LengthPercentage::length(2.));
-        assert_eq!(current.inset.bottom, LengthPercentageAuto::percent(0.25));
-        theme.set(Rc::new(Style::new()));
-        assert_eq!(style.get_clone(), initial);
-        assert_eq!(count.get(), 3);
-        theme.set(Rc::new(Style::new().width(12.).padding_left(7.)));
-        assert_eq!(style.get_clone(), initial);
-        assert_eq!(count.get(), 3);
-    });
-    drop(owner);
-    assert_eq!(resource_counts(), before);
-}
+fn projected_tokens_publish_one_complete_layout_per_replacement() {
+    #[derive(Clone, Copy, PartialEq)]
+    struct Tokens {
+        width: f32,
+        height: f32,
+        padding: f32,
+    }
 
-#[test]
-fn dynamic_instant_theme_publishes_one_complete_layout_per_replacement() {
     let before = resource_counts();
     let owner = OwnedScope::new();
     owner.run(|| {
-        let theme = Signal::shallow(Rc::new(Style::new()));
-        let fallback = Style::new().width(10.).height(20.).padding((2.,));
-        let mut raw = Style::themed_defaults(*theme, fallback);
+        let initial = Tokens {
+            width: 10.,
+            height: 20.,
+            padding: 2.,
+        };
+        let source = signal(initial);
+        let mut raw = Style::new()
+            .width(source.map(|t| t.width))
+            .height(source.map(|t| t.height))
+            .padding((source.map(|t| t.padding),));
         crate::transition::bind_style(&mut raw);
         let style = raw.build_taffy();
         let count = notifications(style);
-        let initial = style.get_clone();
+        let initial_layout = style.get_clone();
         let computes = crate::layout::style_computes();
-        theme.set(Rc::new(Style::new().width(30.).height(40.).padding((7.,))));
+        source.set(Tokens {
+            width: 30.,
+            height: 40.,
+            padding: 7.,
+        });
         assert_eq!(count.get(), 2);
         assert_eq!(crate::layout::style_computes() - computes, 1);
         let current = style.get_clone();
@@ -265,8 +234,8 @@ fn dynamic_instant_theme_publishes_one_complete_layout_per_replacement() {
                 bottom: LengthPercentage::length(7.),
             }
         );
-        theme.set(Rc::new(Style::new()));
-        assert_eq!(style.get_clone(), initial);
+        source.set(initial);
+        assert_eq!(style.get_clone(), initial_layout);
         assert_eq!(count.get(), 3);
         assert_eq!(crate::layout::style_computes() - computes, 2);
     });

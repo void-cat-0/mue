@@ -1,7 +1,7 @@
 use super::Gesture;
 use crate::{
     event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId},
-    hook::HookFn,
+    hook::CallbackList,
     math::Vector,
 };
 
@@ -28,7 +28,7 @@ pub struct SwipeGesture {
     distance: f32,
     velocity: f32,
     active: Option<(PointerId, Vector, f32)>,
-    pub(crate) on_swipe: HookFn<SwipeEvent>,
+    pub(crate) on_swipe: CallbackList<SwipeEvent>,
 }
 
 impl Default for SwipeGesture {
@@ -46,7 +46,7 @@ impl SwipeGesture {
             distance,
             velocity,
             active: None,
-            on_swipe: HookFn::default(),
+            on_swipe: CallbackList::default(),
         }
     }
 }

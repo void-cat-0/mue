@@ -1,5 +1,6 @@
 use mue_core::prop::PropValue;
-use mue_macroquad::node::{NodePlan, flexbox::render_container};
+use mue_macroquad::node::flexbox::use_container;
+use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
     math::Vector,
     style::{Size, Style, Styleable, StyleableExt},
@@ -42,13 +43,13 @@ impl FloatPlacement {
 /// Position a badge around a parent edge or center, outside normal flow.
 /// Positive offsets move right/down. Add after the parent's other children to paint on top.
 #[mue_macros::node]
-#[theme(placement, offset_x, offset_y)]
 pub fn float(
+    ctx: NodeContext,
     #[default] placement: FloatPlacement,
     #[default(Size::Px(0.))] offset_x: Size,
     #[default(Size::Px(0.))] offset_y: Size,
-) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(
+) -> Node {
+    ctx.finish(
         Style::new()
             .absolute()
             .items_center()
@@ -59,7 +60,7 @@ pub fn float(
             .margin_top(offset_y),
         move |style| {
             mue_macroquad::node::center_on_layout_origin();
-            render_container(style);
+            use_container(style);
         },
     )
 }

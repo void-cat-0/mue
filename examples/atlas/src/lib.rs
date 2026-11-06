@@ -23,7 +23,6 @@ use mue_core::{prelude::*, prop::Prop};
 use mue_macroquad::{
     App,
     font::{self, GlyphAtlasStats, glyph_atlas_stats},
-    node::NodePlan,
     style::{FontSize, Size, Style, Styleable, StyleableExt},
 };
 
@@ -178,8 +177,8 @@ fn stats_line(stats: GlyphAtlasStats) -> String {
 /// A deliberate post-text draw. It forces a queued text batch through the GL
 /// command stream before the framebuffer is captured by `get_screen_data`.
 #[mue_macros::node]
-fn flush_node() -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(Style::default(), |style| {
+fn flush_node(ctx: NodeContext) -> Node {
+    ctx.finish(Style::new(), move |style| {
         style
             .on_render
             .append(|_| unsafe { macroquad::window::get_internal_gl() }.flush());

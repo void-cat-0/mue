@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId},
     gesture::Gesture,
-    hook::HookFn,
+    hook::CallbackList,
     runtime::{TimeoutHandle, set_timeout},
 };
 
@@ -14,7 +14,7 @@ pub struct LongPressGesture {
     active: Option<PointerId>,
     handle: Option<TimeoutHandle>,
 
-    pub(crate) on_long_press: Rc<RefCell<HookFn<()>>>,
+    pub(crate) on_long_press: Rc<RefCell<CallbackList<()>>>,
 }
 
 impl Default for LongPressGesture {
@@ -32,7 +32,7 @@ impl LongPressGesture {
             active: None,
             handle: None,
 
-            on_long_press: Rc::new(RefCell::new(HookFn::default())),
+            on_long_press: Rc::new(RefCell::new(CallbackList::default())),
         }
     }
 

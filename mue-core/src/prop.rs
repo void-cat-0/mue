@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::{
+    effect::computed,
     runtime::Runtime,
     signal::{Access, ReadSignal, Signal, SignalId},
 };
@@ -91,6 +92,89 @@ impl<T: 'static> Prop<T> {
             Self::Static(_) => None,
             Self::Dynamic(signal) => Some(signal.id),
         })
+    }
+}
+
+impl Prop<bool> {
+    /// Choose between two values when this property is true or false.
+    ///
+    /// A static property resolves immediately; a dynamic one creates a derived
+    /// signal, so the result stays bound to the condition.
+    ///
+    /// ```
+    /// use mue_core::prelude::*;
+    ///
+    /// let _ = Scope::null().run(|| {
+    ///     let on = signal(false);
+    ///     let flag: Prop<bool> = on.into();
+    ///     let width = flag.select(10_f32, 4_f32);
+    ///     assert_eq!(width.get(), 4.);
+    ///     on.set(true);
+    ///     assert_eq!(width.get(), 10.);
+    /// });
+    /// ```
+    pub fn select<T: Clone + PartialEq + 'static>(&self, when_true: T, when_false: T) -> Prop<T> {
+        match self {
+            Self::Static(true) => Prop::Static(when_true),
+            Self::Static(false) => Prop::Static(when_false),
+            Self::Dynamic(signal) => Prop::Dynamic(signal.select(when_true, when_false)),
+        }
+    }
+
+    /// Choose between two properties when this property is true or false.
+    ///
+    /// Unlike [`Prop::select`], both branches are properties, so a reactive branch
+    /// keeps updating while it is selected. When both branches are static, the
+    /// result collapses into a single mapped signal.
+    ///
+    /// When a value type has several `Prop` conversions (for example `f32`, which
+    /// also converts to `Size` and `FontSize`), annotate the result type.
+    ///
+    /// ```
+    /// use mue_core::prelude::*;
+    ///
+    /// let _ = Scope::null().run(|| {
+    ///     let selected = signal(false);
+    ///     let accent = signal(1_f32);
+    ///     let panel = signal(2_f32);
+    ///     let background: Prop<f32> = selected.pick(accent, panel);
+    ///     assert_eq!(background.get(), 2.);
+    ///     accent.set(9.);
+    ///     assert_eq!(background.get(), 2.);
+    ///     selected.set(true);
+    ///     assert_eq!(background.get(), 9.);
+    /// });
+    /// ```
+    pub fn pick<T, A, B>(&self, when_true: A, when_false: B) -> Prop<T>
+    where
+        T: Clone + PartialEq + 'static,
+        A: Into<Prop<T>>,
+        B: Into<Prop<T>>,
+    {
+        let when_true = when_true.into();
+        let when_false = when_false.into();
+        match *self {
+            Self::Static(true) => when_true,
+            Self::Static(false) => when_false,
+            Self::Dynamic(signal) => match (when_true, when_false) {
+                (Prop::Static(when_true), Prop::Static(when_false)) => {
+                    Prop::Dynamic(signal.map(move |on| {
+                        if on {
+                            when_true.clone()
+                        } else {
+                            when_false.clone()
+                        }
+                    }))
+                }
+                (when_true, when_false) => Prop::Dynamic(computed(move |_| {
+                    if signal.get() {
+                        when_true.get_clone()
+                    } else {
+                        when_false.get_clone()
+                    }
+                })),
+            },
+        }
     }
 }
 

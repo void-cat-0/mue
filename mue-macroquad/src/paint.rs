@@ -128,6 +128,11 @@ pub struct Paint {
 }
 
 impl Paint {
+    #[cfg(test)]
+    pub(crate) fn effective_opacity(&self) -> f32 {
+        self.opacity.get()
+    }
+
     /// Build cached shapes that update whenever their tracked dependencies change.
     pub fn build(&self, mut f: impl FnMut(&mut ShapesBuilder) + 'static) -> ReadSignal<Rc<Shapes>> {
         let transform = self.transform;
@@ -688,7 +693,7 @@ mod tests {
         parent_scope.run(|| {
             let mut parent = Style::new().opacity(0.5);
             bind_node_style(&mut parent);
-            assert_eq!(parent.opacity.unwrap().get(), 0.5);
+            assert_eq!(parent.declared_opacity().unwrap().get(), 0.5);
             assert_eq!(use_paint(&mut parent).opacity.get(), 0.5);
             assert_eq!(use_paint(&mut parent).opacity.get(), 0.5);
 
@@ -696,7 +701,7 @@ mod tests {
             child_scope.run(|| {
                 let mut child = Style::new().opacity(0.25);
                 bind_node_style(&mut child);
-                assert_eq!(child.opacity.unwrap().get(), 0.25);
+                assert_eq!(child.declared_opacity().unwrap().get(), 0.25);
                 assert_eq!(use_paint(&mut child).opacity.get(), 0.125);
                 assert_eq!(use_paint(&mut child).opacity.get(), 0.125);
 
@@ -751,7 +756,7 @@ mod tests {
             let mut style = Style::new().transform(matrix);
             assert_eq!(use_paint(&mut style).transform.get(), matrix);
             bind_node_style(&mut style);
-            assert_eq!(style.matrix_transform.unwrap().get(), matrix);
+            assert_eq!(style.declared_matrix_transform().unwrap().get(), matrix);
             assert_eq!(use_paint(&mut style).transform.get(), Matrix::IDENTITY);
         });
     }

@@ -1,10 +1,8 @@
 use super::{document::Document, text::render_text};
 use cosmic_text::Weight;
 use mue_core::prop::PropValue;
-use mue_macroquad::{
-    node::NodePlan,
-    style::{Style, Styleable},
-};
+use mue_macroquad::node::{Node, NodeContext};
+use mue_macroquad::style::{Style, Styleable};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -34,13 +32,14 @@ impl HeadingLevel {
 
 /// A bold heading. Font size and line height remain individually styleable.
 #[mue_macros::node]
-#[theme(level)]
-pub fn heading(text: Rc<str>, #[default] level: HeadingLevel) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(
+pub fn heading(ctx: NodeContext, text: Rc<str>, #[default] level: HeadingLevel) -> Node {
+    ctx.finish(
         Style::new()
             .font_weight(Weight::BOLD)
             .font_size(level.map(|level| 32. * level.scale()))
             .line_height(level.map(|level| 44. * level.scale())),
-        move |style| render_text(style, text.map(|text| Document::plain(text.to_string()))),
+        move |style| {
+            render_text(style, text.map(|text| Document::plain(text.to_string())));
+        },
     )
 }

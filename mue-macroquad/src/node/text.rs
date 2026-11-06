@@ -1,3 +1,4 @@
+use super::{Node, NodeContext};
 use crate::node::atlas::{Atlas, DEFAULT_PAGE_SIZE};
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
@@ -155,13 +156,14 @@ fn measured_size(buffer: &Buffer, paragraph_spacing: f32, max_lines: Option<usiz
 
 /// Display a plain reactive string with the renderer's text node.
 #[mue_macros::node]
-#[theme]
-pub fn text(text: Rc<str>) -> super::NodePlan<impl FnOnce(&mut Style)> {
-    let spans = text.map(|value| vec![Span::new(value.to_string())]);
-    super::NodePlan::new(Style::new(), move |style| render_spans(style, spans))
+pub fn text(ctx: NodeContext, text: Rc<str>) -> Node {
+    ctx.finish(Style::new(), move |style| {
+        let spans = text.map(|value| vec![Span::new(value.to_string())]);
+        use_spans(style, spans);
+    })
 }
 
-pub fn render_spans(style: &mut Style, content: Prop<Vec<Span>>) {
+pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
     let layout = use_layout(style);
     let rect = layout.rect;
     let layout_id = layout.layout_id;
@@ -194,7 +196,7 @@ pub fn render_spans(style: &mut Style, content: Prop<Vec<Span>>) {
     let text_underline = style.take_text_underline();
     let color = style
         .declared_color()
-        .or_else(crate::theme::inherited_foreground)
+        .or_else(crate::inherit::inherited_foreground)
         .unwrap_or_else(|| style.take_color());
 
     let metrics = computed(move |_| {

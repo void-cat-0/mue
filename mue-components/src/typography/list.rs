@@ -1,9 +1,10 @@
 use super::text::text;
 use mue_core::{prelude::*, prop::PropValue};
 use mue_macroquad::node::flexbox::flexbox;
-use mue_macroquad::node::flexbox::render_container;
+use mue_macroquad::node::flexbox::use_container;
+use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
-    node::{IntoNode, NodePlan, NodeRef, map_keyed},
+    node::{IntoChildren, IntoNode, NodeRef, map_keyed},
     style::{Style, Styleable, StyleableExt},
 };
 use std::rc::Rc;
@@ -30,9 +31,8 @@ impl ListMarker {
 /// A vertical list of arbitrary child nodes, with bullets or ordered markers.
 /// Marker typography comes from this node's font/color styles; content styles stay local.
 #[mue_macros::node]
-#[theme(marker)]
-pub fn list(#[default] marker: ListMarker) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(Style::new().flex_column().gap(8.), move |style| {
+pub fn list(ctx: NodeContext, #[default] marker: ListMarker) -> Node {
+    ctx.finish(Style::new().flex_column().gap(8.), move |style| {
         let source = mue_macroquad::node::take_children();
         let entries = computed(move |_| {
             source
@@ -47,7 +47,7 @@ pub fn list(#[default] marker: ListMarker) -> NodePlan<impl FnOnce(&mut Style)> 
         let font_weight = style.take_font_weight();
         let color = style
             .declared_color()
-            .or_else(mue_macroquad::theme::inherited_foreground)
+            .or_else(mue_macroquad::inherit::inherited_foreground)
             .unwrap_or_else(|| style.take_color());
         let rows = map_keyed(
             entries,
@@ -74,7 +74,7 @@ pub fn list(#[default] marker: ListMarker) -> NodePlan<impl FnOnce(&mut Style)> 
             },
         );
         mue_macroquad::node::set_children(rows.into_children());
-        render_container(style);
+        use_container(style);
     })
 }
 

@@ -1,7 +1,7 @@
 use crate::{
     event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId},
     gesture::Gesture,
-    hook::HookFn,
+    hook::CallbackList,
 };
 
 pub struct TapGesture {
@@ -9,7 +9,7 @@ pub struct TapGesture {
 
     active: Option<PointerId>,
 
-    pub(crate) on_tap: HookFn<()>,
+    pub(crate) on_tap: CallbackList<()>,
 }
 
 impl Default for TapGesture {
@@ -25,7 +25,7 @@ impl TapGesture {
 
             active: None,
 
-            on_tap: HookFn::default(),
+            on_tap: CallbackList::default(),
         }
     }
 }

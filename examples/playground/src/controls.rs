@@ -9,58 +9,116 @@ use mue_macroquad::{
 };
 use std::rc::Rc;
 
-thread_local! {
-    static DARK_THEME: Signal<bool> = Scope::null().run(|| signal(true));
-    static THEMED_BRUSHES: (ReadSignal<Brush>, ReadSignal<Brush>, ReadSignal<Brush>) =
-        Scope::null().run(|| DARK_THEME.with(|theme| (
-            theme.map(|dark| Brush::Solid(if dark {
-                Color::from_rgba(19, 23, 32, 255)
-            } else {
-                Color::from_rgba(242, 245, 250, 255)
-            })),
-            theme.map(|dark| Brush::Solid(if dark {
-                Color::from_rgba(33, 42, 57, 255)
-            } else {
-                Color::WHITE
-            })),
-            theme.map(|dark| Brush::Solid(if dark {
-                Color::from_rgba(240, 244, 250, 255)
-            } else {
-                Color::from_rgba(31, 41, 55, 255)
-            })),
-        )));
-}
-
+/// Accent colors that stay the same in every theme.
 pub const BLUE: Color = Color::from_rgba(110, 160, 245, 255);
 pub const CORAL: Color = Color::from_rgba(245, 165, 112, 255);
 pub const SPRING: Transition = Transition::spring(0.3, 0.1);
 
-pub fn dark_theme() -> ReadSignal<bool> {
-    DARK_THEME.with(|dark| **dark)
+const CANVAS_LIGHT: Color = Color::from_rgba(242, 245, 250, 255);
+const CANVAS_DARK: Color = Color::from_rgba(19, 23, 32, 255);
+const PANEL_DARK: Color = Color::from_rgba(33, 42, 57, 255);
+const FOREGROUND_LIGHT: Color = Color::from_rgba(31, 41, 55, 255);
+const FOREGROUND_DARK: Color = Color::from_rgba(240, 244, 250, 255);
+
+/// One theme: the same token names, different values.
+struct Palette {
+    brushes: TokenSet<Brush>,
+    colors: TokenSet<Color>,
+    numbers: TokenSet<f32>,
 }
 
+impl Palette {
+    fn register(&self, theme: &Theme) {
+        theme.register(&self.brushes);
+        theme.register(&self.colors);
+        theme.register(&self.numbers);
+    }
+
+    fn apply(&self, theme: &Theme) {
+        theme.apply(&self.brushes);
+        theme.apply(&self.colors);
+        theme.apply(&self.numbers);
+    }
+}
+
+fn light_palette() -> Palette {
+    Palette {
+        brushes: TokenSet::new()
+            .with("canvas", Brush::Solid(CANVAS_LIGHT))
+            .with("panel", Brush::Solid(Color::WHITE))
+            .with("foreground", Brush::Solid(FOREGROUND_LIGHT))
+            .with("tile.panel", Brush::Solid(BLUE))
+            .with("tile.accent", Brush::Solid(CORAL)),
+        colors: TokenSet::new().with("canvas", CANVAS_LIGHT),
+        numbers: TokenSet::new()
+            .with("tile.scale.panel", 1.02_f32)
+            .with("tile.scale.accent", 1.04_f32),
+    }
+}
+
+fn dark_palette() -> Palette {
+    Palette {
+        brushes: TokenSet::new()
+            .with("canvas", Brush::Solid(CANVAS_DARK))
+            .with("panel", Brush::Solid(PANEL_DARK))
+            .with("foreground", Brush::Solid(FOREGROUND_DARK))
+            .with("tile.panel", Brush::Solid(PANEL_DARK))
+            .with("tile.accent", Brush::Solid(BLUE)),
+        colors: TokenSet::new().with("canvas", CANVAS_DARK),
+        numbers: TokenSet::new()
+            .with("tile.scale.panel", 1_f32)
+            .with("tile.scale.accent", 1_f32),
+    }
+}
+
+thread_local! {
+    static DARK: Signal<bool> = Scope::null().run(|| signal(true));
+    // Every token is registered once, at startup; reads only hand out handles.
+    static THEME: Rc<Theme> = Scope::null().run(|| {
+        let theme = Theme::new();
+        if DARK.with(|dark| dark.get()) {
+            dark_palette().register(&theme);
+        } else {
+            light_palette().register(&theme);
+        }
+        Rc::new(theme)
+    });
+}
+
+/// The application theme, shared by every page.
+pub fn theme() -> Rc<Theme> {
+    THEME.with(Rc::clone)
+}
+
+pub fn dark_theme() -> ReadSignal<bool> {
+    DARK.with(|dark| **dark)
+}
+
+/// Switch every token in place; existing bindings update on their own.
 pub fn toggle_theme() {
-    DARK_THEME.with(|dark| dark.toggle());
+    DARK.with(|dark| dark.toggle());
+    let palette = if DARK.with(|dark| dark.get()) {
+        dark_palette()
+    } else {
+        light_palette()
+    };
+    THEME.with(|theme| palette.apply(theme));
 }
 
 pub fn background() -> Prop<Brush> {
-    THEMED_BRUSHES.with(|brushes| brushes.0.into())
+    THEME.with(|theme| theme.get("canvas"))
 }
 
 pub fn panel_brush() -> Prop<Brush> {
-    THEMED_BRUSHES.with(|brushes| brushes.1.into())
+    THEME.with(|theme| theme.get("panel"))
 }
 
 pub fn foreground() -> Prop<Brush> {
-    THEMED_BRUSHES.with(|brushes| brushes.2.into())
+    THEME.with(|theme| theme.get("foreground"))
 }
 
 pub fn background_color() -> Color {
-    if DARK_THEME.with(|theme| theme.get()) {
-        Color::from_rgba(19, 23, 32, 255)
-    } else {
-        Color::from_rgba(242, 245, 250, 255)
-    }
+    THEME.with(|theme| theme.get::<Color>("canvas").get())
 }
 
 pub fn button(label: impl Into<Prop<Rc<str>>>, action: impl FnMut() + 'static) -> Node {
@@ -77,7 +135,7 @@ pub fn tab_button(title: &'static str, selected: Signal<usize>, index: usize) ->
             padding: {(responsive::ui(12.), responsive::ui(7.))};
             min-height: {responsive::ui(44.)};
             border-radius: {responsive::ui(7.)};
-            background: {computed(move |_| if active.get() { Brush::Solid(BLUE) } else { panel.get_clone() })};
+            background: {active.pick(Brush::Solid(BLUE), panel)};
             align-items: center;
             justify-content: center;
         })
@@ -85,7 +143,7 @@ pub fn tab_button(title: &'static str, selected: Signal<usize>, index: usize) ->
         .children(text(title).style(mue_macroquad::style! {
             font-size: {responsive::font(14.)};
             line-height: {responsive::ui(24.)};
-            color: {computed(move |_| if active.get() { Brush::Solid(Color::from_rgba(19, 23, 32, 255)) } else { foreground.get_clone() })};
+            color: {active.pick(Brush::Solid(Color::from_rgba(19, 23, 32, 255)), foreground)};
             text-wrap: {false};
         }))
         .into_node()
@@ -116,6 +174,7 @@ fn sized_button(
         }))
         .into_node()
 }
+
 pub fn toggle(label: &'static str) -> (Signal<bool>, Node) {
     let value = signal(false);
     let control = button(
@@ -124,6 +183,7 @@ pub fn toggle(label: &'static str) -> (Signal<bool>, Node) {
     );
     (value, control)
 }
+
 pub fn choice<T: Clone + PartialEq + 'static>(
     label: &'static str,
     values: Vec<(&'static str, T)>,
@@ -141,6 +201,7 @@ pub fn choice<T: Clone + PartialEq + 'static>(
     );
     (value, control)
 }
+
 pub fn controls(nodes: Vec<Node>) -> Node {
     wrap()
         .style(mue_macroquad::style! {
@@ -150,54 +211,6 @@ pub fn controls(nodes: Vec<Node>) -> Node {
         })
         .children(nodes)
         .into_node()
-}
-
-#[cfg(test)]
-mod theme_brush_tests {
-    use super::*;
-    use mue_core::runtime::resource_counts;
-
-    #[test]
-    fn theme_brushes_share_three_reactive_projections() {
-        let _ = dark_theme();
-        let before = resource_counts();
-        let background_value = background();
-        let panel = panel_brush();
-        let foreground_value = foreground();
-        let initialized = resource_counts();
-        assert_eq!(initialized.signals - before.signals, 3);
-        assert_eq!(initialized.effects - before.effects, 3);
-        for _ in 0..4 {
-            let _ = background();
-            let _ = panel_brush();
-            let _ = foreground();
-        }
-        assert_eq!(resource_counts(), initialized);
-        assert_eq!(
-            background_value.get_clone(),
-            Brush::Solid(Color::from_rgba(19, 23, 32, 255))
-        );
-        assert_eq!(
-            panel.get_clone(),
-            Brush::Solid(Color::from_rgba(33, 42, 57, 255))
-        );
-        assert_eq!(
-            foreground_value.get_clone(),
-            Brush::Solid(Color::from_rgba(240, 244, 250, 255))
-        );
-        toggle_theme();
-        assert_eq!(
-            background_value.get_clone(),
-            Brush::Solid(Color::from_rgba(242, 245, 250, 255))
-        );
-        assert_eq!(panel.get_clone(), Brush::Solid(Color::WHITE));
-        assert_eq!(
-            foreground_value.get_clone(),
-            Brush::Solid(Color::from_rgba(31, 41, 55, 255))
-        );
-        toggle_theme();
-        assert_eq!(resource_counts(), initialized);
-    }
 }
 
 pub fn section(title: &str, content: impl IntoChildren) -> Node {
@@ -215,4 +228,55 @@ pub fn section(title: &str, content: impl IntoChildren) -> Node {
             content,
         ))
         .into_node()
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    use mue_core::runtime::resource_counts;
+
+    #[test]
+    fn token_reads_reuse_the_registered_signals() {
+        let _ = background();
+        let before = resource_counts();
+        for _ in 0..4 {
+            let _ = background();
+            let _ = panel_brush();
+            let _ = foreground();
+            let _ = background_color();
+        }
+        assert_eq!(resource_counts(), before);
+    }
+
+    #[component]
+    fn context_probe() -> impl Component {
+        let theme = Theme::current().expect("theme installed");
+        let _ = theme.get::<Brush>("panel");
+        flexbox()
+    }
+
+    /// Mirrors how the app installs the theme: inside the foreground provider scope.
+    #[test]
+    fn the_theme_is_visible_inside_the_foreground_provider() {
+        use mue_macroquad::node::IntoNode;
+        let node = mue_macroquad::inherit::provide_foreground(foreground(), || {
+            Theme::install(&theme());
+            context_probe().into_node()
+        })
+        .into_node();
+        drop(node);
+    }
+
+    #[test]
+    fn switching_the_theme_updates_existing_handles() {
+        let panel = panel_brush();
+        let canvas = background_color();
+        let initial_panel = panel.get_clone();
+        toggle_theme();
+        assert_ne!(panel.get_clone(), initial_panel);
+        assert_ne!(background_color(), canvas);
+        toggle_theme();
+        assert_eq!(panel.get_clone(), initial_panel);
+        assert_eq!(background_color(), canvas);
+    }
 }

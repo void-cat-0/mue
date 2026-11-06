@@ -14,7 +14,7 @@ use mue_core::{
     signal::{Access, ReadSignal, signal},
 };
 
-use crate::node::{AppBuildContext, IntoNode, Node, NodeRef};
+use crate::node::{IntoNode, Node, NodeRef};
 
 /// A reactive ordered list of borrowed node handles.
 pub type Children = ReadSignal<Rc<[NodeRef]>>;
@@ -23,19 +23,9 @@ pub type Children = ReadSignal<Rc<[NodeRef]>>;
 pub struct ChildrenPlan(Box<dyn FnOnce() -> Owned<Children>>);
 
 impl ChildrenPlan {
-    /// Defer child construction until the parent is ready to mount children.
+    /// Defer child construction until the parent is ready to build its children.
     pub fn new(build: impl FnOnce() -> Owned<Children> + 'static) -> Self {
         Self(Box::new(build))
-    }
-
-    /// Construct and return the owned child list.
-    pub fn mount(self) -> Owned<Children> {
-        (self.0)()
-    }
-
-    /// Compatibility alias for callers that explicitly request eager conversion.
-    pub fn into_children(self) -> Owned<Children> {
-        self.mount()
     }
 }
 
@@ -54,7 +44,7 @@ pub trait IntoChildren: 'static {
 
 impl IntoChildren for ChildrenPlan {
     fn into_children(self) -> Owned<Children> {
-        self.mount()
+        (self.0)()
     }
 
     fn into_children_plan(self) -> ChildrenPlan {
@@ -151,7 +141,6 @@ where
     let list = list.into();
     ChildrenPlan::new(move || {
         let owner_scope = current_scope();
-        let build_context = AppBuildContext::capture();
         // Own callback-created resources for exactly as long as their keyed node.
         // Node is first so its own consumers are dropped before this extra scope.
         let mut node_cache: HashMap<K, (Node, OwnedScope)> = HashMap::new();
@@ -173,7 +162,7 @@ where
                 let entry = previous.remove(&key).unwrap_or_else(|| {
                     owner_scope.run(|| {
                         let scope = OwnedScope::new_inherited();
-                        let node = scope.run(|| build_context.run(|| node_fn(value).into_node()));
+                        let node = scope.run(|| node_fn(value).into_node());
                         (node, scope)
                     })
                 });
@@ -248,7 +237,7 @@ mod tests {
     impl IntoNode for CountedNode {
         fn into_node(self) -> Node {
             self.0.set(self.0.get() + 1);
-            Node::build(|| {})
+            Node::empty()
         }
     }
 
@@ -257,14 +246,14 @@ mod tests {
         let owner = OwnedScope::new();
         owner.run(|| {
             let builds = Rc::new(Cell::new(0));
-            let tuple = (CountedNode(builds.clone()), Node::build(|| {})).into_children_plan();
+            let tuple = (CountedNode(builds.clone()), Node::empty()).into_children_plan();
             let vector =
                 vec![CountedNode(builds.clone()), CountedNode(builds.clone())].into_children_plan();
             let array =
                 [CountedNode(builds.clone()), CountedNode(builds.clone())].into_children_plan();
             assert_eq!(builds.get(), 0);
 
-            let children = join_children((tuple, vector, array)).mount();
+            let children = join_children((tuple, vector, array)).into_children();
             assert_eq!(builds.get(), 5);
             assert_eq!(children.get_clone().len(), 6);
         });
@@ -282,13 +271,13 @@ mod tests {
     fn shared_node_container_keeps_its_owning_semantics() {
         let owner = OwnedScope::new();
         owner.run(|| {
-            let node = Node::build(|| {});
+            let node = Node::empty();
             let expected = *node;
             let nodes: Rc<[Node]> = Rc::from([node]);
             let retained = nodes.clone();
             let plan = nodes.into_children_plan();
             assert_eq!(Rc::strong_count(&retained), 2);
-            let children = plan.mount();
+            let children = plan.into_children();
             assert!(children.get_clone().as_ref() == &[expected]);
             assert_eq!(Rc::strong_count(&retained), 2);
             drop(children);
@@ -303,7 +292,7 @@ mod tests {
             let lists: Rc<[Owned<Children>]> = Rc::from([().into_children()]);
             let source = *lists[0];
             let retained = lists.clone();
-            let children = join_children(lists).mount();
+            let children = join_children(lists).into_children();
             assert!(children.get_clone().is_empty());
             assert!(!source.is_disposed());
             drop(children);
@@ -321,7 +310,7 @@ mod tests {
         let plan = show_if(visible, CountedNode(builds.clone()));
         assert_eq!(builds.get(), 0);
         let owner = OwnedScope::new();
-        let children = owner.run(|| plan.mount());
+        let children = owner.run(|| plan.into_children());
         assert_eq!(builds.get(), 1);
         assert!(children.get_clone().is_empty());
         visible.set(true);
@@ -351,11 +340,11 @@ mod tests {
                 assert_eq!(current_scope().inject::<u32>(), Some(17));
                 let resource = signal(*value);
                 captured.borrow_mut().push((*value, *resource));
-                Node::build(|| {})
+                Node::empty()
             },
         );
         assert!(resources.borrow().is_empty());
-        let children = owner.run(|| plan.mount());
+        let children = owner.run(|| plan.into_children());
         let original = children.get_clone();
         assert_eq!(resources.borrow().len(), 2);
 
@@ -387,9 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn later_keys_restore_the_mount_theme_and_isolate_failed_resources() {
-        use crate::{node::RootBuild, theme::Theme};
-
+    fn later_keys_inherit_the_mount_context_and_dispose_removed_keys() {
         let source_owner = OwnedScope::new();
         let source = source_owner.run(|| signal(Rc::<[i32]>::from([])));
         let owner = OwnedScope::new();
@@ -400,34 +387,33 @@ mod tests {
             source,
             |key| *key,
             move |value| {
-                assert!(RootBuild::new().has_theme());
                 assert_eq!(current_scope().inject::<u32>(), Some(23));
                 let resource = signal(*value);
                 captured.borrow_mut().push(*resource);
-                assert!(*value != 2, "key construction failed");
-                Node::build(|| {})
+                Node::empty()
             },
         );
-        let children = owner
-            .run(|| AppBuildContext::with_theme(Prop::Static(Theme::default()), || plan.mount()));
-        assert!(!RootBuild::new().has_theme());
+        let children = owner.run(|| plan.into_children());
         source.set(Rc::from([1]));
         assert_eq!(children.get_clone().len(), 1);
         assert!(!resources.borrow()[0].is_disposed());
-        assert!(!RootBuild::new().has_theme());
 
+        // A later key is built against the mount context, not the updating one.
         let update_scope = OwnedScope::new();
         update_scope.provide(99u32);
-        update_scope.run(|| {
-            let failed = catch_unwind(AssertUnwindSafe(|| source.set(Rc::from([1, 2]))));
-            assert!(failed.is_err());
-            assert_eq!(current_scope().inject::<u32>(), Some(99));
-            assert!(!RootBuild::new().has_theme());
-        });
-        assert!(resources.borrow()[1].is_disposed());
+        update_scope.run(|| source.set(Rc::from([1, 2])));
+        assert_eq!(children.get_clone().len(), 2);
+        assert!(!resources.borrow()[0].is_disposed());
+        assert!(!resources.borrow()[1].is_disposed());
+
+        update_scope.run(|| source.set(Rc::from([2])));
+        assert_eq!(children.get_clone().len(), 1);
+        assert!(resources.borrow()[0].is_disposed());
+        assert!(!resources.borrow()[1].is_disposed());
+
         drop(children);
         drop(owner);
-        assert!(resources.borrow()[0].is_disposed());
+        assert!(resources.borrow()[1].is_disposed());
         assert!(!source.is_disposed());
     }
 
@@ -441,7 +427,7 @@ mod tests {
             |key| *key,
             move |_| CountedNode(captured.clone()),
         );
-        let result = catch_unwind(AssertUnwindSafe(|| owner.run(|| plan.mount())));
+        let result = catch_unwind(AssertUnwindSafe(|| owner.run(|| plan.into_children())));
         let panic = match result {
             Ok(_) => panic!("duplicate keys were accepted"),
             Err(panic) => panic,

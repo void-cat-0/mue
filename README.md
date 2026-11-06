@@ -3,16 +3,16 @@
 基于 [macroquad](https://macroquad.rs) 的响应式声明式 UI / 组件库，用 Rust 编写。
 布局交给 [taffy](https://github.com/DioxusLabs/taffy)，文本由 [cosmic-text](https://github.com/pop-os/cosmic-text) 排版。
 
-> 本文使用声明式 Theme API；设计边界见[设计摘要](docs/theme-refactor.md) / [实施规格](docs/theme-refactor-implementation.md)。首版仅支持顶层主题，不包含实例 ID、结构选择器或嵌套主题作用域。
+> 通过普通应用 tokens、响应式属性和作用域上下文显式配置外观，见[应用 tokens 与上下文](docs/themes.md)。已确认方向与当前 NodeContext 构建契约见[项目现状与设计记录](docs/project-status.md)；旧主题档案已删除，历史从 Git 查阅。
 
 ## 特性
 
 - **细粒度响应式**：`signal` / `computed` / `watch_effect`，配合 `scope` 自动追踪与释放依赖。
 - **声明式节点树**：`flexbox` / `text` / `image` / `circle`，所有样式属性都可以接收响应式 `Prop`。
-- **组件宏**：`#[mue_macros::component]` 把普通函数变成一个可组合的节点，参数自动支持字面量或 signal。
+- **声明宏**：`#[component]` / `#[node]` 生成可配置的 builder，消耗为节点时同步执行一次，参数自动支持字面量或 signal。
 - **事件与手势**：点击、hover、滚轮、长按、拖动、滑动、双指缩放与旋转，以及基于 taffy 布局的命中测试。
 - **自定义字体**：按字面（family / weight）注册 `ttf` / `otf`，字重本身也能是响应式的。
-- **声明式主题**：显式 opt-in、类型身份与参数 allowlist、完整 class 集合、逐属性级联、顶层主题组合与响应式换肤。
+- **显式外观配置**：应用自定义 tokens，通过 `Prop` / `map` 绑定样式，并用普通 `provide` / `inject` 共享上下文。
 - **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
 - **样式过渡**：节点 `.transition(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
 
@@ -31,7 +31,7 @@
 | `examples/pages` | 页面切换与切换动画。 |
 | `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
 | `examples/style` | style 声明、响应式变换，以及滚动区域、图片、形状、圆和文档组件。 |
-| `examples/theme` | 练习计数、响应式按钮参数、class 集合、显式 hover 与明暗主题切换。 |
+| `examples/theme` | 练习计数、应用 tokens、响应式按钮参数、显式 hover 与明暗切换。 |
 | `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
 | `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
 | `examples/navigation` | 导航栈、自适应双栏、返回、深链接与页面状态保留。 |
@@ -60,36 +60,54 @@ cargo run -p color
 cargo run -p playground
 ```
 
-声明直接创建 builder；用 `#[theme(...)]` 显式开放类型身份及所列参数，`theme!` 以生成的 CamelCase 类型别名匹配：
+`#[component]` / `#[node]` 都生成 builder；调用构造器和 setter 只配置输入，不执行声明 body。消耗式 `into_node()` 同步构建一次，`App::new` 会为根 builder 调用这一转换。组件 body 在节点 scope 内执行并返回另一个 builder，参数在 body 内是响应式 `Prop`。用 `map` 或 `computed` 把状态显式映射为样式：
 
 ```rust
-use std::{collections::HashSet, rc::Rc};
+use std::rc::Rc;
+use mue_core::prelude::*;
 use mue_components::prelude::*;
-use mue_macroquad::{App, theme::{Themeable, class, theme}};
+use mue_macroquad::style::{Styleable, StyleableExt};
 
 #[component]
-#[theme(primary)]
 fn button(caption: Rc<str>, #[default] primary: bool) -> impl Component {
-    let _ = primary;
     text(caption)
+        .padding((12.,))
+        .opacity(primary.map(|value| if value { 1. } else { 0.7 }))
+        .with_hovered(|view, hovered| view.radius(hovered.select(12., 8.)))
 }
 
-let appearance = theme! {
-    Button { color: white; padding: 12px; }
-    Button[$primary] { background: blue; }
-    Button.selected[$primary]:hover { opacity: 80%; }
-};
-let app = App::with_theme(appearance, || {
-    button("Hello")
-        .primary(true)
-        .classes(HashSet::from([class!("selected")]))
-        .enable_hovered()
-});
+let view = button("Hello").primary(true);
 ```
 
-`App::with_theme` 在执行根构建闭包前安装唯一顶层主题，接受 `Theme`、`Signal<Theme>` / `ReadSignal<Theme>`；多个规则模块用 `Theme::compose` 有序组合。替换信号值只更新已有节点的样式，不重建视图或重置局部状态。规则退出后按逐属性级联恢复低层默认值。
+共享外观由应用自定义 tokens 结构体，通过普通参数或 `mue_core::scope::provide` / `inject` 传递；消费者把 `Prop` 或 `map` 的结果交给样式 setter。读取 `get()` / `get_clone()` 后传入普通值只会设置当时的快照，持续更新须保留绑定。完整示例见[应用 tokens 与上下文](docs/themes.md)。
 
-`.classes(...)` 替换完整 `HashSet<ClassName>`，`class!` 在编译期校验名称；动态条件由调用方派生整集合。`:hover` 需要显式 `.enable_hovered()`，无主题的普通 builder 也能通过 `.with_hovered(|view, hovered| ...)` 直接使用只读 hover 信号。完整规则及级联见 [主题教程](docs/themes.md)，自定义 `NodePlan` 见 [组件教程](docs/components.md)。
+组件函数在节点 scope 中同步执行一次，可局部 `provide`，也可创建 `map`、`computed`、signal 和 effect；这些资源随节点清理。响应式更新只更新已有绑定，不重跑 body。共享源由活得足够久的作用域拥有，复制 signal/Prop/Scope 句柄不延长其资源生命周期。构建期间发生 panic 不做恢复：panic 直接向外传播，未完成的节点、其 owner 以及已注册的布局/手势条目都不会被回收，节点栈也不回退，本库没有任何 catch_unwind 路径。释放只发生在正常的显式 `drop`（未消费的 builder/plan）或构建成功完成时；请把构建 panic 当作进程级致命错误，而不是可恢复错误。`Scope::run` 只安装同步代码的当前 scope，future 在以后 poll 或 `await` 后不会自动继承它；异步任务应显式捕获输入并管理取消与 owner 存活，UI 更新仍在 UI 线程执行。
+
+自定义终端节点声明的第一个参数由宏按位置注入 `NodeContext`，可以使用任意简单标识符，例如 `ctx: NodeContext`。函数体通过 `ctx.finish(defaults, body)` 返回真实 `Node`。公开的 `spacer()` 构造器仍返回 builder，调用方无需传入 `ctx`：
+
+```rust
+use mue_components::node;
+use mue_macroquad::{
+    layout::use_layout,
+    node::{Node, NodeContext},
+    style::{Style, Styleable},
+};
+
+#[node]
+fn spacer(ctx: NodeContext, #[default(8.)] height: f32) -> Node {
+    ctx.finish(Style::new().height(height), move |style| {
+        use_layout(style);
+    })
+}
+
+let view = spacer().height(12.);
+```
+
+`#[node]` 函数体在节点 scope 中同步执行一次。`ctx.finish` 先合并默认样式，绑定 transition、opacity、font、transform，再在父 scope 中物化声明的 children 计划，再执行 `move |style| { ... }` 初始化布局、绘制和事件消费者，随后挂接 hooks。在作者 body 或 component body 中于 `ctx.finish` 之前完成共享 `provide` / context 设置；`body` 回调中操作的是已物化的 children。`Style` 使用普通字段，hook 可通过 `style.on_render.append(callback)` 等公开字段注册，链式 `.on_render(...)` 仍可用。留存的 hooks、effects 和事件回调仍须满足自身的 `'static` 约束。调用方和外层组件的显式样式覆盖内层返回 builder 的样式，其次是节点默认样式，再其次是框架默认值或继承；同一 builder 的同一属性后写覆盖先写。
+
+`.children(...)` 只保留 `ChildrenPlan`；父节点在 `finish` 中先安装 context 并绑定样式，再同步物化各自拥有独立 owner 的 children，随后执行 `body` 回调。`map_keyed` 后续新增项恢复父 context，同 key 保留原节点与局部状态，移除 key 释放资源；同 key 的内容变化需显式响应式绑定。`show_if` 在计划物化时构建一次，即使初始为 false；隐藏只改变可见列表，节点和状态保留到 owner 释放。预构建 `Node` 保留原构建 context。详见[组件与节点教程](docs/components.md)。
+
+文本子树前景继承使用 `mue_macroquad::inherit::provide_foreground`；它接受显式 `Prop<Brush>` 输入，节点自身的颜色设置优先。
 
 在 `macroquad` 的窗口回调里构建并驱动一棵节点树：
 
@@ -249,9 +267,9 @@ let label = text("Hello")
 
 实现 `mue_macroquad::transition::Interpolatable` 可以扩展可过渡值。`App::frame` 会在布局前调用 `mue_macroquad::transition::advance(dt)`。
 
-更完整的[主题](docs/themes.md)、[组件声明](docs/factories.md)、[自定义节点](docs/components.md)和示例说明位于 [`docs/`](docs/)。
+更完整的[应用 tokens 与上下文](docs/themes.md)、[组件声明](docs/factories.md)、[自定义节点](docs/components.md)和[示例说明](docs/examples.md)位于 [`docs/`](docs/)。
 
-`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、class 切换，以及由顶层动态主题驱动的颜色过渡。
+`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、显式状态样式，以及由应用 tokens 驱动的颜色过渡。
 
 ## 同级页面
 
@@ -474,7 +492,7 @@ let view = scroll_area()
 
 ## 示例与交互练习
 
-`cargo run -p playground` 打开按页分组的交互练习：布局、排版、图形、动画、滚动、输入与主题。
+`cargo run -p playground` 打开按页分组的交互练习：布局、排版、图形、动画、滚动、输入与应用外观配置。
 属性可单独切换，数值属性使用弹簧动画；底部可以前进、后退、切换过渡方向与分栏。
 滚动页提供分页和 `ScrollOptions` 的各项输入/物理参数。配置选项切换会重建相应视口，
 共享 offset 保留并重新限制滚动位置。其他示例只保留各自主题需要的代码。

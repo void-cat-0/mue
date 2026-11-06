@@ -1,7 +1,11 @@
 //! A custom GPU material can live inside an ordinary Mue node.
 use macroquad::prelude::*;
 use mue_core::prelude::*;
-use mue_macroquad::{layout::use_layout, node::NodePlan, style::Style};
+use mue_macroquad::{
+    layout::use_layout,
+    node::{Node, NodeContext},
+    style::Style,
+};
 
 // Macroquad queues draws but deletes a material's pipeline as soon as it is dropped.
 // Submit any pending draws before a departing page releases its material.
@@ -38,25 +42,25 @@ void main() {
 "#;
 
 #[mue_components::node]
-pub fn halftone(density: f32, moving: bool) -> NodePlan<impl FnOnce(&mut Style)> {
-    let material = PageMaterial(
-        load_material(
-            ShaderSource::Glsl {
-                vertex: VERTEX,
-                fragment: FRAGMENT,
-            },
-            MaterialParams {
-                uniforms: vec![
-                    UniformDesc::new("time", UniformType::Float1),
-                    UniformDesc::new("density", UniformType::Float1),
-                    UniformDesc::new("origin", UniformType::Float2),
-                ],
-                ..Default::default()
-            },
-        )
-        .expect("halftone material"),
-    );
-    NodePlan::new(Style::new(), move |style| {
+pub fn halftone(ctx: NodeContext, density: f32, moving: bool) -> Node {
+    ctx.finish(Style::new(), move |style| {
+        let material = PageMaterial(
+            load_material(
+                ShaderSource::Glsl {
+                    vertex: VERTEX,
+                    fragment: FRAGMENT,
+                },
+                MaterialParams {
+                    uniforms: vec![
+                        UniformDesc::new("time", UniformType::Float1),
+                        UniformDesc::new("density", UniformType::Float1),
+                        UniformDesc::new("origin", UniformType::Float2),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .expect("halftone material"),
+        );
         let rect = use_layout(style).rect;
         let mut time = 0.;
         style.on_render.append(move |_| {

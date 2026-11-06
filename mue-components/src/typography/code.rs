@@ -1,23 +1,24 @@
 use super::{document::Document, text::render_text};
 use cosmic_text::FamilyOwned;
+use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
     color::Color,
-    node::NodePlan,
     style::{Style, Styleable},
 };
 use std::rc::Rc;
 
 /// A short monospace code fragment. For inline rich text use `Span::monospace`.
 #[mue_macros::node]
-#[theme]
-pub fn code(text: Rc<str>) -> NodePlan<impl FnOnce(&mut Style)> {
-    NodePlan::new(
+pub fn code(ctx: NodeContext, text: Rc<str>) -> Node {
+    ctx.finish(
         Style::new()
             .font_family(FamilyOwned::Monospace)
             .padding_x(6.)
             .padding_y(2.)
             .radius(4.)
             .background(Color::from_rgba(128, 128, 128, 28)),
-        move |style| render_text(style, text.map(|text| Document::plain(text.to_string()))),
+        move |style| {
+            render_text(style, text.map(|text| Document::plain(text.to_string())));
+        },
     )
 }
