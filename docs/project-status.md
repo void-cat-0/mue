@@ -1,6 +1,6 @@
 # 项目现状与设计记录
 
-更新：2026-11-05。记录 `async-task` 分支当前工作树；theme 移除与同步 builder 重构已实施。本轮节点构建上下文类型改为 `NodeContext`，`#[node]` 首参按位置注入且参数名可自由选择；`scope()`、`push_style()` 方法名保持不变；本轮把 `mount()` 更名为 `finish()`，回调参数名由 `init` 改为 `body`；同时删除节点构建的 panic 清理 guard，panic 一律向外传播。Cargo、格式和 diff 验证均通过。
+更新：2026-11-08。记录 `async-task` 分支当前工作树；theme 移除与同步 builder 重构已实施。本轮将前台 task 生命周期改为 caller-owned：Scope dispose 不再登记/自动取消任务；句柄 drop 取消，detach 交给 executor 管理。新增 signal/prop fallible access API，并记录 derived dependency 仍需有效的边界。此前节点构建上下文采用 `NodeContext`，`#[node]` 首参按位置注入且参数名可自由选择；`mount()` 更名为 `finish()`；构建 panic 清理 guard 删除，panic 向外传播。当前 scope 分离已实现，workspace 测试、all-target 检查和格式检查均通过，详见下文。
 
 ## 已确认的方向
 
@@ -50,7 +50,20 @@ fn stack(ctx: NodeContext) -> Node {
 
 节点拥有本次构建创建的资源；构建 panic 不做恢复：本库不使用 `catch_unwind`，也不保留 panic 清理 guard，未完成的节点及其 owner、已注册的布局/手势条目都会留下，节点栈不回退。`Scope`、signal 与动态 `Prop` 句柄本身不保活 owner。`OwnedScope::new_inherited()` 继承上下文查找，不继承资源所有权。
 
-`Scope::run` 只安装同步上下文，future 以后 poll 或 `await` 后不会自动恢复它。异步计算/加载仍需独立设计 owner、取消、完成结果的有效性和 UI 线程更新；保留延迟 children 不等于提供异步任务能力。
+2026-11-08 最新 Task 重构已实现：`Task<T>` 直接持有 `async_task::Task<T>`，await 直接产出 `T`，所以 `Task<Result<T, E>>` 直接得到业务 `Result<T, E>`，不再经过 oneshot 结果转发或 Task 内的 `Rc` finished 标志。句柄持有共享 token（原线程、全局唯一 runnable key、原 ready queue 与 cleanup-complete 原子标志）；取消直接操作 async-task allocation，不再解释调用线程的 SlotMap key。executor 的 token/waker registry 仅用于 task 结束反注册和 shutdown 唤醒清理。普通 `spawn` 不创建 `OwnedScope`、不继承 context；每次 poll 与 future 析构都运行在 `Scope::null` + `Runtime::without_effect` 下，不存在 ambient tracker / `current_effect`，正常返回时还原调用方状态。`scope_future(future)` 是显式 opt-in：包装时立即创建独立 `OwnedScope::new_inherited()`，以弱父级链接查找 context，不保活父级也不快照 context；wrapper 在 poll 与 inner future 析构时安装自己的 scope，并于 Ready 返回前析构 inner future 和 owner，即使 wrapper 被保留。wrapper 本身不要求 `'static`，但因 owner 而 `!Send + !Sync`；standalone 只控制 scope/ownership，任务执行隔离来自 `spawn`。仅在 wrapper 下实际创建的资源归其 owner；预创建捕获资源不转移所有权，输出中的局部 reactive handles 在完成后失效。Effect callbacks rerun 时不恢复其创建 scope。creator scope dispose 不会自动取消 task；drop 取消，detach 交 executor 管理。`is_finished()` 在 future 与 opt-in scope 清理完成后才为 true。完成后重复 poll，以及 await 在 executor shutdown 时被强行终止的 task，都会 panic；未增加 fallible Task API，panic 不恢复。`AsyncResource` 继续持有状态 owner 与 task 并在自身 drop 时取消；输入 operation 仍遵循普通 `spawn` 语义，除非 caller 显式包装 `scope_future`。`detach_and_report` 使用无自动 scope / context 继承的独立 reporter 生命周期。此前加入 `ReadSignal` / `Prop` fallible read、`Signal::try_set`，供可能跨 owner 生命周期的任务安全访问直接 disposed 的 reactive handle；仍存活的 derived signal 若依赖已 disposed signal，其重算仍遵守常规生命周期约束。
+
+Reactive / Node 句柄保留 Copy 语义并通过 !Send / !Sync 标记限制跨线程。前台 future 仍允许为 `!Send`，只在原 UI 线程 poll 与析构；`Task<T>` 在 `T: Send` 时则可跨线程移动、await/drop，future 与 task-local resources 清理由原线程执行，不会把 future 移到调用线程或在那里 poll；已完成的 output 则可在观察者线程消费/析构。跨线程 drop 后原线程下一次 tick 或 shutdown 完成取消清理。`App::frame` 在 timeouts 后、layout 前驱动最多 32 个 ready task；本 tick 中产生的 wake 留到下个 tick。App 在构建根节点前安装宿主 wake callback。`AsyncResource<T, E>` 显式持有状态 owner 与任务，暴露 Loading / Ready(Result) 响应式状态，替换或 drop 时取消，生命周期与普通 OwnedScope 一致，不因为创建时的临时 scope 结束而释放。独立 dispose 的 signal 及捕获其他 owner 的句柄仍须遵守原生命周期契约。
+
+Scope teardown 顺序修复已实现：先标记 owned scope 子树正在销毁，并排空普通 effect 与 computed producer 的 cleanup，再释放该子树资源。Cleanup 可读取仍存活的本树 signals，读取 dirty computed 新产生的 cleanup 也在资源释放前排空；scope context 保留到本 scope 资源和 descendants 析构之后。清理期间不支持创建响应式资源、重挂 scope 或修改正在销毁的 reactive graph；cleanup panic 仍按 panic-fatal 策略处理。最终验证通过：`cargo test --workspace --offline`（mue-core 92 passed、1 ignored，普通 doctest 6 passed、compile-fail doctest 19 passed；所有 workspace tests/doctests 通过）、`cargo check --workspace --all-targets --offline`、edition 2024 Rustfmt 与 `git diff --check`。新增回归覆盖父子 scope cleanup 双向读取、重复 dispose、同 scope computed cleanup、dirty computed cleanup drain、ScopedFuture 完成/取消、创建资源的早期拒绝和 context 析构顺序。使用说明见 [前台任务](tasks.md)。
+
+### 已知限制（未修复）
+
+以下边界在当前实现中仍存在，本轮只记录契约，不改变行为；框架自身路径不会触发。
+
+- **任务 poll/drop 继承 `UpdateContext`**：`Runtime::without_effect` 只清 tracker / `current_effect`，`UpdateContext` 是独立 TLS。若在 `with_update_context(...)` 内调用 `tick` 或 `Task::drop`，任务写入及 future 析构写入会把该 metadata 传给下游 effect。当前生产代码没有调用 `with_update_context`，属于潜在契约问题。若任务应完全隔离，应在 `without_effect` 中保存/清空/恢复 `UpdateContext`，并在 `Executor::new` 初始化 `UpdateContext::current()` 以固定 TLS 析构顺序；若希望 metadata 传播，则应写入任务契约。
+- **executor TLS 析构期间 `spawn`/`tick` 会 abort**：`Executor::drop` 运行时 executor TLS 已标记 destroyed；future 析构器若调用 `spawn`/`tick`，会在 async-task 的 `abort_on_panic` 中触发进程 abort。框架自身析构器不这样做。当前契约是 shutdown 期间不要提交新任务；可选的后续方案是新增 fallible `try_spawn`/`try_tick`，未实现。
+- **`ScopedFuture` 不得比 reactive runtime 活得更久**：wrapper 绑定当前线程 runtime；若存入比 runtime 更晚销毁的 TLS 槽位，`Drop` 的 `owner.run(...)` 会因 scope 已不存在而 panic，TLS 析构中的 panic 通常 abort。当前契约是不要这样存储；可选的后续方案是 `Drop` 的 best-effort leak guard，未实现。
+- **panic 不恢复**：捕获任务 poll panic 后 `tick` 的 `in_tick` 会保持 true，ambient scope/tracker 也可能残留；不要在捕获 panic 后继续复用 runtime。
 
 ## 验证与历史入口
 

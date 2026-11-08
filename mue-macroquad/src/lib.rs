@@ -17,6 +17,11 @@ mod viewport;
 
 pub use app::App;
 
+/// Install a callback for waking a blocking host event loop when a task is woken.
+pub fn set_task_wake_callback(callback: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+    mue_core::task::set_wake_callback(callback);
+}
+
 pub use mue_macros::style;
 
 #[doc(hidden)]

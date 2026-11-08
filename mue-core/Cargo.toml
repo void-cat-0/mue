@@ -11,9 +11,13 @@ impl-taffy = ["taffy"]
 impl-cosmic-text = ["cosmic-text"]
 
 [dependencies]
+async-task = "4.7.1"
 slotmap = { workspace = true }
 smallvec = { workspace = true }
 type-map = "0.5.1"
 
 cosmic-text = { workspace = true, optional = true }
 taffy = { workspace = true, optional = true }
+
+[dev-dependencies]
+futures-channel = "0.3.34"

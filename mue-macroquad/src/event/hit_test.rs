@@ -122,7 +122,7 @@ pub(crate) mod tests {
                 }
                 node.register()
             });
-            Self(NodeRef { id })
+            Self(NodeRef::from_id(id))
         }
     }
     impl Drop for TestNode {

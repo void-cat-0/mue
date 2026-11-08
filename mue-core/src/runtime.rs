@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell, RefMut},
+    collections::HashSet,
     mem,
     thread::AccessError,
 };
@@ -7,7 +8,10 @@ use std::{
 use slotmap::{Key, SlotMap};
 
 use crate::{
-    effect::{Dependencies, DependencyList, EffectCallback, EffectId, EffectInner, EffectState},
+    effect::{
+        CleanupCallback, Dependencies, DependencyList, EffectCallback, EffectId, EffectInner,
+        EffectState,
+    },
     scope::{ScopeId, ScopeInner},
     signal::{SignalId, SignalInner, Value},
 };
@@ -164,6 +168,17 @@ impl Runtime {
         RefMut::map(self.effects.borrow_mut(), |arena| &mut arena[effect_id])
     }
 
+    // Tasks execute independently of any effect that happens to drive/cancel them.
+    // As with Scope::run, panic recovery is not supported.
+    pub(crate) fn without_effect<R>(&self, f: impl FnOnce() -> R) -> R {
+        let previous_tracker = self.tracker.replace(None);
+        let previous_effect = self.current_effect.replace(None);
+        let result = f();
+        self.current_effect.replace(previous_effect);
+        self.tracker.replace(previous_tracker);
+        result
+    }
+
     pub fn track(&self, signal_id: SignalId) {
         if let Some(tracker) = self.tracker.borrow_mut().as_mut() {
             tracker.push(signal_id);
@@ -259,7 +274,7 @@ impl Runtime {
         };
         drop(run);
 
-        if updated {
+        if updated && self.signals.borrow().contains_key(signal_id) {
             update_context.run(|| self.on_update(signal_id));
         }
 
@@ -378,6 +393,82 @@ impl Runtime {
             self.flush_updates();
         }
         self.batch_depth.set(depth);
+    }
+
+    pub(crate) fn begin_scope_disposal(&self, root: ScopeId) -> Option<Vec<ScopeId>> {
+        let mut scopes = self.scopes.borrow_mut();
+        if scopes.get(root)?.disposing {
+            return None;
+        }
+        let mut scope_ids = vec![root];
+        let mut index = 0;
+        while index < scope_ids.len() {
+            if let Some(scope) = scopes.get(scope_ids[index]) {
+                scope_ids.extend(scope.subscopes.iter().copied());
+            }
+            index += 1;
+        }
+        for scope_id in &scope_ids {
+            if let Some(scope) = scopes.get_mut(*scope_id) {
+                scope.disposing = true;
+            }
+        }
+        Some(scope_ids)
+    }
+
+    pub(crate) fn take_scope_cleanups(
+        &self,
+        scope_ids: &[ScopeId],
+    ) -> Vec<(ScopeId, CleanupCallback)> {
+        let mut effect_scopes = Vec::new();
+        let mut seen = HashSet::new();
+        {
+            let scopes = self.scopes.borrow();
+            let signals = self.signals.borrow();
+            for scope_id in scope_ids {
+                let Some(scope) = scopes.get(*scope_id) else {
+                    continue;
+                };
+                for effect_id in &scope.effects {
+                    if seen.insert(*effect_id) {
+                        effect_scopes.push((*scope_id, *effect_id));
+                    }
+                }
+                for signal_id in &scope.signals {
+                    if let Some(effect_id) =
+                        signals.get(*signal_id).and_then(|signal| signal.effect)
+                        && seen.insert(effect_id)
+                    {
+                        effect_scopes.push((*scope_id, effect_id));
+                    }
+                }
+            }
+        }
+        let mut effects = self.effects.borrow_mut();
+        effect_scopes
+            .into_iter()
+            .filter_map(|(scope_id, effect_id)| {
+                let effect = effects.get_mut(effect_id)?;
+                Some((scope_id, mem::take(&mut effect.cleanups)))
+            })
+            .flat_map(|(scope_id, cleanups)| {
+                cleanups.into_iter().map(move |cleanup| (scope_id, cleanup))
+            })
+            .collect()
+    }
+
+    pub(crate) fn assert_resource_creation_allowed(&self) {
+        crate::scope::current_scope().assert_not_disposing();
+    }
+
+    pub(crate) fn assert_scope_not_disposing(&self, scope_id: ScopeId) {
+        assert!(
+            self.scopes
+                .borrow()
+                .get(scope_id)
+                .is_some_and(|scope| !scope.disposing),
+            "Cannot create reactive resources in a disposing scope"
+        );
     }
 
     /// Dispose a signal, removing it and cleaning up all dependencies.

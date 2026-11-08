@@ -7,6 +7,7 @@ pub use crate::{
     },
     prop::{Prop, PropValue},
     runtime::batch,
-    scope::{OwnedScope, Scope, current_scope},
+    scope::{OwnedScope, Scope, ScopedFuture, current_scope, scope_future},
     signal::{Access, ReadSignal, Signal, signal},
+    task::{AsyncResource, AsyncState, Task, spawn},
 };
