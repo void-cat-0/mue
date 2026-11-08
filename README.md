@@ -81,7 +81,11 @@ let view = button("Hello").primary(true);
 
 共享外观由应用自定义 tokens 结构体，通过普通参数或 `mue_core::scope::provide` / `inject` 传递；消费者把 `Prop` 或 `map` 的结果交给样式 setter。读取 `get()` / `get_clone()` 后传入普通值只会设置当时的快照，持续更新须保留绑定。完整示例见[应用 tokens 与上下文](docs/themes.md)。
 
-组件函数在节点 scope 中同步执行一次，可局部 `provide`，也可创建 `map`、`computed`、signal 和 effect；这些资源随节点清理。响应式更新只更新已有绑定，不重跑 body。共享源由活得足够久的作用域拥有，复制 signal/Prop/Scope 句柄不延长其资源生命周期。构建期间发生 panic 不做恢复：panic 直接向外传播，未完成的节点、其 owner 以及已注册的布局/手势条目都不会被回收，节点栈也不回退，本库没有任何 catch_unwind 路径。释放只发生在正常的显式 `drop`（未消费的 builder/plan）或构建成功完成时；请把构建 panic 当作进程级致命错误，而不是可恢复错误。`Scope::run` 只安装同步代码的当前 scope，future 在以后 poll 或 `await` 后不会自动继承它；异步任务应显式捕获输入并管理取消与 owner 存活，UI 更新仍在 UI 线程执行。
+组件函数在节点 scope 中同步执行一次，可局部 `provide`，也可创建 `map`、`computed`、signal 和 effect；这些资源随节点清理。响应式更新只更新已有绑定，不重跑 body。共享源由活得足够久的作用域拥有，复制 signal/Prop/Scope 句柄不延长其资源生命周期。构建期间发生 panic 不做恢复：panic 直接向外传播，未完成的节点、其 owner 以及已注册的布局/手势条目都不会被回收，节点栈也不回退，本库没有任何 catch_unwind 路径。释放只发生在正常的显式 `drop`（未消费的 builder/plan）或构建成功完成时；请把构建 panic 当作进程级致命错误，而不是可恢复错误。
+
+`Scope::run(|| async { ... })` 只安装创建 future 时的同步上下文。前台异步任务使用 `mue_core::spawn`：它不创建 `OwnedScope`、不继承 context，每次 poll 和 future 析构都在 `Scope::null` 与 `Runtime::without_effect` 下执行，没有 ambient tracker / `current_effect`，正常返回时还原调用方上下文。需要操作级资源所有权和 context 查找时，显式使用 `scope_future(future)` 或 `spawn(scope_future(future))`。包装时创建独立的 `OwnedScope::new_inherited()`，父级只是弱引用查找，既不保活也不做快照；包装器在 poll / 析构时安装自己的 scope，完成时在返回输出前释放 inner future 和 owner，即使保留已完成的包装器也一样。只有在该 scope 下实际创建的资源受它拥有，预先创建后捕获的资源不会转移所有权；返回的局部 reactive handle 在完成后已经失效。单独使用包装器只管理 scope 和所有权，任务执行的 tracker 隔离来自 `spawn`。普通 task 内新建的 reactive resources 需要显式 owner 或手动 dispose，句柄 drop 不会自动清理。Effect 重跑也不恢复创建时的 scope。
+
+调用方持有 `Task<T>` 以控制任务生命周期；创建 scope 的释放不会取消任务，句柄 drop 会取消，`detach()` 将其交给 executor 管理。`Task<T>.await` 直接得到 `T`，业务失败可用 `Result<T, E>` 表达。`Task<T>` 在 `T: Send` 时可跨线程移动和 await/drop，但其非 `Send` future 仍由原线程 poll，清理也在 UI 线程执行。`AsyncResource<T, E>` 自己持有状态 owner 与任务，状态保留到 resource drop；输入操作仍遵守普通 `spawn` 语义，除非调用方显式传入 `scope_future(...)`。`App::frame` 在布局前有限驱动任务，长计算或同步 I/O 仍会阻塞 UI。详见[前台任务](docs/tasks.md)。
 
 自定义终端节点声明的第一个参数由宏按位置注入 `NodeContext`，可以使用任意简单标识符，例如 `ctx: NodeContext`。函数体通过 `ctx.finish(defaults, body)` 返回真实 `Node`。公开的 `spacer()` 构造器仍返回 builder，调用方无需传入 `ctx`：
 

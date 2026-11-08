@@ -3,7 +3,10 @@ use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 use macroquad::prelude::{Conf, Texture2D, clear_background, next_frame};
-use mue_core::prelude::*;
+use mue_core::{
+    prelude::*,
+    task::{AsyncResource, AsyncState},
+};
 use mue_macroquad::{
     App,
     color::Color,
@@ -33,6 +36,13 @@ async fn run() {
         Texture2D::from_file_with_format(include_bytes!("../assets/ferris.png"), None).into();
     let count = signal(3usize);
     let large = signal(false);
+    let greeting =
+        AsyncResource::<String, &'static str>::new(async { Ok("Async task completed".to_owned()) });
+    let greeting_text = greeting.state().map(|state| match state {
+        AsyncState::Loading => "Loading task...".to_owned(),
+        AsyncState::Ready(Ok(text)) => text,
+        AsyncState::Ready(Err(error)) => format!("Task failed: {error}"),
+    });
     // Keys preserve each image node when the list grows or shrinks.
     let images = map_keyed(
         count.map(|n| (0..n).collect::<std::rc::Rc<[usize]>>()),
@@ -71,6 +81,10 @@ async fn run() {
                         }),
                         text("Space Mono · 400").style(mue_macroquad::style! {
                         font-family: {mono.clone()};
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(28.)};
+                        }),
+                        text(greeting_text).style(mue_macroquad::style! {
                         font-size: {responsive::font(20.)};
                         line-height: {responsive::ui(28.)};
                         }),

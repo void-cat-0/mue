@@ -1,4 +1,4 @@
-use std::{ops::Deref, slice};
+use std::{marker::PhantomData, ops::Deref, rc::Rc, slice};
 
 use slotmap::{Key, new_key_type};
 use smallvec::SmallVec;
@@ -93,27 +93,47 @@ impl EffectInner {
     }
 
     pub fn register(self, rt: &Runtime) -> EffectId {
+        rt.assert_resource_creation_allowed();
         rt.effects.borrow_mut().insert(self)
     }
 }
 
+/// A disposable handle to a reactive effect, confined to its runtime thread.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::effect::Effect>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::effect::Effect>();
+/// ```
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Effect {
     pub(crate) id: EffectId,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl Effect {
     pub(crate) fn new(id: EffectId) -> Self {
         CURRENT_SCOPE.with_borrow_mut(|scope| {
-            scope.push_effect(Self { id });
+            scope.push_effect(Self {
+                id,
+                _thread_affinity: PhantomData,
+            });
         });
-        Self { id }
+        Self {
+            id,
+            _thread_affinity: PhantomData,
+        }
     }
 
     pub fn null() -> Self {
         Self {
             id: EffectId::null(),
+            _thread_affinity: PhantomData,
         }
     }
 
@@ -141,6 +161,7 @@ pub fn watch<T: 'static>(
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f(signal);
@@ -167,6 +188,7 @@ pub fn watch_immediate<T: 'static>(
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f(Prop::Dynamic(signal));
@@ -192,6 +214,7 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f();
@@ -211,7 +234,10 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
 }
 
 /// Register a cleanup function to be called when the current effect is re-run or disposed.
-/// This function should only be called within an effect callback.
+/// During scope disposal, owned effects and computed producers are cleaned before their
+/// scope tree signals are removed, so cleanup may read those live signals. Teardown
+/// cleanup must not create reactive resources or mutate the disposing graph. This
+/// function should only be called within an effect callback.
 ///
 /// # Example
 /// ```
@@ -241,6 +267,7 @@ fn create_computed<T: 'static>(callback: EffectCallback) -> ReadSignal<T> {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let signal_id = SignalInner::new(
             None,
             None,
@@ -294,15 +321,30 @@ pub fn computed_always<T: 'static>(mut f: impl FnMut(Option<&T>) -> T + 'static)
     }))
 }
 
+/// A copyable reaction handle confined to its runtime thread.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::effect::Reaction>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::effect::Reaction>();
+/// ```
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Reaction {
     pub(crate) effect_id: EffectId,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl Reaction {
     fn new(effect_id: EffectId) -> Self {
-        Self { effect_id }
+        Self {
+            effect_id,
+            _thread_affinity: PhantomData,
+        }
     }
 
     pub fn track<R>(&self, f: impl FnOnce() -> R) -> R {
@@ -315,6 +357,7 @@ pub fn create_reaction(mut f: impl FnMut() + 'static) -> Reaction {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f();

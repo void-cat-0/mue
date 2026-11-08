@@ -1,4 +1,12 @@
-use std::{cell::RefCell, ops::Deref};
+use std::{
+    cell::RefCell,
+    future::Future,
+    marker::PhantomData,
+    ops::Deref,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+};
 
 use slotmap::{Key, SlotMap, new_key_type};
 use type_map::TypeMap;
@@ -22,6 +30,7 @@ pub(crate) struct ScopeInner {
     pub(crate) effects: Vec<EffectId>,
     pub(crate) signals: Vec<SignalId>,
     pub(crate) subscopes: Vec<ScopeId>,
+    pub(crate) disposing: bool,
 
     parent: Scope,
     context_parent: Scope,
@@ -38,6 +47,7 @@ impl ScopeInner {
             effects: Vec::new(),
             signals: Vec::new(),
             subscopes: Vec::new(),
+            disposing: false,
 
             parent: Scope::null(),
             context_parent: Scope::null(),
@@ -49,35 +59,42 @@ impl ScopeInner {
     }
 }
 
-impl Disposable for ScopeInner {
-    fn dispose(&self) {
-        let ScopeInner {
-            effects,
-            signals,
-            subscopes,
-            ..
-        } = self;
-        Runtime::with(|rt| {
-            for effect_id in effects {
-                rt.dispose_effect(*effect_id);
+impl ScopeInner {
+    // Scope-tree cleanups have already drained before any resources are removed.
+    // Borrow self so context values outlive this scope's resources and descendants.
+    fn dispose_resources(&self, rt: &Runtime) {
+        for effect_id in &self.effects {
+            rt.dispose_effect(*effect_id);
+        }
+        for signal_id in &self.signals {
+            rt.dispose_signal(*signal_id);
+        }
+        for subscope_id in &self.subscopes {
+            let scope = rt.scopes.borrow_mut().remove(*subscope_id);
+            if let Some(scope) = scope {
+                scope.dispose_resources(rt);
             }
-            for signal_id in signals {
-                rt.dispose_signal(*signal_id);
-            }
-            for subscope_id in subscopes {
-                let scope = rt.scopes.borrow_mut().remove(*subscope_id);
-                if let Some(scope) = scope {
-                    scope.dispose();
-                }
-            }
-        });
+        }
     }
 }
 
 /// A copyable, non-owning handle to a reactive scope.
+///
+/// Scope handles are bound to the thread that owns their runtime.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::scope::Scope>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::scope::Scope>();
+/// ```
 #[derive(Clone, Copy)]
 pub struct Scope {
     id: ScopeId,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 /// Owns a detached scope and disposes its resources when dropped.
@@ -85,6 +102,16 @@ pub struct Scope {
 /// Moving this guard transfers ownership without attaching the scope to the
 /// ambient scope. Context is explicit with `new`, or inherited with `new_inherited`.
 /// Copying its [`Scope`] handle does not keep resources alive.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::scope::OwnedScope>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::scope::OwnedScope>();
+/// ```
 pub struct OwnedScope {
     scope: Scope,
 }
@@ -116,6 +143,94 @@ impl OwnedScope {
         let scope = self.scope;
         std::mem::forget(self);
         scope
+    }
+}
+
+/// A future whose reactive resources belong to an inherited scope.
+///
+/// Polling and dropping the wrapped future run inside this scope. Its resources
+/// are disposed before returning `Ready` or when dropped. Effect cleanup callbacks
+/// run before any signal owned by this scope or its attached subscopes is removed;
+/// they may read those live signals, but must not create reactive resources or mutate
+/// the disposing graph. Unrelated derived dependencies must still be live when read.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::ScopedFuture<std::future::Ready<()>>>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::ScopedFuture<std::future::Ready<()>>>();
+/// ```
+#[must_use = "futures do nothing unless polled or spawned"]
+pub struct ScopedFuture<F> {
+    owner: Option<OwnedScope>,
+    future: Option<Pin<Box<F>>>,
+}
+
+/// Give a future an explicit reactive scope, inheriting context at this call site.
+///
+/// The lookup parent is non-owning: disposing it removes inherited context without
+/// cancelling this future. Resources created while polling belong to the wrapper;
+/// captured resources created earlier keep their original owner. The inner future
+/// is destroyed in its scope before the scope is disposed, including on completion.
+/// Returned reactive handles do not keep that scope alive.
+///
+/// The wrapper is confined to its runtime thread and can also be awaited without
+/// spawning. It installs scope only; task/effect isolation is provided by
+/// [`crate::task::spawn`].
+///
+/// ```
+/// use mue_core::{prelude::*, task::tick};
+/// let task = spawn(scope_future(async {
+///     let value = signal(21);
+///     let doubled = computed(move |_| value.get() * 2);
+///     doubled.get() // Return owned data, not the task-local signal.
+/// }));
+/// tick(1);
+/// assert!(task.is_finished());
+/// ```
+#[track_caller]
+pub fn scope_future<F: Future>(future: F) -> ScopedFuture<F> {
+    ScopedFuture {
+        owner: Some(OwnedScope::new_inherited()),
+        future: Some(Box::pin(future)),
+    }
+}
+
+impl<F: Future> Future for ScopedFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let scope = this
+            .owner
+            .as_ref()
+            .expect("scoped future polled after completion")
+            .scope();
+        let future = this
+            .future
+            .as_mut()
+            .expect("scoped future polled after completion");
+        match scope.run(|| future.as_mut().poll(cx)) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(output) => {
+                let owner = this.owner.take().expect("scoped future owner missing");
+                owner.run(|| drop(this.future.take()));
+                drop(owner);
+                Poll::Ready(output)
+            }
+        }
+    }
+}
+
+impl<F> Drop for ScopedFuture<F> {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.take() {
+            owner.run(|| drop(self.future.take()));
+            drop(owner);
+        }
     }
 }
 
@@ -159,17 +274,22 @@ impl Scope {
     #[track_caller]
     pub fn new_detached() -> Self {
         Runtime::with(|rt| {
+            rt.assert_resource_creation_allowed();
             let id = rt.scopes.borrow_mut().insert(ScopeInner::new(
                 #[cfg(debug_assertions)]
                 std::panic::Location::caller(),
             ));
-            Self { id }
+            Self {
+                id,
+                _thread_affinity: PhantomData,
+            }
         })
     }
 
     pub fn null() -> Self {
         Self {
             id: ScopeId::null(),
+            _thread_affinity: PhantomData,
         }
     }
 
@@ -182,11 +302,26 @@ impl Scope {
         Runtime::try_with(|rt| rt.scopes.borrow().contains_key(self.id)).unwrap_or(false)
     }
 
+    pub(crate) fn assert_not_disposing(self) {
+        assert!(
+            self.is_null()
+                || Runtime::try_with(|rt| {
+                    rt.scopes
+                        .borrow()
+                        .get(self.id)
+                        .is_some_and(|scope| !scope.disposing)
+                })
+                .unwrap_or(false),
+            "Cannot create reactive resources in a disposing scope"
+        );
+    }
+
     pub fn push_signal<T>(&self, signal: ReadSignal<T>) {
         if self.is_null() {
             return;
         }
         Runtime::with(|rt| {
+            rt.assert_scope_not_disposing(self.id);
             rt.scopes.borrow_mut()[self.id].signals.push(signal.id);
         });
     }
@@ -196,6 +331,7 @@ impl Scope {
             return;
         }
         Runtime::with(|rt| {
+            rt.assert_scope_not_disposing(self.id);
             rt.scopes.borrow_mut()[self.id].effects.push(effect.id);
         });
     }
@@ -207,8 +343,8 @@ impl Scope {
         Runtime::with(|rt| {
             let mut scopes = rt.scopes.borrow_mut();
             assert!(
-                scopes.contains_key(self.id),
-                "Parent scope has been disposed"
+                scopes.get(self.id).is_some_and(|scope| !scope.disposing),
+                "Parent scope is disposed or disposing"
             );
             assert!(
                 scopes.contains_key(subscope.id),
@@ -239,6 +375,15 @@ impl Scope {
     /// Run with this current scope, restoring the previous scope afterwards.
     pub fn run<R>(self, f: impl FnOnce() -> R) -> R {
         assert!(self.is_null() || self.is_alive(), "Scope has been disposed");
+        self.assert_not_disposing();
+        self.run_inner(f)
+    }
+
+    fn run_disposal<R>(self, f: impl FnOnce() -> R) -> R {
+        self.run_inner(f)
+    }
+
+    fn run_inner<R>(self, f: impl FnOnce() -> R) -> R {
         let previous = CURRENT_SCOPE.replace(self);
         let value = f();
         CURRENT_SCOPE.set(previous);
@@ -250,6 +395,7 @@ impl Scope {
             return;
         }
         Runtime::with(|rt| {
+            rt.assert_scope_not_disposing(self.id);
             rt.scopes.borrow_mut()[self.id].context.insert::<T>(value);
         });
     }
@@ -262,6 +408,7 @@ impl Scope {
             "Context parent has been disposed"
         );
         Runtime::with(|rt| {
+            rt.assert_scope_not_disposing(self.id);
             let mut scopes = rt.scopes.borrow_mut();
             let mut ancestor = parent;
             while !ancestor.is_null() {
@@ -294,6 +441,7 @@ impl Scope {
             return;
         }
         Runtime::with(|rt| {
+            rt.assert_scope_not_disposing(self.id);
             let mut scopes = rt.scopes.borrow_mut();
             let value = f(self.inject_with::<T>(&scopes));
             scopes[self.id].context.insert::<T>(value);
@@ -323,12 +471,29 @@ pub fn inject<T: Clone + 'static>() -> Option<T> {
 impl Disposable for Scope {
     fn dispose(&self) {
         let _ = Runtime::try_with(|rt| {
+            let Some(scope_ids) = rt.begin_scope_disposal(self.id) else {
+                return;
+            };
+            loop {
+                let cleanups = rt.take_scope_cleanups(&scope_ids);
+                if cleanups.is_empty() {
+                    break;
+                }
+                for (scope_id, cleanup) in cleanups {
+                    let owner = Scope {
+                        id: scope_id,
+                        _thread_affinity: PhantomData,
+                    };
+                    rt.without_effect(|| owner.run_disposal(cleanup));
+                }
+            }
+
             let scope = rt.scopes.borrow_mut().remove(self.id);
             if let Some(scope) = scope {
                 if let Some(parent) = rt.scopes.borrow_mut().get_mut(scope.parent.id) {
                     parent.subscopes.retain(|id| *id != self.id);
                 }
-                scope.dispose();
+                scope.dispose_resources(rt);
             }
         });
     }
@@ -342,6 +507,116 @@ pub fn current_scope() -> Scope {
 mod test {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn scoped_future_cleans_before_ready_even_when_wrapper_is_retained() {
+        use crate::runtime::resource_counts;
+        use std::{cell::Cell, marker::PhantomPinned, task::Waker};
+
+        // A borrowed, !Unpin future also checks that moving the wrapper never moves F.
+        struct Probe<'a> {
+            dropped: &'a Cell<usize>,
+            address: Cell<usize>,
+            local: Cell<Option<ReadSignal<u32>>>,
+            _pinned: PhantomPinned,
+        }
+        impl Future for Probe<'_> {
+            type Output = ReadSignal<u32>;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = self.as_ref().get_ref();
+                let address = this as *const Self as usize;
+                assert_eq!(current_scope().inject::<u32>(), Some(81));
+                if let Some(local) = this.local.get() {
+                    assert_eq!(address, this.address.get());
+                    Poll::Ready(local)
+                } else {
+                    this.address.set(address);
+                    current_scope().provide(9u64);
+                    this.local.set(Some(*signal(7u32)));
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+        impl Drop for Probe<'_> {
+            fn drop(&mut self) {
+                assert_eq!(current_scope().inject::<u32>(), Some(81));
+                assert_eq!(current_scope().inject::<u64>(), Some(9));
+                assert_eq!(self.local.get().unwrap().get(), 7);
+                self.dropped.set(self.dropped.get() + 1);
+            }
+        }
+        let baseline = resource_counts();
+        let parent = OwnedScope::new();
+        parent.provide(81u32);
+        let driver = OwnedScope::new();
+        driver.provide(42u32);
+        let before_wrapper = resource_counts();
+        let dropped = Cell::new(0);
+        let mut wrapped = parent.run(|| {
+            scope_future(Probe {
+                dropped: &dropped,
+                address: Cell::new(0),
+                local: Cell::new(None),
+                _pinned: PhantomPinned,
+            })
+        });
+        let mut cx = Context::from_waker(Waker::noop());
+        driver.run(|| {
+            assert!(Pin::new(&mut wrapped).poll(&mut cx).is_pending());
+            assert_eq!(current_scope().inject::<u32>(), Some(42));
+        });
+        let mut moved = wrapped;
+        let Poll::Ready(local) = driver.run(|| Pin::new(&mut moved).poll(&mut cx)) else {
+            panic!("future not ready");
+        };
+        assert_eq!(dropped.get(), 1);
+        assert!(local.is_disposed());
+        assert_eq!(resource_counts(), before_wrapper);
+        drop(moved);
+        assert_eq!(dropped.get(), 1);
+        drop(driver);
+        drop(parent);
+        assert_eq!(resource_counts(), baseline);
+    }
+
+    #[test]
+    fn unpolled_scoped_future_drop_uses_its_context_and_releases_owner() {
+        use crate::runtime::resource_counts;
+        use std::{cell::Cell, task::Waker};
+
+        struct Capture<'a>(&'a Cell<bool>);
+        impl Drop for Capture<'_> {
+            fn drop(&mut self) {
+                assert_eq!(current_scope().inject::<u32>(), Some(81));
+                self.0.set(true);
+            }
+        }
+        let baseline = resource_counts();
+        let parent = OwnedScope::new();
+        parent.provide(81u32);
+        let before_wrapper = resource_counts();
+        let dropped = Cell::new(false);
+        let capture = Capture(&dropped);
+        let future = parent.run(|| {
+            scope_future(async move {
+                let _capture = capture;
+                std::future::pending::<()>().await;
+            })
+        });
+        assert_eq!(resource_counts().scopes, before_wrapper.scopes + 1);
+        drop(future);
+        assert!(dropped.get());
+        assert_eq!(resource_counts(), before_wrapper);
+        // A completed wrapper from this scope is independent of polling executor.
+        let mut ready = scope_future(std::future::ready(42));
+        assert_eq!(
+            Pin::new(&mut ready).poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(42)
+        );
+        drop(parent);
+        assert_eq!(resource_counts(), baseline);
+    }
 
     #[test]
     fn detached_owner_survives_configuration_scope_and_moves() {

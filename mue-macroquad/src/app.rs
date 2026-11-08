@@ -1,8 +1,12 @@
-use std::{mem, rc::Rc, sync::atomic::Ordering};
+use std::{
+    mem,
+    rc::Rc,
+    sync::{Arc, atomic::Ordering},
+};
 
 use crate::transition;
 use glam::vec2;
-use mue_core::batch;
+use mue_core::{batch, task};
 use ordered_float::NotNan;
 use taffy::{AvailableSpace, Size};
 
@@ -24,6 +28,7 @@ pub struct App {
 impl App {
     /// Build and retain a root view.
     pub fn new(root_node: impl IntoNode) -> Self {
+        crate::set_task_wake_callback(Some(Arc::new(miniquad::window::schedule_update)));
         crate::viewport::set(crate::viewport::Viewport {
             width: macroquad::window::screen_width(),
             height: macroquad::window::screen_height(),
@@ -74,6 +79,7 @@ impl App {
                 }
             });
         });
+        task::tick(32);
         self.root_node.resolve_font_sizes();
         for pass in 0..64 {
             let mut changed = false;

@@ -12,7 +12,7 @@ pub use flexbox::{FlexboxBuilder, flexbox};
 pub use shape::{ShapeBuilder, shape};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
 
-use std::{cell::RefCell, ops::Deref, rc::Rc};
+use std::{cell::RefCell, marker::PhantomData, ops::Deref, rc::Rc};
 
 use mue_core::{
     Disposable, Owned,
@@ -151,8 +151,20 @@ impl NodeInner {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 /// A borrowed node handle; copying it does not extend the node's lifetime.
+/// Node handles are confined to the thread that owns their runtime.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_macroquad::node::NodeRef>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_macroquad::node::NodeRef>();
+/// ```
 pub struct NodeRef {
     pub(crate) id: NodeId,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl NodeRef {
@@ -167,8 +179,15 @@ impl NodeRef {
         .ok()
         .flatten()
     }
+    pub(crate) fn from_id(id: NodeId) -> Self {
+        Self {
+            id,
+            _thread_affinity: PhantomData,
+        }
+    }
+
     pub(crate) fn null() -> Self {
-        Self { id: NodeId::null() }
+        Self::from_id(NodeId::null())
     }
 
     pub(crate) fn sync_layout(&self) -> bool {
@@ -309,8 +328,18 @@ impl Disposable for NodeRef {
     }
 }
 
-#[repr(transparent)]
 /// An owning node handle. Dropping it releases its children and reactive scope.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_macroquad::node::Node>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_macroquad::node::Node>();
+/// ```
+#[repr(transparent)]
 pub struct Node(Owned<NodeRef>);
 
 impl Node {
@@ -381,7 +410,7 @@ impl Node {
                     .with_borrow_mut(|stack| stack.pop().expect("node being finished is missing"));
                 nodes.insert(*node)
             });
-            Self(NodeRef { id }.owned())
+            Self(NodeRef::from_id(id).owned())
         })
     }
 }

@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::HashSet,
     ffi::{OsStr, OsString},
+    marker::PhantomData,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -13,8 +14,19 @@ use crate::{
     signal::{Access, ReadSignal, Signal, SignalId},
 };
 
+/// Tracks reactive reads made through a property.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::prop::PropTracker>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::prop::PropTracker>();
+/// ```
 #[derive(Clone, Copy)]
-pub struct PropTracker(Option<SignalId>);
+pub struct PropTracker(Option<SignalId>, PhantomData<Rc<()>>);
 
 impl Access for PropTracker {
     type Value = ();
@@ -28,8 +40,18 @@ impl Access for PropTracker {
     fn get_clone_untracked(&self) {}
 }
 
-#[derive(Clone, Copy)]
 /// A static value or reactive signal accepted by component and style builders.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::prop::Prop<()>>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::prop::Prop<()>>();
+/// ```
+#[derive(Clone, Copy)]
 pub enum Prop<T> {
     Static(T),
     Dynamic(ReadSignal<T>),
@@ -63,6 +85,54 @@ impl<T: 'static> Access for Prop<T> {
 }
 
 impl<T: 'static> Prop<T> {
+    /// Read and subscribe to a dynamic property, or return a static value.
+    /// Dynamic properties have the same lifecycle limits as ReadSignal::try_get_clone.
+    pub fn try_get(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        match self {
+            Self::Static(value) => Some(*value),
+            Self::Dynamic(signal) => signal.try_get(),
+        }
+    }
+
+    /// Clone and subscribe to a dynamic property, or clone a static value.
+    /// Dynamic properties have the same lifecycle limits as ReadSignal::try_get_clone.
+    pub fn try_get_clone(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        match self {
+            Self::Static(value) => Some(value.clone()),
+            Self::Dynamic(signal) => signal.try_get_clone(),
+        }
+    }
+
+    /// Read without subscribing; static values always return Some.
+    /// Dynamic properties have the same lifecycle limits as ReadSignal::try_get_clone.
+    pub fn try_get_untracked(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        match self {
+            Self::Static(value) => Some(*value),
+            Self::Dynamic(signal) => signal.try_get_untracked(),
+        }
+    }
+
+    /// Clone without subscribing; static values always return Some.
+    /// Dynamic properties have the same lifecycle limits as ReadSignal::try_get_clone.
+    pub fn try_get_clone_untracked(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        match self {
+            Self::Static(value) => Some(value.clone()),
+            Self::Dynamic(signal) => signal.try_get_clone_untracked(),
+        }
+    }
+
     pub fn as_static(&self) -> Option<&T> {
         match self {
             Self::Static(value) => Some(value),
@@ -88,10 +158,13 @@ impl<T: 'static> Prop<T> {
     }
 
     pub fn to_tracker(&self) -> PropTracker {
-        PropTracker(match self {
-            Self::Static(_) => None,
-            Self::Dynamic(signal) => Some(signal.id),
-        })
+        PropTracker(
+            match self {
+                Self::Static(_) => None,
+                Self::Dynamic(signal) => Some(signal.id),
+            },
+            PhantomData,
+        )
     }
 }
 
@@ -276,6 +349,58 @@ impl_prop_value_tuple!(T1 T2 T3 T4 T5 T6 T7 T8);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Disposable, prelude::*, signal::signal};
+
+    #[test]
+    fn fallible_access_handles_static_and_dynamic_properties() {
+        let static_string = Prop::Static(String::from("clone only"));
+        assert_eq!(
+            static_string.try_get_clone(),
+            Some(String::from("clone only"))
+        );
+        assert_eq!(
+            static_string.try_get_clone_untracked(),
+            Some(String::from("clone only"))
+        );
+        let owner = crate::scope::OwnedScope::new();
+        let static_prop = Prop::Static(String::from("static"));
+        assert_eq!(static_prop.try_get_clone(), Some(String::from("static")));
+        assert_eq!(
+            static_prop.try_get_clone_untracked(),
+            Some(String::from("static"))
+        );
+        let static_number = Prop::Static(5);
+        assert_eq!(static_number.try_get(), Some(5));
+        assert_eq!(static_number.try_get_untracked(), Some(5));
+
+        let dynamic = owner.run(|| signal(String::from("first")));
+        let prop: Prop<String> = (*dynamic).into();
+        assert_eq!(prop.try_get_clone(), Some(String::from("first")));
+        dynamic.set(String::from("second"));
+        assert_eq!(prop.try_get_clone_untracked(), Some(String::from("second")));
+        owner.dispose();
+        assert_eq!(prop.try_get_clone(), None);
+        assert_eq!(prop.try_get_clone_untracked(), None);
+
+        let number_owner = crate::scope::OwnedScope::new();
+        let number = number_owner.run(|| signal(8));
+        let dynamic: Prop<i32> = (*number).into();
+        let runs = Rc::new(std::cell::Cell::new(0));
+        let expected = Rc::new(std::cell::Cell::new(8));
+        let tracked = runs.clone();
+        let expected_in_effect = expected.clone();
+        watch_effect(move || {
+            assert_eq!(dynamic.try_get(), Some(expected_in_effect.get()));
+            tracked.set(tracked.get() + 1);
+        });
+        assert_eq!(runs.get(), 1);
+        expected.set(9);
+        number.set(9);
+        assert_eq!(runs.get(), 2);
+        assert_eq!(dynamic.try_get_untracked(), Some(9));
+        number_owner.dispose();
+        assert_eq!(dynamic.try_get(), None);
+    }
 
     #[test]
     fn static_collections_and_shared_strings_are_property_values() {
