@@ -3,7 +3,7 @@ use mue_components::*;
 use std::sync::Arc;
 
 use mue_macroquad::{
-    font::{self, fontdb},
+    font::fontdb,
     style::{Styleable, vh},
 };
 
@@ -78,7 +78,7 @@ const NOTICES: &[&str] = &[
     include_str!("../assets/fonts/OFL-NotoSymbols.txt"),
 ];
 
-fn database() -> fontdb::Database {
+pub fn database() -> fontdb::Database {
     let mut db = fontdb::Database::new();
     for &(name, bytes) in FONTS {
         let ids = db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
@@ -97,10 +97,6 @@ fn database() -> fontdb::Database {
     db.set_cursive_family("Noto Sans");
     db.set_fantasy_family("Noto Sans");
     db
-}
-
-pub fn initialize() {
-    font::initialize("zh-CN", database()).expect("initialize bundled fonts before creating text");
 }
 
 pub fn licenses() -> Node {

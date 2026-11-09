@@ -51,7 +51,7 @@ On `Poll::Ready`, the wrapper drops the inner future under its scope and drops t
 
 Dropping `Task<T>` cancels it. Reactive scopes do not register spawned tasks for cancellation; if a scope-owned value actually holds a `Task` handle, disposing that value still cancels through normal `Task::drop`. Awaiting `Task<T>` yields `T` directly, so `Task<Result<T, E>>` yields the business `Result<T, E>` without wrapping it in an `Option`. `detach()` explicitly transfers lifetime management to the executor and discards output observation; detached work remains executor-managed until completion or executor shutdown. `AsyncResource` instead owns its task handle and cancels it when the resource is dropped. Cancellation cannot roll back prior writes or external side effects, and cannot interrupt a running poll. Polling a completed task again, or awaiting a task forcibly stopped at executor shutdown, panics; there is no fallible `Task` API or panic recovery.
 
-`tick(limit)` drives a bounded number of ready runnables without waiting for external events. The Macroquad adapter calls it after timeouts and before layout. The limit is a count of polls, not a time guarantee: one blocking call or long CPU loop still blocks the UI thread. A background executor is not implemented; no worker pool, blocking-I/O adapter, timer reactor, Tokio context, or automatic retry is provided. Use futures whose wake sources are independently driven. The host wake callback requests a later frame; it must not synchronously poll tasks. It is captured when spawning, so install it before starting tasks. `App::new` installs the Macroquad callback before materializing its root builder; tasks started before that need the callback installed explicitly when using a blocking event loop.
+`tick(limit)` drives a bounded number of ready runnables without waiting for external events. The Macroquad adapter calls it after timeouts and before layout. The limit is a count of polls, not a time guarantee: one blocking call or long CPU loop still blocks the UI thread. Background work is provided by `spawn_background` and `AsyncResource::new_background` (see [Background tasks](#background-tasks)); there is still no blocking-I/O adapter, timer reactor, Tokio context, or automatic retry. Use futures whose wake sources are independently driven. The host wake callback requests a later frame; it must not synchronously poll tasks. It is stored in the executor's wake slot, so a callback installed after a task is spawned is still observed. `App::new` installs the Macroquad callback before materializing its root builder; tasks started before that need the callback installed explicitly when using a blocking event loop.
 
 A retained task can safely skip publishing when its destination is gone:
 
@@ -76,7 +76,7 @@ drop(task);
 ```rust
 use mue_core::{prelude::*, task::{AsyncResource, AsyncState}};
 let owner = OwnedScope::new();
-let resource = owner.run(|| AsyncResource::<String, String>::new(async {
+let resource = owner.run(|| AsyncResource::<String, String>::new_background(async {
     Ok("Loaded".to_owned())
 }));
 let caption = owner.run(|| resource.state().map(|state| match state {
@@ -90,7 +90,7 @@ drop(owner);    // Dispose the caption projection.
 drop(resource); // Cancel pending work and dispose result state.
 ```
 
-`AsyncResource` owns an independent state owner and its task handle. The result state remains alive after the operation completes, until the resource is dropped; ending the configuration scope does not dispose it. The input operation follows plain `spawn` semantics, with no inherited context or automatic resource owner, unless the caller passes `scope_future(operation)`. That wrapper's operation-local resources are released at completion, while the resource's result state persists. The caption projection above belongs to `owner`, so retain both owners for as long as the UI uses the binding.
+`AsyncResource` owns an independent state owner and its task handle. The result state remains alive after the operation completes, until the resource is dropped; ending the configuration scope does not dispose it. `new` runs the operation on the foreground executor and accepts a non-`Send` future; `new_background` runs it on the global background pool and requires the future and output to be `Send`; `new_background_with` uses a specific pool. In both cases the result state is published on the UI thread by a foreground task owned by the resource. The foreground operation follows plain `spawn` semantics, with no inherited context or automatic resource owner, unless the caller passes `scope_future(operation)`. A background operation cannot use `scope_future` because that wrapper is `!Send`; if it needs operation-local reactive resources, keep the operation on the foreground or split it into background loading plus a foreground apply step. That wrapper's operation-local resources are released at completion, while the resource's result state persists. The caption projection above belongs to `owner`, so retain both owners for as long as the UI uses the binding.
 
 `Task<Result<T, E>>::detach_and_report(|error, location| { ... })` explicitly observes a business failure once and supplies the reporting call site. Its reporter runs as a plain task with no automatic scope or inherited context, detached from reactive-scope lifetimes. Code captured by the reporter must not assume ordinary signal/scope handles remain alive; resources it creates need explicit ownership or disposal. Cancellation is silent. Plain `detach()` intentionally discards all output.
 
@@ -133,3 +133,63 @@ rather than fixed; the framework's own code does not exercise them.
   `tick`'s `in_tick` flag set and may leave the ambient scope/tracker stale.
   Do not reuse the runtime after catching a task panic. This is the existing
   panic-fatal policy, not a recoverable error path.
+
+# Background tasks
+
+`spawn_background` runs a `Send + 'static` future on a fixed-size worker pool and returns a `BackgroundTask<T>`. The output must also be `Send + 'static`. The future is polled and destroyed on a worker thread; it must not access signals, scopes, context, or UI-thread resources. Return owned `Send` data instead, then publish it from a foreground task. It may be called from the UI thread or a background thread; the foreground `spawn` and `tick` are rejected on background workers in debug builds.
+
+~~~rust
+use mue_core::{prelude::*, task::{spawn, spawn_background, tick}};
+
+let destination = signal(0u32);
+let background = spawn_background(async move { 42u32 });
+let publisher = spawn(async move {
+    let value = background.await;
+    let _ = destination.try_set(value);
+});
+// App::frame drives the publisher after the background task wakes it.
+// The result is not guaranteed to be ready after one tick.
+tick(32);
+~~~
+
+The foreground publisher is an ordinary `Task<()>`; dropping it drops the `BackgroundTask`, which cancels the background work. The background task wakes the foreground publisher through the normal executor wake path, so `App::frame` can run the continuation on the next tick. The wake callback is stored in the executor's wake slot and may be installed after the task is spawned.
+
+## AsyncResource on the background pool
+
+`AsyncResource::new_background` packages the publisher for the common loading case. The operation and its result must be `Send`; the `Loading` / `Ready(Result<T, E>)` state is still published on the UI thread.
+
+~~~rust
+use mue_core::{prelude::*, task::{AsyncResource, AsyncState}};
+
+let resource = AsyncResource::<String, String>::new_background(async {
+    Ok("Loaded".to_owned())
+});
+let caption = resource.state().map(|state| match state {
+    AsyncState::Loading => "Loading…".to_owned(),
+    AsyncState::Ready(Ok(value)) => value,
+    AsyncState::Ready(Err(error)) => format!("Could not load: {error}"),
+});
+// Retain the resource while the UI uses caption; App::frame ticks the publisher.
+// Once the UI no longer uses caption:
+drop(resource);
+~~~
+
+`AsyncResource::new` remains the foreground constructor for operations that must touch UI-thread state. `new_background_with(&executor, operation)` uses a specific pool; the executor must outlive the resource. `from_background_task(task)` wraps an already-spawned `BackgroundTask<Result<T, E>>`.
+
+The playground uses this pattern for its bundled font database: `fonts::database()` runs on the background pool, and the main loop calls `font::initialize` on the UI thread once the state is `Ready`, replacing a text-free loading screen with the real UI. Its graphics and input pages also decode PNGs to an `Image` on the background pool, then create the GPU texture from a foreground effect.
+
+## Cancellation and lifecycle
+
+Dropping a `BackgroundTask` requests cancellation. A queued task is dropped by a worker; a running poll cannot be interrupted, and a blocking syscall continues until it returns. `detach()` lets the executor run the task without an observer. `is_finished()` reports completion or closure. The global pool used by `spawn_background` lives for the process lifetime. A custom `BackgroundExecutor` closes its queue and joins its workers when the last handle is dropped; tasks still held by a `BackgroundTask` are destroyed when that handle is dropped, on the dropping thread. The future is `Send`, so that cleanup is safe, but it may block the caller.
+
+## Panics
+
+Background tasks use async-task's panic propagation: a panic is caught by the executor, the worker survives, and awaiting the task resumes the panic on the awaiting thread. A detached task's panic is stored and dropped with the task allocation, so it is not reported. There is no panic recovery or state rollback.
+
+## Limitations
+
+- There is no blocking-I/O pool, timer reactor, priority, or progress channel yet. Do not run long blocking work on the async pool; it occupies a worker.
+- Awaiting a background task from inside a task on the same pool can deadlock when all workers are occupied. Use a separate executor or restructure the work.
+- `AsyncResource::new_background` requires `T: Send` and `E: Send`. UI-only resources such as textures should be created on the foreground after loading `Send` bytes.
+- Background tasks are not supported on wasm targets that lack OS threads.
+- Dropping a custom `BackgroundExecutor` stops its workers; a pending task handle that is still awaited can then hang. Keep the executor alive for the task's lifetime.

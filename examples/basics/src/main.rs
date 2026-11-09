@@ -36,8 +36,10 @@ async fn run() {
         Texture2D::from_file_with_format(include_bytes!("../assets/ferris.png"), None).into();
     let count = signal(3usize);
     let large = signal(false);
-    let greeting =
-        AsyncResource::<String, &'static str>::new(async { Ok("Async task completed".to_owned()) });
+    // Load on the background pool; the result state is published on the UI thread.
+    let greeting = AsyncResource::<String, &'static str>::new_background(async {
+        Ok("Async task completed".to_owned())
+    });
     let greeting_text = greeting.state().map(|state| match state {
         AsyncState::Loading => "Loading task...".to_owned(),
         AsyncState::Ready(Ok(text)) => text,

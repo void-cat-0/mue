@@ -1,16 +1,13 @@
-use super::{controls::*, halftone, responsive};
-use macroquad::texture::Texture2D;
+use super::{assets, controls::*, halftone, responsive};
 use mue_components::*;
 use mue_macroquad::{
     math::{Rect, vec2},
-    shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
+    shader::{Brush, ColorStop, LinearGradient, RadialGradient},
     style::{Styleable, percent, vh},
 };
 
 pub fn page() -> Node {
-    let photo: SharedTexture =
-        Texture2D::from_file_with_format(include_bytes!("../../color/assets/photo.png"), None)
-            .into();
+    let photo = assets::background_texture(include_bytes!("../../color/assets/photo.png"));
     let (fit, a) = choice(
         "Fit",
         vec![

@@ -49,70 +49,66 @@ pub fn page() -> Node {
     // Options configure input recognizers at build time. A keyed revision replaces only this viewport.
     let revision = signal(0u32);
     watch(options, move |_| revision.update(|v| *v += 1));
-    let areas = map_keyed(
-        revision.map(|n| std::rc::Rc::from([n])),
-        |n| *n,
-        move |_| {
-            let (
+    let areas = keyed(revision, move |_| {
+        let (
+            axis,
+            touch,
+            mouse,
+            wheel,
+            speed,
+            threshold,
+            lock,
+            momentum,
+            friction,
+            velocity,
+            chain,
+            bars,
+        ) = options.get();
+        scroll_area()
+            .style(mue_macroquad::style! {
+            height: {vh(38.75)};
+            width: 100%;
+            })
+            .offset(offset)
+            .style(mue_macroquad::style! { background: {panel_brush()}; })
+            .options(ScrollOptions {
                 axis,
-                touch,
-                mouse,
-                wheel,
-                speed,
-                threshold,
-                lock,
-                momentum,
+                touch: !touch,
+                mouse_drag: mouse,
+                wheel: !wheel,
+                wheel_speed: speed,
+                drag_threshold: threshold,
+                axis_lock: !lock,
+                momentum: !momentum,
                 friction,
-                velocity,
-                chain,
-                bars,
-            ) = options.get();
-            scroll_area()
-                .style(mue_macroquad::style! {
-                height: {vh(38.75)};
-                width: 100%;
-                })
-                .offset(offset)
-                .style(mue_macroquad::style! { background: {panel_brush()}; })
-                .options(ScrollOptions {
-                    axis,
-                    touch: !touch,
-                    mouse_drag: mouse,
-                    wheel: !wheel,
-                    wheel_speed: speed,
-                    drag_threshold: threshold,
-                    axis_lock: !lock,
-                    momentum: !momentum,
-                    friction,
-                    max_velocity: velocity,
-                    chain: !chain,
-                    scrollbars: !bars,
-                })
-                .content_style(Style::new().style(mue_macroquad::style! {
-                gap: {vh(1.5)};
-                padding: {(vw(2.), vh(2.))};
-                }))
-                .children(
-                    (0..20)
-                        .map(|n| {
-                            center()
-                                .style(mue_macroquad::style! {
-                                width: {responsive::ui(1200.)};
-                                height: {responsive::ui(54.)};
-                                flex: none;
-                                background: {if n % 2 == 0 { BLUE } else { CORAL }};
-                                })
-                                .children(text(format!("Row {n}")).style(mue_macroquad::style! {
-                                font-size: {responsive::font(22.)};
-                                line-height: {responsive::ui(32.)};
-                                }))
-                                .into_node()
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .into_node()
-        },
-    );
+                max_velocity: velocity,
+                chain: !chain,
+                scrollbars: !bars,
+            })
+            .content_style(Style::new().style(mue_macroquad::style! {
+            gap: {vh(1.5)};
+            padding: {(vw(2.), vh(2.))};
+            }))
+            .children(
+                (0..20)
+                    .map(|n| {
+                        center()
+                            .style(mue_macroquad::style! {
+                            width: {responsive::ui(1200.)};
+                            height: {responsive::ui(54.)};
+                            flex: none;
+                            background: {if n % 2 == 0 { BLUE } else { CORAL }};
+                            })
+                            .children(text(format!("Row {n}")).style(mue_macroquad::style! {
+                            font-size: {responsive::font(22.)};
+                            line-height: {responsive::ui(32.)};
+                            }))
+                            .into_node()
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_node()
+    });
     let page = signal(0usize);
     let rows = map_keyed(
         page.map(|p| (p * 5..p * 5 + 5).collect::<std::rc::Rc<[usize]>>()),

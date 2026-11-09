@@ -6,9 +6,10 @@ pub mod typography;
 pub use graphics::*;
 pub use layout::*;
 pub use mue_macroquad::node::{
-    BuildNode, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode, Node,
-    NodeContext, NodeRef, ShapeBuilder, Span, SpanStyle, TextOverflow, TextVerticalAlign, TextWrap,
-    flexbox, join_children, map_keyed, shape, show_if, text,
+    BuildNode, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
+    KeyedItem, Node, NodeContext, NodeRef, ShapeBuilder, Span, SpanStyle, TextOverflow,
+    TextVerticalAlign, TextWrap, flexbox, join_children, keyed, map_keyed, map_keyed_prop, shape,
+    show_if, text,
 };
 pub use mue_macros::{component, node, style};
 pub use tokens::{Theme, ThemeProvider, TokenSet, provide_theme};

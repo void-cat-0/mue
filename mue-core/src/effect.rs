@@ -233,6 +233,15 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
     })
 }
 
+/// Run without subscribing the surrounding effect to reactive reads.
+///
+/// The current scope and resource ownership are unchanged. Effects and computed
+/// values created inside the callback still track their own dependencies. There
+/// is no current effect for direct calls to `on_cleanup` inside the callback.
+pub fn untracked<R>(f: impl FnOnce() -> R) -> R {
+    Runtime::with(|rt| rt.without_effect(f))
+}
+
 /// Register a cleanup function to be called when the current effect is re-run or disposed.
 /// During scope disposal, owned effects and computed producers are cleaned before their
 /// scope tree signals are removed, so cleanup may read those live signals. Teardown

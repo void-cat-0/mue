@@ -4,7 +4,7 @@ use mue_macroquad::node::flexbox::flexbox;
 use mue_macroquad::node::flexbox::use_container;
 use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
-    node::{IntoChildren, IntoNode, NodeRef, map_keyed},
+    node::{IntoChildren, IntoNode, KeyedItem, NodeRef, map_keyed_prop},
     style::{Style, Styleable, StyleableExt},
 };
 use std::rc::Rc;
@@ -34,14 +34,7 @@ impl ListMarker {
 pub fn list(ctx: NodeContext, #[default] marker: ListMarker) -> Node {
     ctx.finish(Style::new().flex_column().gap(8.), move |style| {
         let source = mue_macroquad::node::take_children();
-        let entries = computed(move |_| {
-            source
-                .get_clone()
-                .iter()
-                .copied()
-                .enumerate()
-                .collect::<Rc<[(usize, NodeRef)]>>()
-        });
+        let entries = computed(move |_| source.get_clone());
         let line_height = style.take_line_height();
         let font_family = style.take_font_family();
         let font_weight = style.take_font_weight();
@@ -49,21 +42,25 @@ pub fn list(ctx: NodeContext, #[default] marker: ListMarker) -> Node {
             .declared_color()
             .or_else(mue_macroquad::inherit::inherited_foreground)
             .unwrap_or_else(|| style.take_color());
-        let rows = map_keyed(
+        let rows = map_keyed_prop(
             entries,
-            |entry| *entry,
-            move |&(index, child)| {
+            |child: &NodeRef| *child,
+            move |KeyedItem {
+                      key: child, index, ..
+                  }| {
                 let children = computed(move |_| Rc::from([child])).owned();
                 flexbox()
                     .gap(marker.map(|m| if m == ListMarker::None { 0. } else { 10. }))
                     .items_start()
                     .children((
-                        text(marker.map(move |marker| Rc::<str>::from(marker.label(index))))
-                            .line_height(line_height)
-                            .font_family(font_family.clone())
-                            .font_weight(font_weight)
-                            .color(color.clone())
-                            .flex_none(),
+                        text(computed(move |_| {
+                            Rc::<str>::from(marker.get().label(index.get()))
+                        }))
+                        .line_height(line_height)
+                        .font_family(font_family.clone())
+                        .font_weight(font_weight)
+                        .color(color.clone())
+                        .flex_none(),
                         flexbox()
                             .flex_column()
                             .min_width(0.)

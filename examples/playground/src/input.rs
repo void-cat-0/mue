@@ -95,16 +95,13 @@ pub fn page() -> Node {
 }
 
 pub fn map_page() -> Node {
-    use macroquad::texture::Texture2D;
     use mue_macroquad::{
         gesture::GesturePhase,
         math::Vector,
-        shader::SharedTexture,
         style::{Size, Transform, TransformOp},
     };
 
-    let deer: SharedTexture =
-        Texture2D::from_file_with_format(include_bytes!("../../../deer.png"), None).into();
+    let deer = super::assets::background_texture(include_bytes!("../../../deer.png"));
     let offset = signal(Vector::ZERO);
     let scale = signal(1.);
     let rotation = signal(0.);

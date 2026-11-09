@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     future::Future,
     pin::Pin,
@@ -19,6 +19,9 @@ use crate::{
     scope::{OwnedScope, Scope, current_scope},
     signal::{ReadSignal, Signal},
 };
+
+mod background;
+pub use background::{BackgroundExecutor, BackgroundTask, spawn_background};
 
 type LocalRunnable = Runnable<u64>;
 
@@ -123,9 +126,34 @@ struct Registration {
     waker: Waker,
 }
 
+struct WakeSlot {
+    callback: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl WakeSlot {
+    fn new() -> Self {
+        Self {
+            callback: Mutex::new(None),
+        }
+    }
+
+    fn set(&self, callback: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self.callback.lock().unwrap() = callback;
+    }
+
+    fn wake(&self) {
+        // Clone before calling so the callback may re-enter set_wake_callback.
+        let callback = self.callback.lock().unwrap().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+}
+
 struct Executor {
     tasks: HashMap<u64, Registration>,
     queue: Arc<ReadyQueue>,
+    wake: Arc<WakeSlot>,
     in_tick: bool,
 }
 
@@ -138,6 +166,7 @@ impl Executor {
         Self {
             tasks: HashMap::new(),
             queue: Arc::new(ReadyQueue::new()),
+            wake: Arc::new(WakeSlot::new()),
             in_tick: false,
         }
     }
@@ -179,7 +208,13 @@ impl Drop for Executor {
 
 thread_local! {
     static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());
-    static WAKE_HOST: RefCell<Option<Arc<dyn Fn() + Send + Sync>>> = RefCell::new(None);
+    static IS_BACKGROUND_WORKER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the current thread is a background worker. Reactive access and
+/// foreground task APIs are rejected there in debug builds.
+pub(crate) fn is_background_worker() -> bool {
+    IS_BACKGROUND_WORKER.with(Cell::get)
 }
 
 struct TaskFuture<F> {
@@ -209,8 +244,12 @@ impl<F> Drop for TaskFuture<F> {
 }
 
 /// Install the host callback used to request another frame after a task wake.
+///
+/// The callback is stored in the current thread's executor, so a foreground
+/// task spawned earlier observes a callback installed later. It may be called
+/// from any thread.
 pub fn set_wake_callback(callback: Option<Arc<dyn Fn() + Send + Sync>>) {
-    WAKE_HOST.set(callback);
+    EXECUTOR.with_borrow(|executor| executor.wake.set(callback));
 }
 
 /// A caller-owned task yielding T directly. Dropping the handle requests cancellation;
@@ -298,7 +337,12 @@ pub fn spawn<F: Future + 'static>(future: F) -> Task<F::Output>
 where
     F::Output: 'static,
 {
-    let queue = EXECUTOR.with_borrow(|executor| executor.queue.clone());
+    debug_assert!(
+        !is_background_worker(),
+        "foreground tasks must be spawned on the foreground thread; use spawn_background"
+    );
+    let (queue, wake) =
+        EXECUTOR.with_borrow(|executor| (executor.queue.clone(), executor.wake.clone()));
     let token = Arc::new(TaskToken {
         key: next_task_key(),
         owner_thread: thread::current().id(),
@@ -309,7 +353,6 @@ where
         future: Some(Box::pin(future)),
         token: token.clone(),
     };
-    let wake_callback = WAKE_HOST.with_borrow(Clone::clone);
     let (runnable, task) = async_task::Builder::new()
         .metadata(token.key)
         .propagate_panic(false)
@@ -317,9 +360,7 @@ where
             move |_| wrapped,
             move |runnable| {
                 if queue.schedule(runnable) {
-                    if let Some(callback) = &wake_callback {
-                        callback();
-                    }
+                    wake.wake();
                 }
             },
         );
@@ -340,6 +381,10 @@ where
 /// Poll at most limit tasks ready at the start of this tick. Wakes during polling
 /// are deferred to the next tick. One poll cannot be preempted by this budget.
 pub fn tick(limit: usize) -> usize {
+    debug_assert!(
+        !is_background_worker(),
+        "foreground tasks must be ticked on the foreground thread"
+    );
     let snapshot = EXECUTOR.with_borrow_mut(|executor| {
         if executor.in_tick {
             return None;
@@ -387,6 +432,9 @@ pub struct AsyncResource<T: 'static, E: 'static> {
 }
 
 impl<T: 'static, E: 'static> AsyncResource<T, E> {
+    /// Run the operation on the foreground executor. Use this only for work
+    /// that must touch UI-thread state; I/O and CPU work should use
+    /// [Self::new_background].
     pub fn new<F>(future: F) -> Self
     where
         F: Future<Output = Result<T, E>> + 'static,
@@ -407,6 +455,46 @@ impl<T: 'static, E: 'static> AsyncResource<T, E> {
 
     pub fn state(&self) -> ReadSignal<AsyncState<T, E>> {
         *self.state
+    }
+}
+
+impl<T: 'static + Send, E: 'static + Send> AsyncResource<T, E> {
+    /// Run the operation on the global background pool. The operation and its
+    /// output must be Send; the result state is still published on the UI thread.
+    /// Dropping the resource cancels the background task. Must be called on the
+    /// UI thread.
+    pub fn new_background<F>(future: F) -> Self
+    where
+        F: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        Self::from_background_task(spawn_background(future))
+    }
+
+    /// Run the operation on a specific background executor. The executor must
+    /// outlive the resource; otherwise its workers may stop before the task completes.
+    /// Must be called on the UI thread.
+    pub fn new_background_with<F>(executor: &BackgroundExecutor, future: F) -> Self
+    where
+        F: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        Self::from_background_task(executor.spawn(future))
+    }
+
+    /// Wrap an already-spawned background task. The result state is published
+    /// by a foreground task owned by the resource. Must be called on the UI thread.
+    pub fn from_background_task(task: BackgroundTask<Result<T, E>>) -> Self {
+        let state_owner = OwnedScope::new_inherited();
+        let state = state_owner.run(|| Signal::new_always(AsyncState::Loading));
+        let task_state = state;
+        let task = spawn(async move {
+            let output = task.await;
+            let _ = task_state.try_set(AsyncState::Ready(output));
+        });
+        Self {
+            state,
+            state_owner: Some(state_owner),
+            task: Some(task),
+        }
     }
 }
 
@@ -1032,6 +1120,34 @@ mod tests {
         .unwrap();
         rx.recv().unwrap();
         assert_eq!(callbacks.load(Ordering::SeqCst), before + 1);
+        drop(task);
+        drop(owner);
+        set_wake_callback(None);
+    }
+
+    #[test]
+    fn wake_callback_installed_after_spawn_is_observed() {
+        let owner = OwnedScope::new();
+        let waker_slot = Rc::new(RefCell::new(None));
+        let task = owner.run(|| {
+            let waker_slot = waker_slot.clone();
+            spawn(std::future::poll_fn(move |cx| {
+                *waker_slot.borrow_mut() = Some(cx.waker().clone());
+                Poll::<()>::Pending
+            }))
+        });
+        tick(1);
+        let calls = Arc::new(AtomicUsize::new(0));
+        set_wake_callback(Some({
+            let calls = calls.clone();
+            Arc::new(move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+            })
+        }));
+        let waker = waker_slot.borrow_mut().take().unwrap();
+        let before = calls.load(Ordering::SeqCst);
+        std::thread::spawn(move || waker.wake()).join().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), before + 1);
         drop(task);
         drop(owner);
         set_wake_callback(None);

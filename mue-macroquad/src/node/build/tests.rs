@@ -9,7 +9,7 @@ use mue_core::{
 use super::*;
 use crate::{
     layout::use_layout,
-    node::{Component, IntoNode, map_keyed},
+    node::{Component, IntoNode, keyed, map_keyed},
     runtime::Runtime,
     style::{Size, Styleable, StyleableExt},
 };
@@ -249,6 +249,39 @@ fn keyed_leaf(ctx: NodeContext, key: i32) -> Node {
         TRACE.with_borrow_mut(|trace| trace.inits += 1);
         use_layout(style);
     })
+}
+
+#[test]
+fn scalar_keyed_replaces_the_subtree_and_updates_parent_layout() {
+    reset();
+    let owner = OwnedScope::new();
+    let key = owner.run(|| signal(10));
+    let builder = crate::node::flexbox().children(keyed(key, |key| keyed_leaf(*key)));
+    TRACE.with_borrow(|trace| assert_eq!(trace.builds, 0));
+    let parent = builder.into_node();
+    let first = parent.children().get_clone()[0];
+    key.set(20);
+    let second = parent.children().get_clone()[0];
+    assert_ne!(first.id, second.id);
+    Runtime::with(|rt| {
+        assert!(!rt.nodes.borrow().contains_key(first.id));
+        let parent_layout = parent.layout_id().unwrap();
+        let child_layout = second.layout_id().unwrap();
+        let taffy = rt.taffy.borrow();
+        assert_eq!(taffy.children(parent_layout).unwrap(), vec![child_layout]);
+        assert_eq!(
+            taffy.style(child_layout).unwrap().size.width,
+            taffy::Dimension::length(20.)
+        );
+    });
+    TRACE.with_borrow(|trace| {
+        assert_eq!((trace.builds, trace.inits), (2, 2));
+        assert!(trace.resources[0].is_disposed());
+        assert!(!trace.resources[1].is_disposed());
+    });
+    drop(parent);
+    TRACE.with_borrow(|trace| assert!(trace.resources.iter().all(|value| value.is_disposed())));
+    assert!(!key.is_disposed());
 }
 
 #[test]

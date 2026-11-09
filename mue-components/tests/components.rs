@@ -191,6 +191,38 @@ fn layout_wrappers_keep_their_presets_below_outer_and_caller_styles() {
 }
 
 #[test]
+fn ordered_list_keeps_rows_when_items_move_or_are_inserted() {
+    let mut fonts = mue_macroquad::font::fontdb::Database::new();
+    fonts.load_font_data(
+        include_bytes!("../../examples/playground/assets/fonts/NotoSans-Regular.ttf").to_vec(),
+    );
+    mue_macroquad::font::initialize("en-US", fonts).unwrap();
+    let owner = OwnedScope::new();
+    let keys = owner.run(|| signal(Rc::<[u32]>::from([1, 2])));
+    let children = map_keyed(keys, |key| *key, |_| stack());
+    let list = owner.run(|| {
+        list()
+            .marker(ListMarker::Ordered(1))
+            .children(children)
+            .into_node()
+    });
+    let original = list.children().get_clone();
+    keys.set(Rc::from([0, 2, 1]));
+    let updated = list.children().get_clone();
+    assert!(updated[1] == original[1]);
+    assert!(updated[2] == original[0]);
+    assert!(updated[0] != original[0] && updated[0] != original[1]);
+    // Marker text nodes must stay the same as well as the wrapping row.
+    let marker = original[0].children().get_clone()[0];
+    keys.set(Rc::from([1, 2]));
+    let reordered = list.children().get_clone();
+    assert!(reordered[0] == original[0]);
+    assert!(reordered[0].children().get_clone()[0] == marker);
+    drop(list);
+    assert!(!keys.is_disposed());
+}
+
+#[test]
 fn pages_defer_children_and_retain_them_across_selection_changes() {
     let owner = OwnedScope::new();
     owner.run(|| {

@@ -154,9 +154,17 @@ impl Runtime {
     }
 
     pub fn with<R>(f: impl FnOnce(&Runtime) -> R) -> R {
+        debug_assert!(
+            !crate::task::is_background_worker(),
+            "reactive runtime is foreground-only; background tasks must return Send values"
+        );
         RUNTIME.with(f)
     }
     pub fn try_with<R>(f: impl FnOnce(&Runtime) -> R) -> Result<R, AccessError> {
+        debug_assert!(
+            !crate::task::is_background_worker(),
+            "reactive runtime is foreground-only; background tasks must return Send values"
+        );
         RUNTIME.try_with(f)
     }
 

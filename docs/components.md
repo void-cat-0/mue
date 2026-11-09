@@ -70,6 +70,31 @@ Tuples can mix builders, prebuilt nodes, plans, and existing child lists. Vector
 
 `map_keyed` waits until the parent context is installed before starting its list computation. Later new keys restore that context and get a separate owner for resources created in their callback. Keys must be unique. Reordering retained keys preserves nodes, original content, and local state without rerunning the callback; changed data under an unchanged key needs its own reactive binding. Removing a key releases its node and callback-owned resources. Adding that key again creates a new node.
 
+Use `map_keyed_prop(list, key_fn, node_fn)` when each retained node needs the latest item or its current position. The construction callback receives `KeyedItem { key, value: Prop<T>, index: Prop<usize> }` and still runs only for new keys. Bind properties through `value.map(...)` or a computed that reads `index`; event callbacks can read `value` when the event occurs:
+
+```rust
+let rows = map_keyed_prop(items, |item| item.id, |row| {
+    let value = row.value;
+    let label = value.map(|item| item.name);
+    button(label, move || rename(value.get_clone()))
+});
+```
+
+This variant requires `T: Clone + PartialEq` and `K: Clone + Hash + Eq`. Same-key updates change the value binding without rebuilding; reordering changes the index binding; equal values do not notify their consumers. Both bindings derive from a shared computed list snapshot, so reading them inside a batch refreshes the latest observable list. The owning children releases all row bindings on drop. A removed row's cleanup may read its last value/index from that snapshot; intermediate list writes never observed inside a batch may be coalesced. Construction callbacks and row cleanup must not read the returned children signal while it is being recomputed: this is a reentrant read of the same computed output. Cleanup should use the row's value/index bindings instead. The extra snapshot and per-row computed bindings are opt-in costs; `map_keyed` remains the simpler API for fixed row inputs. Ordered `list` uses this variant to retain rows while their displayed indices change.
+
+Use `keyed(value, node_fn)` to switch a single subtree from a scalar `Prop<T>` or signal, without wrapping the value in a one-element list. It requires `T: Clone + PartialEq`, with no hashing or separate key function. An equal value retains the current node; a different value creates a new node and releases the old node and its callback-owned resources. Switching back builds a fresh node. Like `map_keyed`, construction is deferred until mount and later builds inherit the mount context. Reads directly inside `node_fn` are snapshots and do not subscribe the selector; nested reactive bindings still track normally. For example:
+
+```rust
+let region = keyed(phase, move |phase| match phase {
+    Phase::Idle => text("Press Load to fetch data.").into_node(),
+    Phase::Loading => loading_spinner(),
+    Phase::Ready => content_view(data.get_clone().unwrap()),
+    Phase::Failed => error_view(error.get_clone().unwrap()),
+});
+```
+
+Updating `data` while `phase` stays `Ready` does not rebuild this region; pass a reactive binding to `content_view` if it should update without a phase change. The scalar helper removes the input list allocation, list projection, and keyed-list bookkeeping. Its output still uses the shared `Children` representation, `Rc<[NodeRef]>`.
+
 `show_if` also returns a `ChildrenPlan`. Materializing the plan during `finish` constructs its node once, even if the initial condition is false. Toggling visibility changes the visible child list while retaining that node and its local state; hiding it does not dispose it or rerun the body when shown again. Dropping the owning child list releases it.
 
 ## Scope, failure, and async boundaries
@@ -82,6 +107,6 @@ Use `scope_future(future)` to opt into an independent `OwnedScope::new_inherited
 
 Disposing the creator scope does not cancel the task. Dropping the task handle cancels it; `detach()` transfers its lifetime management to the executor. `Task<T>.await` yields `T` directly. Its handle is `Send` when `T: Send` and may cross threads for await/drop, but its future is polled and destroyed on its original UI thread, where any scoped cleanup also runs.
 
-`mue_core::task::tick(limit)` polls at most `limit` ready tasks without blocking. `mue_macroquad::App::frame` drives up to 32 task polls after timeouts and before layout. One poll is not preempted: synchronous I/O or CPU-heavy code still blocks that frame. A background executor is not implemented. For expected failures, use a `Result<T, E>` task output or `AsyncResource<T, E>`, which owns its state owner and task and exposes `Loading` then `Ready(Result<T, E>)` as a reactive signal. Its state persists until resource drop; its input operation uses plain `spawn` unless explicitly wrapped in `scope_future`. `is_finished()` becomes true after future destruction and any opt-in scoped cleanup. Polling a completed task again or awaiting one forcibly stopped at executor shutdown panics. There is no fallible `Task` API; panics propagate without recovery.
+`mue_core::task::tick(limit)` polls at most `limit` ready tasks without blocking. `mue_macroquad::App::frame` drives up to 32 task polls after timeouts and before layout. One poll is not preempted: synchronous I/O or CPU-heavy code still blocks that frame. Background work uses `spawn_background` or `AsyncResource::new_background`; its future and output must be `Send`, and the result is published on the UI thread. For expected failures, use a `Result<T, E>` task output or `AsyncResource<T, E>`, which owns its state owner and task and exposes `Loading` then `Ready(Result<T, E>)` as a reactive signal. Its state persists until resource drop; `new` runs the operation on the foreground executor, while `new_background` uses the background pool. A background operation cannot use `scope_future`. `is_finished()` becomes true after future destruction and any opt-in scoped cleanup. Polling a completed task again or awaiting one forcibly stopped at executor shutdown panics. There is no fallible `Task` API; panics propagate without recovery.
 
 For application-owned tokens, `provide` / `inject`, snapshots versus bindings, scope ownership, asynchronous boundaries, explicit hover, and inherited foreground, see [application tokens and context](themes.md).
