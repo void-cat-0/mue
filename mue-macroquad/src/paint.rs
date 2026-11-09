@@ -2,6 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
+    sync::OnceLock,
 };
 
 use lyon::{
@@ -26,6 +27,7 @@ use crate::{
     shader::{Brush, IntoShader, Shader, SharedTexture},
     style::Style,
 };
+use macroquad::retained::RetainedVertex;
 
 #[derive(Default)]
 struct Cache {
@@ -54,9 +56,31 @@ pub(crate) fn with_transform<R>(transform: Matrix, draw: impl FnOnce() -> R) -> 
     result
 }
 
-/// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.
-pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
-    let transform = DRAW_TRANSFORM.get();
+/// The accumulated transform for the node currently rendering.
+pub(crate) fn current_transform() -> Matrix {
+    DRAW_TRANSFORM.get()
+}
+
+/// Whether mue should use macroquad's retained geometry path.
+///
+/// This includes the backend check, so callers can skip building retained
+/// geometry entirely on backends that only support the immediate path.
+pub(crate) fn retained_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("MUE_RETAINED").is_none_or(|value| value != "0")
+            && macroquad::retained::is_supported()
+    })
+}
+
+/// Whether retained rebuilds should be logged.
+pub(crate) fn retained_debug() -> bool {
+    static DEBUG: OnceLock<bool> = OnceLock::new();
+    *DEBUG.get_or_init(|| std::env::var_os("MUE_RETAINED_DEBUG").is_some())
+}
+
+/// Axis-aligned bounds of a rectangle after a canvas transform.
+pub(crate) fn transform_rect(transform: Matrix, rect: Rect) -> Rect {
     let corners = [
         rect.min(),
         rect.max(),
@@ -66,7 +90,13 @@ pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
     .map(|point| crate::math::project_point(transform, point));
     let min = corners.into_iter().reduce(Vector::min).unwrap();
     let max = corners.into_iter().reduce(Vector::max).unwrap();
-    let rect = Rect::new(min.x, min.y, max.x - min.x, max.y - min.y);
+    Rect::new(min.x, min.y, max.x - min.x, max.y - min.y)
+}
+
+/// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.
+pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
+    let transform = DRAW_TRANSFORM.get();
+    let rect = transform_rect(transform, rect);
     let gl = unsafe { macroquad::window::get_internal_gl() }.quad_gl;
     let previous = gl.get_scissor();
     let scale = macroquad::window::screen_dpi_scale();
@@ -130,6 +160,11 @@ pub struct Paint {
 impl Paint {
     #[cfg(test)]
     pub(crate) fn effective_opacity(&self) -> f32 {
+        self.opacity.get()
+    }
+
+    /// Effective alpha for retained geometry.
+    pub(crate) fn opacity(&self) -> f32 {
         self.opacity.get()
     }
 
@@ -207,7 +242,54 @@ pub struct Shapes {
 
 impl mue_core::prop::PropValue for Shapes {}
 
+/// One texture batch of retained geometry.
+pub(crate) struct RetainedBatch {
+    pub(crate) texture: Option<SharedTexture>,
+    pub(crate) vertices: Vec<RetainedVertex>,
+    pub(crate) indices: Vec<u32>,
+}
+
 impl Shapes {
+    /// Total vertex count across all texture batches.
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.shapes
+            .iter()
+            .map(|shape| shape.buffers.vertices.len())
+            .sum()
+    }
+
+    /// Convert the cached geometry into immutable buffer batches.
+    pub(crate) fn retained_batches(&self) -> Vec<RetainedBatch> {
+        self.shapes
+            .iter()
+            .filter(|shape| !shape.buffers.vertices.is_empty() && !shape.buffers.indices.is_empty())
+            .map(|shape| RetainedBatch {
+                texture: shape.texture.clone(),
+                vertices: shape
+                    .buffers
+                    .vertices
+                    .iter()
+                    .map(|vertex| RetainedVertex {
+                        position: [vertex.position.x, vertex.position.y],
+                        texcoord: [vertex.uv.x, vertex.uv.y],
+                        color: [
+                            vertex.color[0] as f32 / 255.,
+                            vertex.color[1] as f32 / 255.,
+                            vertex.color[2] as f32 / 255.,
+                            vertex.color[3] as f32 / 255.,
+                        ],
+                    })
+                    .collect(),
+                indices: shape
+                    .buffers
+                    .indices
+                    .iter()
+                    .map(|&index| index as u32)
+                    .collect(),
+            })
+            .collect()
+    }
+
     /// Build reusable geometry in local coordinates for a `shape` node.
     pub fn build(f: impl FnOnce(&mut ShapesBuilder)) -> Rc<Self> {
         let mut shapes = Self::default();
@@ -937,6 +1019,25 @@ mod tests {
                 .sum::<usize>(),
             256 * 256 * 6
         );
+    }
+
+    #[test]
+    fn retained_batches_preserve_cached_geometry() {
+        let shapes = Shapes::build(|builder| {
+            builder.fill_rect(Rect::new(0., 0., 10., 10.), Color::WHITE);
+        });
+        assert_eq!(shapes.vertex_count(), 4);
+
+        let batches = shapes.retained_batches();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert!(batch.texture.is_none());
+        assert_eq!(batch.vertices.len(), 4);
+        assert_eq!(batch.indices.len(), 6);
+        assert_eq!(batch.vertices[0].position, [0., 0.]);
+        assert_eq!(batch.vertices[2].position, [0., 10.]);
+        assert_eq!(batch.vertices[3].position, [10., 10.]);
+        assert_eq!(batch.indices, [0, 1, 3, 0, 3, 2]);
     }
 
     #[test]

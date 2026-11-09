@@ -11,14 +11,24 @@ use cosmic_text::{
 use mue_core::{
     effect::{computed, watch_effect},
     prop::Prop,
-    signal::Access,
+    signal::{Access, signal},
 };
 use taffy::{AvailableSpace, Size};
 
 use crate::{
-    layout::use_layout, math::Rect, paint::use_background, paint::use_paint, runtime::Runtime,
+    color::Color,
+    layout::use_layout,
+    math::{Matrix, Rect, vec2},
+    paint::{
+        current_transform, retained_debug, retained_enabled, transform_rect, use_background,
+        use_paint,
+    },
+    runtime::Runtime,
+    shader::Brush,
     style::Style,
 };
+use macroquad::retained::{self, RetainedMesh, RetainedVertex};
+use miniquad::TextureId;
 
 /// Preferred break opportunities. `text_wrap(false)` disables all wrapping.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -154,6 +164,222 @@ fn measured_size(buffer: &Buffer, paragraph_spacing: f32, max_lines: Option<usiz
     size
 }
 
+const RETAINED_TEXT_MIN_GLYPHS: usize = 1_024;
+
+type RetainedTextBatch = (TextureId, Vec<RetainedVertex>, Vec<u32>);
+
+#[derive(PartialEq)]
+struct RetainedTextKey {
+    revision: u64,
+    width: f32,
+    height: f32,
+    y: f32,
+    max_lines: Option<usize>,
+    strike: bool,
+    underline: bool,
+    color: Brush,
+    atlas_rasterized: u64,
+    atlas_evicted: u64,
+    atlas_pages: usize,
+}
+
+#[derive(Default)]
+struct RetainedTextCache {
+    key: Option<RetainedTextKey>,
+    meshes: Vec<RetainedMesh>,
+    disabled: bool,
+}
+
+/// Current scissor in logical, top-left coordinates.
+fn current_clip_logical() -> Option<Rect> {
+    let scale = macroquad::window::screen_dpi_scale().max(f32::EPSILON);
+    let gl = unsafe { macroquad::window::get_internal_gl() };
+    gl.quad_gl.get_scissor().map(|(x, y, w, h)| {
+        Rect::new(
+            x as f32 / scale,
+            y as f32 / scale,
+            w as f32 / scale,
+            h as f32 / scale,
+        )
+    })
+}
+
+fn rect_visible(clip: Option<Rect>, rect: &Rect) -> bool {
+    clip.is_none_or(|clip| clip.intersect(rect).is_some())
+}
+
+fn push_quad(
+    batches: &mut Vec<RetainedTextBatch>,
+    texture: TextureId,
+    rect: Rect,
+    uv: Rect,
+    color: Color,
+) {
+    let index = batches
+        .iter()
+        .position(|(candidate, _, _)| *candidate == texture);
+    let batch = match index {
+        Some(index) => &mut batches[index],
+        None => {
+            batches.push((texture, Vec::new(), Vec::new()));
+            let index = batches.len() - 1;
+            &mut batches[index]
+        }
+    };
+    let base = batch.1.len() as u32;
+    let color = [color.r, color.g, color.b, color.a];
+    let (x, y, w, h) = (rect.x, rect.y, rect.w, rect.h);
+    batch.1.extend_from_slice(&[
+        RetainedVertex {
+            position: [x, y],
+            texcoord: [uv.x, uv.y],
+            color,
+        },
+        RetainedVertex {
+            position: [x + w, y],
+            texcoord: [uv.right(), uv.y],
+            color,
+        },
+        RetainedVertex {
+            position: [x + w, y + h],
+            texcoord: [uv.right(), uv.bottom()],
+            color,
+        },
+        RetainedVertex {
+            position: [x, y + h],
+            texcoord: [uv.x, uv.bottom()],
+            color,
+        },
+    ]);
+    batch
+        .2
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// Keep every glyph used by a retained mesh resident in the atlas.
+fn pin_glyphs(buffer: &Buffer, fonts: &mut FontState, max_lines: Option<usize>) {
+    for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
+        for glyph in run.glyphs.iter() {
+            let physical_glyph = glyph.physical((0., 0.), 1.0);
+            let atlas = fonts
+                .font_atlas
+                .get_or_insert_with(|| Atlas::new(device_page_size()));
+            let _ = atlas.cache_glyph(
+                &mut fonts.font_system,
+                &mut fonts.swash_cache,
+                physical_glyph.cache_key,
+            );
+        }
+    }
+    if let Some(atlas) = &mut fonts.font_atlas {
+        atlas.end_pass();
+    }
+}
+
+struct RetainedTextStyle<'a> {
+    bounds: Rect,
+    y: f32,
+    spacing: f32,
+    font_size: f32,
+    max_lines: Option<usize>,
+    strike: bool,
+    underline: bool,
+    color: &'a Brush,
+}
+
+fn build_retained_text(
+    buffer: &Buffer,
+    fonts: &mut FontState,
+    style: RetainedTextStyle<'_>,
+) -> Vec<RetainedTextBatch> {
+    let RetainedTextStyle {
+        bounds,
+        y,
+        spacing,
+        font_size,
+        max_lines,
+        strike,
+        underline,
+        color,
+    } = style;
+    let white = retained::white_texture();
+    let white_uv = Rect::new(0., 0., 1., 1.);
+    // Keep the solid batch first so underlines/strikes are painted before the
+    // glyphs, matching the immediate path.
+    let mut batches = vec![(white, Vec::new(), Vec::new())];
+    for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
+        let local_origin = vec2(0., y + run.line_i as f32 * spacing);
+        let pen = vec2(0., (local_origin.y + run.line_y).round());
+        if strike {
+            let left = run
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .reduce(f32::min)
+                .unwrap_or(0.);
+            let rect = Rect::new(
+                pen.x + left,
+                pen.y - font_size * 0.3,
+                run.line_w,
+                (font_size / 16.).max(1.),
+            );
+            let color = color.color_at(rect.center() + bounds.min(), bounds);
+            push_quad(&mut batches, white, rect, white_uv, color);
+        }
+        if underline {
+            let left = run
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .reduce(f32::min)
+                .unwrap_or(0.);
+            let rect = Rect::new(
+                pen.x + left,
+                pen.y + 2.,
+                run.line_w,
+                (font_size / 16.).max(1.),
+            );
+            let color = color.color_at(rect.center() + bounds.min(), bounds);
+            push_quad(&mut batches, white, rect, white_uv, color);
+        }
+        for glyph in run.glyphs.iter() {
+            let physical_glyph = glyph.physical((0., 0.), 1.0);
+            let atlas = fonts
+                .font_atlas
+                .get_or_insert_with(|| Atlas::new(device_page_size()));
+            let Some(cached) = atlas.cache_glyph(
+                &mut fonts.font_system,
+                &mut fonts.swash_cache,
+                physical_glyph.cache_key,
+            ) else {
+                continue;
+            };
+            let placement = cached.placement;
+            let draw_rect = Rect::new(
+                (physical_glyph.x + placement.left) as f32 + pen.x,
+                (physical_glyph.y - placement.top) as f32 + pen.y,
+                placement.width as f32,
+                placement.height as f32,
+            );
+            let glyph_color = glyph.color_opt.map_or_else(
+                || color.color_at(draw_rect.center() + bounds.min(), bounds),
+                |color| Color::from_rgba(color.r(), color.g(), color.b(), color.a()),
+            );
+            push_quad(
+                &mut batches,
+                cached.texture.raw_miniquad_id(),
+                draw_rect,
+                cached.uv,
+                glyph_color,
+            );
+        }
+    }
+    if let Some(atlas) = &mut fonts.font_atlas {
+        atlas.end_pass();
+    }
+    batches
+}
+
 /// Display a plain reactive string with the renderer's text node.
 #[mue_macros::node]
 pub fn text(ctx: NodeContext, text: Rc<str>) -> Node {
@@ -250,6 +476,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
         }
     });
 
+    let revision = signal(0u64);
     watch_effect({
         let buffer = buffer.clone();
         let align = style.take_text_align();
@@ -298,10 +525,12 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                 buffer.set_metrics_and_size(metrics, None, None);
                 let _ = spacing.get();
                 layout.mark_dirty();
+                revision.update(|value| *value = value.wrapping_add(1));
             });
         }
     });
 
+    let retained_cache = Rc::new(RefCell::new(RetainedTextCache::default()));
     style.on_render.append(move |_| {
         let mut buffer = buffer.borrow_mut();
         Runtime::with_fonts_mut(|fonts| {
@@ -331,7 +560,123 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                 TextVerticalAlign::Center => free / 2.,
                 TextVerticalAlign::Bottom => free,
             };
+            let color_brush = color.get_clone();
+            // Check the cheap policy gates before walking the glyph runs; on
+            // backends without retained support this avoids the scan entirely.
+            let retained_requested = retained_enabled() && !retained_cache.borrow().disabled;
+            let glyph_count = if retained_requested {
+                buffer
+                    .layout_runs()
+                    .take(max_lines.get().unwrap_or(usize::MAX))
+                    .map(|run| run.glyphs.len())
+                    .sum::<usize>()
+            } else {
+                0
+            };
+            let retained_eligible = retained_requested && glyph_count >= RETAINED_TEXT_MIN_GLYPHS;
+            if retained_eligible {
+                let key = RetainedTextKey {
+                    revision: revision.get_untracked(),
+                    width: bounds.w,
+                    height: bounds.h,
+                    y,
+                    max_lines: max_lines.get(),
+                    strike: strike.get(),
+                    underline: text_underline.get(),
+                    color: color_brush.clone(),
+                    atlas_rasterized: 0,
+                    atlas_evicted: 0,
+                    atlas_pages: 0,
+                };
+                let mut cache = retained_cache.borrow_mut();
+                // Keep the atlas entries referenced by the retained buffers alive
+                // even on cache hits.
+                pin_glyphs(&buffer, fonts, max_lines.get());
+                let stats = fonts
+                    .font_atlas
+                    .as_ref()
+                    .map(Atlas::stats)
+                    .unwrap_or_default();
+                let key = RetainedTextKey {
+                    atlas_rasterized: stats.rasterized,
+                    atlas_evicted: stats.evicted,
+                    atlas_pages: stats.pages,
+                    ..key
+                };
+                if cache.key.as_ref() != Some(&key) {
+                    let batches = build_retained_text(
+                        &buffer,
+                        fonts,
+                        RetainedTextStyle {
+                            bounds,
+                            y,
+                            spacing: spacing.get().max(0.),
+                            font_size: font_size.get(),
+                            max_lines: max_lines.get(),
+                            strike: strike.get(),
+                            underline: text_underline.get(),
+                            color: &color_brush,
+                        },
+                    );
+                    let mut meshes = Vec::new();
+                    for (texture, vertices, indices) in batches {
+                        if let Some(mesh) = RetainedMesh::new(&vertices, &indices, texture) {
+                            meshes.push(mesh);
+                        }
+                    }
+                    let stats = fonts
+                        .font_atlas
+                        .as_ref()
+                        .map(Atlas::stats)
+                        .unwrap_or_default();
+                    let key = RetainedTextKey {
+                        atlas_rasterized: stats.rasterized,
+                        atlas_evicted: stats.evicted,
+                        atlas_pages: stats.pages,
+                        ..key
+                    };
+                    if meshes.is_empty() {
+                        cache.disabled = true;
+                        cache.meshes.clear();
+                        cache.key = None;
+                    } else {
+                        if retained_debug() {
+                            eprintln!(
+                                "retained text: {} glyphs, {} meshes",
+                                glyph_count,
+                                meshes.len()
+                            );
+                        }
+                        cache.meshes = meshes;
+                        cache.key = Some(key);
+                    }
+                }
+                if !cache.meshes.is_empty() {
+                    let draw_retained = || {
+                        let translation = Matrix::from_translation(vec2(
+                            bounds.min().x.round(),
+                            bounds.min().y.round(),
+                        ));
+                        let model = current_transform() * translation;
+                        retained::draw_meshes(
+                            &cache.meshes,
+                            crate::math::model_matrix(model),
+                            paint.opacity(),
+                        );
+                    };
+                    if max_lines.get().is_some() || overflow.get() != TextOverflow::Visible {
+                        crate::paint::with_clip(bounds, draw_retained);
+                    } else {
+                        draw_retained();
+                    }
+                    return;
+                }
+                drop(cache);
+            }
+
             let mut draw = || {
+                let clip = current_clip_logical();
+                let transform = current_transform();
                 paint.draw(|p| {
                     for run in buffer
                         .layout_runs()
@@ -352,15 +697,15 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 .map(|g| g.x)
                                 .reduce(f32::min)
                                 .unwrap_or(0.);
-                            p.fill_rect(
-                                Rect::new(
-                                    pen.x + left,
-                                    pen.y - font_size.get() * 0.3,
-                                    run.line_w,
-                                    (font_size.get() / 16.).max(1.),
-                                ),
-                                color.get_clone().shader(bounds),
+                            let rule = Rect::new(
+                                pen.x + left,
+                                pen.y - font_size.get() * 0.3,
+                                run.line_w,
+                                (font_size.get() / 16.).max(1.),
                             );
+                            if rect_visible(clip, &transform_rect(transform, rule)) {
+                                p.fill_rect(rule, color.get_clone().shader(bounds));
+                            }
                         }
                         if text_underline.get() {
                             let left = run
@@ -375,7 +720,9 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 run.line_w,
                                 (font_size.get() / 16.).max(1.),
                             );
-                            p.fill_rect(underline, color.get_clone().shader(bounds));
+                            if rect_visible(clip, &transform_rect(transform, underline)) {
+                                p.fill_rect(underline, color.get_clone().shader(bounds));
+                            }
                         }
                         for glyph in run.glyphs.iter() {
                             let physical_glyph = glyph.physical((0., 0.), 1.0);
@@ -396,6 +743,9 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 placement.width as f32,
                                 placement.height as f32,
                             );
+                            if !rect_visible(clip, &transform_rect(transform, draw_rect)) {
+                                continue;
+                            }
                             p.draw_texture(
                                 draw_rect,
                                 cached.texture,
