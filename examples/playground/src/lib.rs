@@ -53,7 +53,6 @@ fn destination(index: usize) -> Node {
     scroll_area()
         .style(mue_macroquad::style! {
         width: 100%; height: 100%;
-        background: {background()};
         })
         .options(ScrollOptions {
             touch: true,

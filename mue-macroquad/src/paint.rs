@@ -2,7 +2,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
-    sync::OnceLock,
 };
 
 use lyon::{
@@ -66,17 +65,7 @@ pub(crate) fn current_transform() -> Matrix {
 /// This includes the backend check, so callers can skip building retained
 /// geometry entirely on backends that only support the immediate path.
 pub(crate) fn retained_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("MUE_RETAINED").is_none_or(|value| value != "0")
-            && macroquad::retained::is_supported()
-    })
-}
-
-/// Whether retained rebuilds should be logged.
-pub(crate) fn retained_debug() -> bool {
-    static DEBUG: OnceLock<bool> = OnceLock::new();
-    *DEBUG.get_or_init(|| std::env::var_os("MUE_RETAINED_DEBUG").is_some())
+    macroquad::retained::is_supported()
 }
 
 /// Axis-aligned bounds of a rectangle after a canvas transform.
@@ -91,6 +80,25 @@ pub(crate) fn transform_rect(transform: Matrix, rect: Rect) -> Rect {
     let min = corners.into_iter().reduce(Vector::min).unwrap();
     let max = corners.into_iter().reduce(Vector::max).unwrap();
     Rect::new(min.x, min.y, max.x - min.x, max.y - min.y)
+}
+
+/// Current scissor in logical, top-left coordinates.
+pub(crate) fn current_clip_logical() -> Option<Rect> {
+    let scale = macroquad::window::screen_dpi_scale().max(f32::EPSILON);
+    let gl = unsafe { get_internal_gl() };
+    gl.quad_gl.get_scissor().map(|(x, y, w, h)| {
+        Rect::new(
+            x as f32 / scale,
+            y as f32 / scale,
+            w as f32 / scale,
+            h as f32 / scale,
+        )
+    })
+}
+
+/// Whether `rect` intersects `clip`, or the clip is absent.
+pub(crate) fn rect_visible(clip: Option<Rect>, rect: &Rect) -> bool {
+    clip.is_none_or(|clip| clip.intersect(rect).is_some())
 }
 
 /// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.

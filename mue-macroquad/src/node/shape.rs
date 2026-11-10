@@ -4,11 +4,14 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     layout::use_layout,
-    math::Matrix,
-    paint::{Shapes, current_transform, retained_debug, retained_enabled, use_paint},
+    math::{Matrix, Rect, vec2},
+    paint::{
+        Shapes, current_clip_logical, current_transform, rect_visible, retained_enabled,
+        transform_rect, use_paint,
+    },
     style::Style,
 };
-use macroquad::retained::{self, RetainedMesh};
+use macroquad::retained::{self, RetainedMesh, RetainedVertex};
 
 /// Large static `Shapes` are uploaded once instead of every frame.
 const RETAINED_SHAPE_MIN_VERTICES: usize = 4_096;
@@ -17,7 +20,22 @@ const RETAINED_SHAPE_MIN_VERTICES: usize = 4_096;
 struct RetainedShapeCache {
     source: Option<Rc<Shapes>>,
     meshes: Vec<RetainedMesh>,
+    /// Union of every batch's vertex positions, in shape-local space.
+    bounds: Option<Rect>,
     disabled: bool,
+}
+
+fn vertex_bounds(vertices: &[RetainedVertex]) -> Option<Rect> {
+    let mut iter = vertices.iter();
+    let first = iter.next()?;
+    let mut min = vec2(first.position[0], first.position[1]);
+    let mut max = min;
+    for vertex in iter {
+        let position = vec2(vertex.position[0], vertex.position[1]);
+        min = min.min(position);
+        max = max.max(position);
+    }
+    Some(Rect::new(min.x, min.y, max.x - min.x, max.y - min.y))
 }
 
 /// Draw prebuilt shapes in local coordinates within a node's layout and lifetime.
@@ -41,6 +59,7 @@ pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
                         .is_none_or(|source| !Rc::ptr_eq(source, &shapes_rc));
                     if rebuild {
                         let mut meshes = Vec::new();
+                        let mut bounds: Option<Rect> = None;
                         for batch in shapes_rc.retained_batches() {
                             let texture = batch
                                 .texture
@@ -51,28 +70,35 @@ pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
                             if let Some(mesh) =
                                 RetainedMesh::new(&batch.vertices, &batch.indices, texture)
                             {
+                                if let Some(batch_bounds) = vertex_bounds(&batch.vertices) {
+                                    bounds = Some(match bounds {
+                                        Some(bounds) => bounds.union(&batch_bounds),
+                                        None => batch_bounds,
+                                    });
+                                }
                                 meshes.push(mesh);
                             }
                         }
                         if meshes.is_empty() {
                             cache.disabled = true;
                             cache.meshes.clear();
+                            cache.bounds = None;
                             cache.source = None;
                         } else {
-                            if retained_debug() {
-                                eprintln!(
-                                    "retained shape: {} vertices, {} meshes",
-                                    shapes_rc.vertex_count(),
-                                    meshes.len()
-                                );
-                            }
                             cache.meshes = meshes;
+                            cache.bounds = bounds;
                             cache.source = Some(shapes_rc.clone());
                         }
                     }
                     if !cache.meshes.is_empty() {
                         let model =
                             current_transform() * Matrix::from_translation(rect_value.min());
+                        if let Some(bounds) = cache.bounds {
+                            let screen = transform_rect(model, bounds);
+                            if !rect_visible(current_clip_logical(), &screen) {
+                                return;
+                            }
+                        }
                         retained::draw_meshes(&cache.meshes, crate::math::model_matrix(model), 1.0);
                         return;
                     }
@@ -90,4 +116,28 @@ pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
                 .pop_model_matrix();
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vertex(x: f32, y: f32) -> RetainedVertex {
+        RetainedVertex {
+            position: [x, y],
+            texcoord: [0., 0.],
+            color: [1.; 4],
+        }
+    }
+
+    #[test]
+    fn vertex_bounds_cover_every_position() {
+        let bounds = vertex_bounds(&[vertex(10., 20.), vertex(-5., 30.), vertex(0., -2.)]).unwrap();
+        assert_eq!(bounds, Rect::new(-5., -2., 15., 32.));
+    }
+
+    #[test]
+    fn empty_vertices_have_no_bounds() {
+        assert_eq!(vertex_bounds(&[]), None);
+    }
 }
