@@ -9,5 +9,8 @@ pub use crate::{
     runtime::batch,
     scope::{OwnedScope, Scope, ScopedFuture, current_scope, scope_future},
     signal::{Access, ReadSignal, Signal, signal},
-    task::{AsyncResource, AsyncState, BackgroundTask, Task, spawn, spawn_background},
+    task::{
+        AsyncResource, AsyncState, BlockingTask, Elapsed, FallibleTask, JoinSet, Task,
+        next_timer_deadline, sleep, spawn, spawn_blocking, timeout, try_spawn,
+    },
 };

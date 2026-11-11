@@ -14,6 +14,7 @@ use crate::{
     },
     scope::{ScopeId, ScopeInner},
     signal::{SignalId, SignalInner, Value},
+    update_context::UpdateContext,
 };
 
 #[cfg(test)]
@@ -154,14 +155,14 @@ impl Runtime {
     }
 
     pub fn with<R>(f: impl FnOnce(&Runtime) -> R) -> R {
-        debug_assert!(
+        assert!(
             !crate::task::is_background_worker(),
             "reactive runtime is foreground-only; background tasks must return Send values"
         );
         RUNTIME.with(f)
     }
     pub fn try_with<R>(f: impl FnOnce(&Runtime) -> R) -> Result<R, AccessError> {
-        debug_assert!(
+        assert!(
             !crate::task::is_background_worker(),
             "reactive runtime is foreground-only; background tasks must return Send values"
         );
@@ -177,13 +178,38 @@ impl Runtime {
     }
 
     // Tasks execute independently of any effect that happens to drive/cancel them.
-    // As with Scope::run, panic recovery is not supported.
+    // As with Scope::run, panic recovery is not supported. The guard restores the
+    // caller's tracker, effect, and UpdateContext on unwind so a caught task panic
+    // cannot leave the executor's isolation state permanently cleared.
     pub(crate) fn without_effect<R>(&self, f: impl FnOnce() -> R) -> R {
+        struct Restore<'a> {
+            runtime: &'a Runtime,
+            tracker: Option<DependencyTracker>,
+            effect: Option<EffectId>,
+            context: Option<UpdateContext>,
+        }
+
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.runtime.current_effect.replace(self.effect.take());
+                self.runtime.tracker.replace(self.tracker.take());
+                if let Some(context) = self.context.take() {
+                    crate::update_context::restore(context);
+                }
+            }
+        }
+
         let previous_tracker = self.tracker.replace(None);
         let previous_effect = self.current_effect.replace(None);
+        let previous_context = crate::update_context::take();
+        let restore = Restore {
+            runtime: self,
+            tracker: previous_tracker,
+            effect: previous_effect,
+            context: previous_context,
+        };
         let result = f();
-        self.current_effect.replace(previous_effect);
-        self.tracker.replace(previous_tracker);
+        drop(restore);
         result
     }
 

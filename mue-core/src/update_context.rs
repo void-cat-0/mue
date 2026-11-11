@@ -29,6 +29,20 @@ impl UpdateContext {
     }
 }
 
+/// Take the current context, leaving an empty one. Returns `None` if the
+/// thread-local context has already been destroyed.
+pub(crate) fn take() -> Option<UpdateContext> {
+    CURRENT
+        .try_with(|current| std::mem::take(&mut *current.borrow_mut()))
+        .ok()
+}
+
+/// Restore a context taken by [`take`]. Ignored if the thread-local context has
+/// already been destroyed.
+pub(crate) fn restore(context: UpdateContext) {
+    let _ = CURRENT.try_with(|current| *current.borrow_mut() = context);
+}
+
 /// Attach metadata to updates made by `f`. Nested values override the same type.
 /// The runtime preserves this context through computed signals and batches.
 pub fn with_update_context<T: 'static, R>(value: T, f: impl FnOnce() -> R) -> R {

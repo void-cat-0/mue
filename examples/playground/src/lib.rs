@@ -94,10 +94,10 @@ pub async fn run() {
     let selected = signal(0usize);
     let fps = signal(0u32);
     let zoom = responsive::zoom();
-    // Font parsing is CPU-heavy. Build the database on the background pool and
+    // Font parsing is CPU-heavy. Build the database on a blocking thread and
     // keep a text-free loading screen until it is ready.
-    let mut font_db = Some(AsyncResource::<fontdb::Database, String>::new_background(
-        async { Ok(fonts::database()) },
+    let mut font_db = Some(AsyncResource::<fontdb::Database, String>::new_blocking(
+        || Ok(fonts::database()),
     ));
     let mut loading_app = Some(App::new(loading_screen()));
     let mut real_app: Option<App> = None;

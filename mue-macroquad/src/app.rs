@@ -47,6 +47,9 @@ impl App {
 
     /// Advance transitions and render one frame, then dispatch pointer events.
     /// Call once per frame before `macroquad::next_frame`.
+    ///
+    /// The host must have an active render pass; mue does not call
+    /// `begin_default_pass`/`end_pass` itself.
     pub fn frame(&mut self) {
         let root_node = *self.root_node;
         let viewport = crate::viewport::Viewport {
@@ -57,29 +60,7 @@ impl App {
             crate::viewport::set(viewport);
             transition::advance(macroquad::time::get_frame_time());
         });
-        batch(|| {
-            let time = get_time();
-            Runtime::with(|rt| {
-                let key = TimeoutKey {
-                    time: NotNan::new(time.next_up()).unwrap(),
-                    aborted: Rc::default(),
-                };
-                #[allow(clippy::mutable_key_type)]
-                let due_timeouts = {
-                    let mut timeouts = rt.timeouts.borrow_mut();
-                    let mut due = timeouts.split_off(&key);
-                    mem::swap(&mut *timeouts, &mut due);
-                    due
-                };
-                for (key, callback) in due_timeouts {
-                    if key.aborted.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    callback();
-                }
-            });
-        });
-        task::tick(32);
+        self.drive_tasks();
         self.root_node.resolve_font_sizes();
         for pass in 0..64 {
             let mut changed = false;
@@ -126,5 +107,37 @@ impl App {
         // signal batch; changes to layout are handled by the next normal frame.
         self.pointer_manager.process(root_node);
         batch(|| crate::event::wheel::check_wheel(root_node));
+    }
+
+    /// Advance timeouts and tasks without layout, rendering, or input.
+    /// Use while the host surface is suspended; call [`Self::frame`] after resuming.
+    pub fn frame_paused(&mut self) {
+        self.drive_tasks();
+    }
+
+    fn drive_tasks(&mut self) {
+        batch(|| {
+            let time = get_time();
+            Runtime::with(|rt| {
+                let key = TimeoutKey {
+                    time: NotNan::new(time.next_up()).unwrap(),
+                    aborted: Rc::default(),
+                };
+                #[allow(clippy::mutable_key_type)]
+                let due_timeouts = {
+                    let mut timeouts = rt.timeouts.borrow_mut();
+                    let mut due = timeouts.split_off(&key);
+                    mem::swap(&mut *timeouts, &mut due);
+                    due
+                };
+                for (key, callback) in due_timeouts {
+                    if key.aborted.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    callback();
+                }
+            });
+        });
+        task::tick(32);
     }
 }

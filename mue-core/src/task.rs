@@ -1,14 +1,20 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
+    fmt,
     future::Future,
+    marker::PhantomData,
+    mem,
+    panic::Location,
     pin::Pin,
+    rc::Rc,
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context, Poll, Waker},
     thread::{self, ThreadId},
+    time::{Duration, Instant},
 };
 
 use async_task::{Runnable, Task as AsyncTask};
@@ -20,10 +26,18 @@ use crate::{
     signal::{ReadSignal, Signal},
 };
 
-mod background;
-pub use background::{BackgroundExecutor, BackgroundTask, spawn_background};
+mod blocking;
+pub use blocking::{BlockingTask, spawn_blocking};
 
-type LocalRunnable = Runnable<u64>;
+/// Metadata attached to every foreground runnable for debugging.
+#[derive(Clone, Copy, Debug)]
+struct RunnableMeta {
+    key: u64,
+    location: &'static Location<'static>,
+    spawned: Instant,
+}
+
+type LocalRunnable = Runnable<RunnableMeta>;
 
 static NEXT_TASK_KEY: AtomicU64 = AtomicU64::new(1);
 
@@ -47,6 +61,7 @@ struct TaskToken {
     owner_thread: ThreadId,
     queue: Arc<ReadyQueue>,
     finished: AtomicBool,
+    meta: RunnableMeta,
 }
 
 impl TaskToken {
@@ -114,7 +129,7 @@ impl ReadyQueue {
 
     fn take_key(&self, key: u64) -> Option<LocalRunnable> {
         let mut state = self.state.lock().unwrap();
-        let position = state.ready.iter().position(|r| *r.metadata() == key)?;
+        let position = state.ready.iter().position(|r| r.metadata().key == key)?;
         state.ready.remove(position)
     }
 }
@@ -154,26 +169,35 @@ struct Executor {
     tasks: HashMap<u64, Registration>,
     queue: Arc<ReadyQueue>,
     wake: Arc<WakeSlot>,
+    timers: BTreeMap<Instant, Vec<Waker>>,
+    clock: Option<Arc<dyn Fn() -> Instant + Send + Sync>>,
     in_tick: bool,
+    quitting: bool,
 }
 
 impl Executor {
     fn new() -> Self {
         // tick() can initialize the executor before the first spawn. Keep reactive TLS
         // alive through executor teardown in case future destructors access it.
+        // UpdateContext is initialized here so its TLS outlives the executor too.
         Runtime::with(|_| {});
         current_scope();
+        crate::update_context::UpdateContext::current();
         Self {
             tasks: HashMap::new(),
             queue: Arc::new(ReadyQueue::new()),
             wake: Arc::new(WakeSlot::new()),
+            timers: BTreeMap::new(),
+            clock: None,
             in_tick: false,
+            quitting: false,
         }
     }
 }
 
 impl Drop for Executor {
     fn drop(&mut self) {
+        self.quitting = true;
         {
             let mut state = self.queue.state.lock().unwrap();
             state.closing = true;
@@ -227,10 +251,12 @@ impl<F: Future> Future for TaskFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let future = this
-            .future
-            .as_mut()
-            .expect("task future polled after completion");
+        let future = this.future.as_mut().unwrap_or_else(|| {
+            panic!(
+                "task future polled after completion; task spawned at {}",
+                this.token.meta.location
+            )
+        });
         Runtime::with(|rt| rt.without_effect(|| Scope::null().run(|| future.as_mut().poll(cx))))
     }
 }
@@ -252,6 +278,152 @@ pub fn set_wake_callback(callback: Option<Arc<dyn Fn() + Send + Sync>>) {
     EXECUTOR.with_borrow(|executor| executor.wake.set(callback));
 }
 
+/// The current thread's task executor is shutting down or already destroyed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutorClosed;
+
+impl fmt::Display for ExecutorClosed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("task executor is shutting down")
+    }
+}
+
+impl std::error::Error for ExecutorClosed {}
+
+/// Stop accepting new tasks on the current thread's executor.
+///
+/// Existing tasks continue until they complete or the executor is dropped. After
+/// this call, [`try_spawn`] returns `Err(ExecutorClosed)` and [`spawn`] panics.
+/// The flag is per-thread and cannot be cleared.
+pub fn shutdown() {
+    let _ = EXECUTOR.try_with(|cell| cell.borrow_mut().quitting = true);
+}
+
+/// Whether the current thread's executor is shutting down or already destroyed.
+pub fn is_shutting_down() -> bool {
+    EXECUTOR
+        .try_with(|cell| cell.borrow().quitting)
+        .unwrap_or(true)
+}
+
+/// The current time used by timers: the installed clock, or `Instant::now()`.
+pub fn now() -> Instant {
+    let clock = EXECUTOR
+        .try_with(|cell| cell.borrow().clock.clone())
+        .ok()
+        .flatten();
+    clock.map_or_else(Instant::now, |clock| clock())
+}
+
+/// Install a clock for timers. `None` restores `Instant::now()`.
+///
+/// Install the clock before creating timers; existing timers keep their absolute
+/// deadlines. The closure must be monotonic and must not call task APIs.
+pub fn set_clock(clock: Option<Arc<dyn Fn() -> Instant + Send + Sync>>) {
+    let _ = EXECUTOR.try_with(|cell| cell.borrow_mut().clock = clock);
+}
+
+/// A future that completes after `duration` on the executor's clock.
+///
+/// Foreground-only: it registers with the current thread's executor, so it is
+/// `!Send` and cannot be used from a background task. The timer fires during
+/// [`tick`]; a host that stops ticking (for example an idle blocking event loop)
+/// must arrange a wake at the deadline.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::task::Sleep>();
+/// ```
+#[derive(Debug)]
+#[must_use = "futures do nothing unless polled or spawned"]
+pub struct Sleep {
+    deadline: Instant,
+    waker: Option<Waker>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+/// A future that completes after `duration` on the executor's clock.
+pub fn sleep(duration: Duration) -> Sleep {
+    Sleep {
+        deadline: now() + duration,
+        waker: None,
+        _not_send: PhantomData,
+    }
+}
+
+impl Future for Sleep {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        if now() >= this.deadline {
+            return Poll::Ready(());
+        }
+        if this
+            .waker
+            .as_ref()
+            .is_none_or(|waker| !waker.will_wake(cx.waker()))
+        {
+            this.waker = Some(cx.waker().clone());
+            let registered = EXECUTOR.try_with(|cell| {
+                let mut executor = cell.borrow_mut();
+                executor
+                    .timers
+                    .entry(this.deadline)
+                    .or_default()
+                    .push(cx.waker().clone());
+            });
+            if registered.is_err() {
+                return Poll::Ready(());
+            }
+        }
+        Poll::Pending
+    }
+}
+
+/// The error returned when a [`timeout`] expires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Elapsed;
+
+impl fmt::Display for Elapsed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("future timed out")
+    }
+}
+
+impl std::error::Error for Elapsed {}
+
+/// A future that completes with `Ok` when the inner future finishes, or
+/// `Err(Elapsed)` when `duration` elapses first.
+#[must_use = "futures do nothing unless polled or spawned"]
+pub struct Timeout<F> {
+    sleep: Sleep,
+    future: Pin<Box<F>>,
+}
+
+/// Run `future` with a deadline on the executor's clock.
+pub fn timeout<F: Future>(duration: Duration, future: F) -> Timeout<F> {
+    Timeout {
+        sleep: sleep(duration),
+        future: Box::pin(future),
+    }
+}
+
+impl<F: Future> Future for Timeout<F> {
+    type Output = Result<F::Output, Elapsed>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if let Poll::Ready(value) = this.future.as_mut().poll(cx) {
+            return Poll::Ready(Ok(value));
+        }
+        match Pin::new(&mut this.sleep).poll(cx) {
+            Poll::Ready(()) => Poll::Ready(Err(Elapsed)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 /// A caller-owned task yielding T directly. Dropping the handle requests cancellation;
 /// detach lets the executor run it without an observer. The creator scope does not own it.
 ///
@@ -259,7 +431,9 @@ pub fn set_wake_callback(callback: Option<Arc<dyn Fn() + Send + Sync>>) {
 /// the handle never moves polling or future destruction away from the foreground thread.
 /// Cross-thread cancellation is cleaned up by that thread's next tick or shutdown.
 /// Completed output is owned by the handle and may be consumed/dropped on its thread.
-/// Polling after completion, or awaiting a task stopped by executor shutdown, panics.
+/// Polling after completion panics; use [`Task::fallible`] to observe a task stopped
+/// by the executor as `None` instead of a panic. Dropping the handle is cancellation,
+/// but it consumes the handle, so it cannot be awaited afterwards.
 ///
 /// ```
 /// fn assert_send<T: Send>() {}
@@ -273,148 +447,659 @@ pub fn set_wake_callback(callback: Option<Arc<dyn Fn() + Send + Sync>>) {
 ///
 #[must_use = "dropping a task cancels it; use detach() to run without observing its output"]
 pub struct Task<T> {
-    task: Option<AsyncTask<T, u64>>,
-    token: Arc<TaskToken>,
+    state: TaskState<T>,
+    token: Option<Arc<TaskToken>>,
+}
+
+// The task handle never pins its output; the inner async-task handle is Unpin.
+impl<T> Unpin for Task<T> {}
+
+enum TaskState<T> {
+    Ready(Option<T>),
+    Spawned(Option<AsyncTask<T, RunnableMeta>>),
 }
 
 impl<T> Task<T> {
+    /// A task that is already complete with `value`.
+    ///
+    /// ```
+    /// use mue_core::task::Task;
+    /// let task = Task::ready(7u32);
+    /// assert!(task.is_finished());
+    /// ```
+    pub fn ready(value: T) -> Self {
+        Self {
+            state: TaskState::Ready(Some(value)),
+            token: None,
+        }
+    }
+
     pub fn detach(mut self) {
-        self.task
-            .take()
-            .expect("task handle already consumed")
-            .detach();
+        match &mut self.state {
+            TaskState::Ready(value) => {
+                value.take();
+            }
+            TaskState::Spawned(task) => {
+                task.take().expect("task handle already consumed").detach();
+            }
+        }
     }
 
     /// Whether the future has been destroyed on its owner thread.
     /// This does not consume or dispose the output held by the result handle.
     pub fn is_finished(&self) -> bool {
-        self.token.is_finished()
+        match &self.state {
+            TaskState::Ready(_) => true,
+            TaskState::Spawned(_) => self.token().is_finished(),
+        }
+    }
+
+    /// Poll once without blocking. Returns `Some(output)` if the task is ready.
+    /// After the output is taken, later calls return `None`.
+    ///
+    /// This is a polling API for migrating synchronous `take()` patterns; new
+    /// code should prefer `await` or [`AsyncResource`]. The task is still driven
+    /// by [`tick`]; `try_take` does not run it. If the executor stopped the task,
+    /// this panics like `await`; use [`Task::fallible`] when `None` is preferred.
+    ///
+    /// ```
+    /// use mue_core::task::{spawn, tick};
+    /// let mut task = spawn(async { 7u32 });
+    /// assert_eq!(task.try_take(), None);
+    /// tick(1);
+    /// assert_eq!(task.try_take(), Some(7));
+    /// assert_eq!(task.try_take(), None);
+    /// ```
+    pub fn try_take(&mut self) -> Option<T> {
+        let value = match &mut self.state {
+            TaskState::Ready(value) => return value.take(),
+            TaskState::Spawned(task) => {
+                let handle = task.as_mut().expect("task handle already consumed");
+                let waker = Waker::noop();
+                let mut context = Context::from_waker(waker);
+                match Pin::new(handle).poll(&mut context) {
+                    Poll::Ready(value) => value,
+                    Poll::Pending => return None,
+                }
+            }
+        };
+        self.state = TaskState::Ready(None);
+        Some(value)
+    }
+
+    /// The source location where this task was spawned, or `None` for a ready task.
+    pub fn location(&self) -> Option<&'static Location<'static>> {
+        self.token.as_ref().map(|token| token.meta.location)
+    }
+
+    /// When this task was spawned, or `None` for a ready task.
+    pub fn spawned_at(&self) -> Option<Instant> {
+        self.token.as_ref().map(|token| token.meta.spawned)
+    }
+
+    /// Convert this task into a fallible task that yields `None` instead of
+    /// panicking when the executor stops the task (for example when its thread
+    /// exits). Dropping the handle is cancellation, but it consumes the handle,
+    /// so it cannot be awaited afterwards.
+    ///
+    /// ```
+    /// use mue_core::task::Task;
+    /// let task = Task::ready(7u32).fallible();
+    /// assert!(task.is_finished());
+    /// ```
+    pub fn fallible(mut self) -> FallibleTask<T> {
+        let token = self.token.take();
+        let state = match &mut self.state {
+            TaskState::Ready(value) => FallibleTaskState::Ready(value.take()),
+            TaskState::Spawned(task) => {
+                FallibleTaskState::Spawned(task.take().map(|task| task.fallible()))
+            }
+        };
+        FallibleTask { state, token }
+    }
+
+    fn token(&self) -> &Arc<TaskToken> {
+        self.token
+            .as_ref()
+            .expect("ready task has no executor token")
     }
 }
 
 impl<T: 'static, E: 'static> Task<Result<T, E>> {
     /// Detach while explicitly handling a business error once, on the foreground thread.
+    /// Cancellation is silent: it yields `None` and does not invoke the reporter.
+    /// If the executor is already shutting down, the reporter is not spawned.
     #[track_caller]
-    pub fn detach_and_report(
-        self,
-        report: impl FnOnce(E, &'static std::panic::Location<'static>) + 'static,
-    ) {
-        let location = std::panic::Location::caller();
-        spawn(async move {
-            if let Err(error) = self.await {
+    pub fn detach_and_report(self, report: impl FnOnce(E, &'static Location<'static>) + 'static) {
+        let location = Location::caller();
+        if let Ok(task) = try_spawn(async move {
+            if let Some(Err(error)) = self.fallible().await {
                 report(error, location);
             }
-        })
-        .detach();
+        }) {
+            task.detach();
+        }
     }
 }
 
 impl<T> Future for Task<T> {
     type Output = T;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
-        Pin::new(self.task.as_mut().expect("task handle already consumed")).poll(cx)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+        let this = self.get_mut();
+        match &mut this.state {
+            TaskState::Ready(value) => {
+                Poll::Ready(value.take().expect("task polled after completion"))
+            }
+            TaskState::Spawned(task) => {
+                Pin::new(task.as_mut().expect("task handle already consumed")).poll(cx)
+            }
+        }
     }
 }
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        if let Some(task) = self.task.take() {
-            // async-task closes its own allocation; no lookup in the dropping thread's TLS.
-            drop(task);
-            self.token.clean_cancelled();
+        if let TaskState::Spawned(task) = &mut self.state {
+            if let Some(task) = task.take() {
+                // async-task closes its own allocation; no lookup in the dropping thread's TLS.
+                drop(task);
+                if let Some(token) = &self.token {
+                    token.clean_cancelled();
+                }
+            }
         }
+    }
+}
+
+impl<T> fmt::Debug for Task<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("Task");
+        match &self.state {
+            TaskState::Ready(_) => {
+                debug.field("state", &"ready");
+            }
+            TaskState::Spawned(_) => {
+                debug.field("state", &"spawned");
+                if let Some(token) = &self.token {
+                    debug.field("location", &token.meta.location);
+                    debug.field("spawned", &token.meta.spawned);
+                    debug.field("finished", &token.is_finished());
+                }
+            }
+        }
+        debug.finish()
+    }
+}
+
+enum FallibleTaskState<T> {
+    Ready(Option<T>),
+    Spawned(Option<async_task::FallibleTask<T, RunnableMeta>>),
+}
+
+/// A task that yields `Option<T>` instead of panicking when the executor stops it.
+///
+/// `Some(value)` means the task completed; `None` means the executor closed the task
+/// without completing it, for example when its thread exits. Dropping the handle still
+/// requests cancellation, but it consumes the handle, so it cannot be awaited afterwards.
+#[must_use = "dropping a fallible task cancels it; use detach() to run without observing its output"]
+pub struct FallibleTask<T> {
+    state: FallibleTaskState<T>,
+    token: Option<Arc<TaskToken>>,
+}
+
+// The task handle never pins its output; the inner async-task handle is Unpin.
+impl<T> Unpin for FallibleTask<T> {}
+
+impl<T> FallibleTask<T> {
+    pub fn detach(mut self) {
+        match &mut self.state {
+            FallibleTaskState::Ready(value) => {
+                value.take();
+            }
+            FallibleTaskState::Spawned(task) => {
+                task.take()
+                    .expect("fallible task handle already consumed")
+                    .detach();
+            }
+        }
+    }
+
+    /// Whether the task has completed, been cancelled, or been stopped by shutdown.
+    pub fn is_finished(&self) -> bool {
+        match &self.state {
+            FallibleTaskState::Ready(_) => true,
+            FallibleTaskState::Spawned(task) => {
+                task.as_ref().is_some_and(|task| task.is_finished())
+            }
+        }
+    }
+}
+
+impl<T> Future for FallibleTask<T> {
+    type Output = Option<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let this = self.get_mut();
+        match &mut this.state {
+            FallibleTaskState::Ready(value) => Poll::Ready(value.take()),
+            FallibleTaskState::Spawned(task) => Pin::new(
+                task.as_mut()
+                    .expect("fallible task handle already consumed"),
+            )
+            .poll(cx),
+        }
+    }
+}
+
+impl<T> Drop for FallibleTask<T> {
+    fn drop(&mut self) {
+        if let FallibleTaskState::Spawned(task) = &mut self.state {
+            if let Some(task) = task.take() {
+                drop(task);
+                if let Some(token) = &self.token {
+                    token.clean_cancelled();
+                }
+            }
+        }
+    }
+}
+
+impl<T> fmt::Debug for FallibleTask<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("FallibleTask");
+        match &self.state {
+            FallibleTaskState::Ready(_) => {
+                debug.field("state", &"ready");
+            }
+            FallibleTaskState::Spawned(_) => {
+                debug.field("state", &"spawned");
+                if let Some(token) = &self.token {
+                    debug.field("location", &token.meta.location);
+                    debug.field("spawned", &token.meta.spawned);
+                    debug.field("finished", &token.is_finished());
+                }
+            }
+        }
+        debug.finish()
     }
 }
 
 /// Spawn a non-Send foreground future without implicitly inheriting reactive scope.
 /// Its handle owns the task and awaits to its output. Each poll and future destructor
-/// runs without an ambient scope or effect tracker, restoring both on normal return.
-/// Captured signals keep their existing owner. For new task-owned reactive resources
+/// runs without an ambient scope, effect tracker, or `UpdateContext`, restoring them
+/// on normal return. Captured signals keep their existing owner. For new task-owned reactive resources
 /// or inherited context, use [`crate::scope::scope_future`]; otherwise dispose new
 /// resources explicitly or provide an owner.
+///
+/// Panics if the current thread's executor is shutting down; use [`try_spawn`] to
+/// observe that as `Err(ExecutorClosed)` instead.
+#[track_caller]
 pub fn spawn<F: Future + 'static>(future: F) -> Task<F::Output>
 where
     F::Output: 'static,
 {
-    debug_assert!(
+    try_spawn(future).unwrap_or_else(|_| panic!("cannot spawn a task after executor shutdown"))
+}
+
+/// Spawn a non-Send foreground future, returning `Err(ExecutorClosed)` instead of
+/// panicking when the current thread's executor is shutting down or already destroyed.
+///
+/// This is safe to call from a future destructor during executor shutdown. The future
+/// is dropped on the calling thread when the executor rejects it.
+#[track_caller]
+pub fn try_spawn<F: Future + 'static>(future: F) -> Result<Task<F::Output>, ExecutorClosed>
+where
+    F::Output: 'static,
+{
+    assert!(
         !is_background_worker(),
-        "foreground tasks must be spawned on the foreground thread; use spawn_background"
+        "foreground tasks must be spawned on the foreground thread"
     );
-    let (queue, wake) =
-        EXECUTOR.with_borrow(|executor| (executor.queue.clone(), executor.wake.clone()));
-    let token = Arc::new(TaskToken {
-        key: next_task_key(),
-        owner_thread: thread::current().id(),
-        queue: queue.clone(),
-        finished: AtomicBool::new(false),
-    });
-    let wrapped = TaskFuture {
-        future: Some(Box::pin(future)),
-        token: token.clone(),
-    };
-    let (runnable, task) = async_task::Builder::new()
-        .metadata(token.key)
-        .propagate_panic(false)
-        .spawn_local(
-            move |_| wrapped,
-            move |runnable| {
-                if queue.schedule(runnable) {
-                    wake.wake();
+    let location = Location::caller();
+    EXECUTOR
+        .try_with(move |cell| {
+            let (queue, wake) = {
+                let executor = cell.borrow();
+                if executor.quitting {
+                    return Err(ExecutorClosed);
                 }
-            },
-        );
-    let registration = Registration {
-        token: token.clone(),
-        waker: runnable.waker(),
-    };
-    EXECUTOR.with_borrow_mut(|executor| {
-        executor.tasks.insert(token.key, registration);
-    });
-    runnable.schedule();
-    Task {
-        task: Some(task),
-        token,
+                (executor.queue.clone(), executor.wake.clone())
+            };
+            let key = next_task_key();
+            let meta = RunnableMeta {
+                key,
+                location,
+                spawned: Instant::now(),
+            };
+            let token = Arc::new(TaskToken {
+                key,
+                owner_thread: thread::current().id(),
+                queue: queue.clone(),
+                finished: AtomicBool::new(false),
+                meta,
+            });
+            let wrapped = TaskFuture {
+                future: Some(Box::pin(future)),
+                token: token.clone(),
+            };
+            let (runnable, task) = async_task::Builder::new()
+                .metadata(meta)
+                .propagate_panic(false)
+                .spawn_local(
+                    move |_| wrapped,
+                    move |runnable| {
+                        if queue.schedule(runnable) {
+                            wake.wake();
+                        }
+                    },
+                );
+            let registration = Registration {
+                token: token.clone(),
+                waker: runnable.waker(),
+            };
+            cell.borrow_mut().tasks.insert(token.key, registration);
+            runnable.schedule();
+            Ok(Task {
+                state: TaskState::Spawned(Some(task)),
+                token: Some(token),
+            })
+        })
+        .unwrap_or(Err(ExecutorClosed))
+}
+
+struct TickGuard<'a> {
+    executor: &'a RefCell<Executor>,
+}
+
+impl Drop for TickGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut executor) = self.executor.try_borrow_mut() {
+            executor.in_tick = false;
+        }
     }
 }
 
 /// Poll at most limit tasks ready at the start of this tick. Wakes during polling
 /// are deferred to the next tick. One poll cannot be preempted by this budget.
+///
+/// Panics if the current thread's executor is shutting down; use [`try_tick`] to
+/// observe that as `Err(ExecutorClosed)` instead.
 pub fn tick(limit: usize) -> usize {
-    debug_assert!(
+    try_tick(limit).unwrap_or_else(|_| panic!("cannot tick tasks after executor shutdown"))
+}
+
+/// Like [`tick`], but returns `Err(ExecutorClosed)` instead of panicking when the
+/// current thread's executor is shutting down or already destroyed.
+pub fn try_tick(limit: usize) -> Result<usize, ExecutorClosed> {
+    assert!(
         !is_background_worker(),
         "foreground tasks must be ticked on the foreground thread"
     );
-    let snapshot = EXECUTOR.with_borrow_mut(|executor| {
-        if executor.in_tick {
+    EXECUTOR
+        .try_with(|cell| {
+            let clock = {
+                let mut executor = cell.borrow_mut();
+                if executor.in_tick {
+                    return 0;
+                }
+                executor.in_tick = true;
+                executor.clock.clone()
+            };
+            let _guard = TickGuard { executor: cell };
+            let now = clock.map_or_else(Instant::now, |clock| clock());
+            let (queue, due) = {
+                let mut executor = cell.borrow_mut();
+                let mut due = Vec::new();
+                executor.timers.retain(|deadline, wakers| {
+                    if *deadline <= now {
+                        due.push(mem::take(wakers));
+                        false
+                    } else {
+                        true
+                    }
+                });
+                (executor.queue.clone(), due)
+            };
+            for wakers in due {
+                for waker in wakers {
+                    waker.wake();
+                }
+            }
+            let ready = queue
+                .state
+                .lock()
+                .unwrap()
+                .ready
+                .iter()
+                .take(limit)
+                .map(|r| r.metadata().key)
+                .collect::<Vec<_>>();
+            let mut ran = 0;
+            for key in ready {
+                let Some(runnable) = queue.take_key(key) else {
+                    continue;
+                };
+                runnable.run();
+                ran += 1;
+            }
+            ran
+        })
+        .map_err(|_| ExecutorClosed)
+}
+
+/// Block the current thread until `future` completes, driving ready tasks and
+/// timers with [`tick`] while waiting.
+///
+/// This is intended for tests and headless hosts. Do not call it on the UI thread
+/// while the frame loop is running: it parks the thread and can deadlock the host.
+/// It is not reentrant with `tick`. With a fake clock installed, advance it from
+/// another thread; `block_on` cannot advance it.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    assert!(
+        !is_background_worker(),
+        "block_on must run on the foreground thread"
+    );
+    let (waker, notify) = block_waker();
+    let _restore = install_block_wake(notify);
+    let mut future = Box::pin(future);
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
+            return value;
+        }
+        let ran = try_tick(usize::MAX).unwrap_or(0);
+        if ran == 0 {
+            match next_timer_deadline() {
+                Some(deadline) => {
+                    let current = now();
+                    thread::park_timeout(deadline.saturating_duration_since(current));
+                }
+                None => thread::park(),
+            }
+        }
+    }
+}
+
+/// Like [`block_on`], but return `None` if `future` does not complete within
+/// `duration` of wall-clock time. The future is dropped on timeout.
+///
+/// This uses `std::time::Instant` for the deadline; executor timers still use
+/// the executor's clock.
+pub fn block_with_timeout<F: Future>(duration: Duration, future: F) -> Option<F::Output> {
+    assert!(
+        !is_background_worker(),
+        "block_with_timeout must run on the foreground thread"
+    );
+    let (waker, notify) = block_waker();
+    let _restore = install_block_wake(notify);
+    let deadline = Instant::now() + duration;
+    let mut future = Box::pin(future);
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
+            return Some(value);
+        }
+        let _ = try_tick(usize::MAX);
+        let wall_now = Instant::now();
+        if wall_now >= deadline {
             return None;
         }
-        executor.in_tick = true;
-        let queue = executor.queue.clone();
-        let ready = queue
-            .state
-            .lock()
-            .unwrap()
-            .ready
-            .iter()
-            .take(limit)
-            .map(|r| *r.metadata())
-            .collect::<Vec<_>>();
-        Some((queue, ready))
-    });
-    let Some((queue, ready)) = snapshot else {
-        return 0;
-    };
-    let mut ran = 0;
-    for key in ready {
-        let Some(runnable) = queue.take_key(key) else {
-            continue;
-        };
-        runnable.run();
-        ran += 1;
+        let mut park_until = deadline;
+        if let Some(timer) = next_timer_deadline() {
+            let timer_wall = wall_now + timer.saturating_duration_since(now());
+            if timer_wall < park_until {
+                park_until = timer_wall;
+            }
+        }
+        thread::park_timeout(park_until - wall_now);
     }
-    EXECUTOR.with_borrow_mut(|executor| executor.in_tick = false);
-    ran
+}
+
+fn block_waker() -> (Waker, Arc<dyn Fn() + Send + Sync>) {
+    struct Unpark(thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let unpark = Arc::new(Unpark(thread::current()));
+    let waker = Waker::from(unpark.clone());
+    let notify: Arc<dyn Fn() + Send + Sync> = {
+        let unpark = unpark.clone();
+        Arc::new(move || unpark.0.unpark())
+    };
+    (waker, notify)
+}
+
+fn install_block_wake(notify: Arc<dyn Fn() + Send + Sync>) -> WakeRestore {
+    let previous = EXECUTOR
+        .try_with(|cell| cell.borrow().wake.callback.lock().unwrap().clone())
+        .ok()
+        .flatten();
+    let _ = EXECUTOR.try_with(|cell| cell.borrow().wake.set(Some(notify)));
+    WakeRestore { previous }
+}
+
+struct WakeRestore {
+    previous: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl Drop for WakeRestore {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        let _ = EXECUTOR.try_with(|cell| {
+            if let Ok(executor) = cell.try_borrow() {
+                executor.wake.set(previous);
+            }
+        });
+    }
+}
+
+/// The earliest pending timer deadline on the current thread's executor.
+///
+/// A host that stops calling [`tick`] (for example an idle blocking event loop)
+/// can park until this deadline and then tick. Returns `None` when no timer is
+/// registered. The value is an absolute [`Instant`] on the executor's clock.
+pub fn next_timer_deadline() -> Option<Instant> {
+    EXECUTOR
+        .try_with(|cell| cell.borrow().timers.keys().next().copied())
+        .ok()
+        .flatten()
+}
+
+/// A set of foreground tasks joined together.
+///
+/// The set owns every spawned `Task`; dropping the set cancels the remaining
+/// tasks. `join_next` yields outputs as tasks complete; `join_all` drains the
+/// set and returns outputs in completion order. Foreground-only: it uses
+/// [`spawn`], so it must be driven by `tick` on the thread that created it.
+#[derive(Debug, Default)]
+pub struct JoinSet<T> {
+    tasks: Vec<Task<T>>,
+}
+
+impl<T: 'static> JoinSet<T> {
+    /// An empty set.
+    pub const fn new() -> Self {
+        Self { tasks: Vec::new() }
+    }
+
+    /// Spawn a foreground task and add it to the set.
+    ///
+    /// Panics if the current thread's executor is shutting down.
+    #[track_caller]
+    pub fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Output = T> + 'static,
+    {
+        self.tasks.push(spawn(future));
+    }
+
+    /// Number of tasks that have not completed yet.
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Whether the set has no pending tasks.
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Wait for the next task to complete, or return `None` when the set is empty.
+    ///
+    /// Dropping the returned future leaves the set and its tasks intact.
+    pub fn join_next(&mut self) -> JoinNext<'_, T> {
+        JoinNext { set: self }
+    }
+
+    /// Wait for every task and return outputs in completion order.
+    ///
+    /// Dropping the returned future cancels the remaining tasks.
+    pub async fn join_all(mut self) -> Vec<T> {
+        let mut outputs = Vec::with_capacity(self.tasks.len());
+        while let Some(value) = self.join_next().await {
+            outputs.push(value);
+        }
+        outputs
+    }
+
+    /// Cancel and remove all tasks.
+    pub fn clear(&mut self) {
+        self.tasks.clear();
+    }
+}
+
+/// Future returned by [`JoinSet::join_next`].
+#[must_use = "futures do nothing unless polled or spawned"]
+pub struct JoinNext<'a, T> {
+    set: &'a mut JoinSet<T>,
+}
+
+impl<T> Future for JoinNext<'_, T> {
+    type Output = Option<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let this = self.get_mut();
+        let mut index = 0;
+        while index < this.set.tasks.len() {
+            match Pin::new(&mut this.set.tasks[index]).poll(cx) {
+                Poll::Ready(value) => {
+                    let _ = this.set.tasks.swap_remove(index);
+                    return Poll::Ready(Some(value));
+                }
+                Poll::Pending => index += 1,
+            }
+        }
+        if this.set.tasks.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    }
 }
 
 /// A renderable result state for one asynchronous operation. Dropping the
@@ -425,32 +1110,109 @@ pub enum AsyncState<T, E> {
     Ready(Result<T, E>),
 }
 
+impl<T, E> AsyncState<T, E> {
+    /// Whether the operation is still running.
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading)
+    }
+
+    /// The successful value, if the operation completed with `Ok`.
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Self::Ready(Ok(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// The error, if the operation completed with `Err`.
+    pub fn error(&self) -> Option<&E> {
+        match self {
+            Self::Ready(Err(error)) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// Map the successful value, preserving `Loading` and errors.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> AsyncState<U, E> {
+        match self {
+            Self::Loading => AsyncState::Loading,
+            Self::Ready(Ok(value)) => AsyncState::Ready(Ok(f(value))),
+            Self::Ready(Err(error)) => AsyncState::Ready(Err(error)),
+        }
+    }
+
+    /// Map the error, preserving `Loading` and successful values.
+    pub fn map_err<F>(self, f: impl FnOnce(E) -> F) -> AsyncState<T, F> {
+        match self {
+            Self::Loading => AsyncState::Loading,
+            Self::Ready(Ok(value)) => AsyncState::Ready(Ok(value)),
+            Self::Ready(Err(error)) => AsyncState::Ready(Err(f(error))),
+        }
+    }
+}
+
 pub struct AsyncResource<T: 'static, E: 'static> {
     state: Signal<AsyncState<T, E>>,
     state_owner: Option<OwnedScope>,
     task: Option<Task<()>>,
+    generation: Rc<Cell<u64>>,
 }
 
 impl<T: 'static, E: 'static> AsyncResource<T, E> {
-    /// Run the operation on the foreground executor. Use this only for work
-    /// that must touch UI-thread state; I/O and CPU work should use
-    /// [Self::new_background].
+    /// Run the operation on the foreground executor. The future is polled on the
+    /// UI thread; if it only awaits a foreign handle (for example a host I/O task),
+    /// the actual work happens on the host's runtime. Use [Self::new_blocking] for
+    /// blocking closures, and the host's runtime for I/O.
     pub fn new<F>(future: F) -> Self
     where
         F: Future<Output = Result<T, E>> + 'static,
     {
         let state_owner = OwnedScope::new_inherited();
         let state = state_owner.run(|| Signal::new_always(AsyncState::Loading));
-        let task_state = state;
-        let task = spawn(async move {
-            let output = future.await;
-            let _ = task_state.try_set(AsyncState::Ready(output));
-        });
+        let generation = Rc::new(Cell::new(0));
+        let task = Self::spawn_publisher(state, Rc::clone(&generation), 0, future);
         Self {
             state,
             state_owner: Some(state_owner),
             task: Some(task),
+            generation,
         }
+    }
+
+    /// Replace the current operation. The previous publisher is cancelled, the
+    /// state returns to [`AsyncState::Loading`], and only the latest operation
+    /// publishes its result.
+    pub fn reload_with<F>(&mut self, future: F)
+    where
+        F: Future<Output = Result<T, E>> + 'static,
+    {
+        let next = self.generation.get().wrapping_add(1);
+        self.generation.set(next);
+        self.task.take();
+        let _ = self.state.try_set(AsyncState::Loading);
+        self.task = Some(Self::spawn_publisher(
+            self.state,
+            Rc::clone(&self.generation),
+            next,
+            future,
+        ));
+    }
+
+    fn spawn_publisher<F>(
+        state: Signal<AsyncState<T, E>>,
+        generation: Rc<Cell<u64>>,
+        expected: u64,
+        future: F,
+    ) -> Task<()>
+    where
+        F: Future<Output = Result<T, E>> + 'static,
+    {
+        spawn(async move {
+            let output = future.await;
+            if generation.get() == expected {
+                let _ = state.try_set(AsyncState::Ready(output));
+            }
+        })
     }
 
     pub fn state(&self) -> ReadSignal<AsyncState<T, E>> {
@@ -459,42 +1221,30 @@ impl<T: 'static, E: 'static> AsyncResource<T, E> {
 }
 
 impl<T: 'static + Send, E: 'static + Send> AsyncResource<T, E> {
-    /// Run the operation on the global background pool. The operation and its
-    /// output must be Send; the result state is still published on the UI thread.
-    /// Dropping the resource cancels the background task. Must be called on the
-    /// UI thread.
-    pub fn new_background<F>(future: F) -> Self
+    /// Run a blocking closure on a fresh OS thread and publish its result on the
+    /// UI thread. Use for low-frequency file I/O or decoding; for frequent
+    /// blocking work, use the host's blocking pool.
+    ///
+    /// ```
+    /// use mue_core::prelude::*;
+    /// use mue_core::task::{AsyncResource, AsyncState};
+    /// let resource = AsyncResource::<u32, ()>::new_blocking(|| Ok(7));
+    /// assert_eq!(resource.state().get_clone_untracked(), AsyncState::Loading);
+    /// ```
+    pub fn new_blocking<F>(f: F) -> Self
     where
-        F: Future<Output = Result<T, E>> + Send + 'static,
+        F: FnOnce() -> Result<T, E> + Send + 'static,
     {
-        Self::from_background_task(spawn_background(future))
+        Self::new(async move { spawn_blocking(f).await })
     }
 
-    /// Run the operation on a specific background executor. The executor must
-    /// outlive the resource; otherwise its workers may stop before the task completes.
-    /// Must be called on the UI thread.
-    pub fn new_background_with<F>(executor: &BackgroundExecutor, future: F) -> Self
+    /// Replace the current operation with a blocking closure. See
+    /// [`Self::reload_with`].
+    pub fn reload_blocking<F>(&mut self, f: F)
     where
-        F: Future<Output = Result<T, E>> + Send + 'static,
+        F: FnOnce() -> Result<T, E> + Send + 'static,
     {
-        Self::from_background_task(executor.spawn(future))
-    }
-
-    /// Wrap an already-spawned background task. The result state is published
-    /// by a foreground task owned by the resource. Must be called on the UI thread.
-    pub fn from_background_task(task: BackgroundTask<Result<T, E>>) -> Self {
-        let state_owner = OwnedScope::new_inherited();
-        let state = state_owner.run(|| Signal::new_always(AsyncState::Loading));
-        let task_state = state;
-        let task = spawn(async move {
-            let output = task.await;
-            let _ = task_state.try_set(AsyncState::Ready(output));
-        });
-        Self {
-            state,
-            state_owner: Some(state_owner),
-            task: Some(task),
-        }
+        self.reload_with(async move { spawn_blocking(f).await });
     }
 }
 
@@ -519,16 +1269,352 @@ mod tests {
         cell::{Cell, RefCell},
         rc::Rc,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
         task::Waker,
+        time::{Duration, Instant},
     };
 
     fn poll_task<T>(task: &mut Task<T>) -> Poll<T> {
         let waker = Waker::noop();
         let mut cx = Context::from_waker(waker);
         Pin::new(task).poll(&mut cx)
+    }
+
+    fn poll_fallible<T>(task: &mut FallibleTask<T>) -> Poll<Option<T>> {
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        Pin::new(task).poll(&mut cx)
+    }
+
+    #[test]
+    fn ready_task_is_finished_and_yields_its_value() {
+        let mut task = Task::ready(7u32);
+        assert!(task.is_finished());
+        assert_eq!(poll_task(&mut task), Poll::Ready(7));
+    }
+
+    #[test]
+    fn try_take_ready_task_yields_once() {
+        let mut task = Task::ready(7u32);
+        assert_eq!(task.try_take(), Some(7));
+        assert_eq!(task.try_take(), None);
+        assert!(task.is_finished());
+        task.detach();
+    }
+
+    #[test]
+    fn try_take_pending_task_returns_none() {
+        let mut task = spawn(std::future::pending::<u32>());
+        assert_eq!(task.try_take(), None);
+        assert!(!task.is_finished());
+        task.detach();
+    }
+
+    #[test]
+    fn try_take_completed_spawned_task_yields_output() {
+        let mut task = spawn(async { 42u32 });
+        assert_eq!(tick(1), 1);
+        assert_eq!(task.try_take(), Some(42));
+        assert_eq!(task.try_take(), None);
+    }
+
+    #[test]
+    fn try_take_after_wake_yields_output() {
+        let (sender, receiver) = oneshot::channel::<u32>();
+        let mut task = spawn(async move { receiver.await.unwrap() });
+        assert_eq!(task.try_take(), None);
+        sender.send(9).unwrap();
+        assert_eq!(tick(1), 1);
+        assert_eq!(task.try_take(), Some(9));
+    }
+
+    #[test]
+    fn detach_after_try_take_is_noop() {
+        let mut task = spawn(async { 1u32 });
+        assert_eq!(tick(1), 1);
+        assert_eq!(task.try_take(), Some(1));
+        task.detach();
+    }
+
+    #[test]
+    fn fallible_task_yields_some_for_a_completed_task() {
+        let mut task = spawn(async { 42u32 }).fallible();
+        assert_eq!(tick(1), 1);
+        assert!(task.is_finished());
+        assert_eq!(poll_fallible(&mut task), Poll::Ready(Some(42)));
+    }
+
+    #[test]
+    fn fallible_task_yields_none_when_executor_stops_it() {
+        let task = thread::spawn(|| {
+            let task = spawn(std::future::pending::<()>()).fallible();
+            tick(1);
+            task
+        })
+        .join()
+        .unwrap();
+        assert!(task.is_finished());
+        let mut task = task;
+        assert_eq!(poll_fallible(&mut task), Poll::Ready(None));
+    }
+
+    #[test]
+    fn task_debug_and_metadata_report_spawn_site() {
+        let task = spawn(async {});
+        let debug = format!("{task:?}");
+        assert!(debug.contains("spawned"));
+        assert!(debug.contains("task.rs"));
+        assert!(
+            task.location()
+                .is_some_and(|location| location.file().ends_with("task.rs"))
+        );
+        assert!(task.spawned_at().is_some());
+        drop(task);
+
+        let ready = Task::ready(1u32);
+        assert!(ready.location().is_none());
+        assert!(ready.spawned_at().is_none());
+        assert!(format!("{ready:?}").contains("ready"));
+    }
+
+    #[test]
+    fn try_spawn_is_rejected_after_shutdown() {
+        shutdown();
+        assert!(is_shutting_down());
+        assert!(try_spawn(async {}).is_err());
+        assert!(std::panic::catch_unwind(|| spawn(async {})).is_err());
+        // Keep later tests on this thread unaffected.
+        EXECUTOR.with_borrow_mut(|executor| executor.quitting = false);
+    }
+
+    #[test]
+    fn try_tick_still_runs_existing_tasks_after_shutdown() {
+        let task = spawn(async { 7u32 });
+        shutdown();
+        assert_eq!(try_tick(1), Ok(1));
+        assert!(task.is_finished());
+        assert!(try_spawn(async {}).is_err());
+        EXECUTOR.with_borrow_mut(|executor| executor.quitting = false);
+        drop(task);
+    }
+
+    #[test]
+    fn try_spawn_from_future_destructor_during_shutdown_is_rejected() {
+        let rejected = Arc::new(Mutex::new(None));
+        let rejected_in_thread = rejected.clone();
+        thread::spawn(move || {
+            struct Probe(Arc<Mutex<Option<bool>>>);
+            impl Drop for Probe {
+                fn drop(&mut self) {
+                    *self.0.lock().unwrap() = Some(try_spawn(async {}).is_err());
+                }
+            }
+
+            let probe = Probe(rejected_in_thread);
+            spawn(async move {
+                let _probe = probe;
+                std::future::pending::<()>().await;
+            })
+            .detach();
+            tick(1);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(*rejected.lock().unwrap(), Some(true));
+    }
+
+    #[test]
+    fn tick_resets_in_tick_after_poll_panic() {
+        let result = std::panic::catch_unwind(|| {
+            let task = spawn(async { panic!("task poll panic") });
+            tick(1);
+            drop(task);
+        });
+        assert!(result.is_err());
+
+        let task = spawn(async { 7u32 });
+        assert_eq!(tick(1), 1);
+        assert!(task.is_finished());
+        drop(task);
+    }
+
+    #[test]
+    fn tick_restores_the_driving_effect_after_a_poll_panic() {
+        let owner = OwnedScope::new();
+        let source = owner.run(|| Signal::new(0u32));
+        let runs = Rc::new(Cell::new(0));
+        let runs_in_effect = runs.clone();
+        owner.run(|| {
+            watch_effect(move || {
+                source.get();
+                runs_in_effect.set(runs_in_effect.get() + 1);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let task = spawn(async { panic!("task poll panic") });
+                    tick(1);
+                    drop(task);
+                }));
+                assert!(result.is_err());
+            });
+        });
+        assert_eq!(runs.get(), 1);
+        source.set(1);
+        assert_eq!(runs.get(), 2);
+        drop(owner);
+    }
+
+    fn fake_clock() -> Arc<Mutex<Instant>> {
+        let clock = Arc::new(Mutex::new(Instant::now()));
+        let clock_for_closure = clock.clone();
+        set_clock(Some(Arc::new(move || *clock_for_closure.lock().unwrap())));
+        clock
+    }
+
+    #[test]
+    fn sleep_completes_after_advancing_the_fake_clock() {
+        let clock = fake_clock();
+        let mut task = spawn(async {
+            sleep(Duration::from_millis(10)).await;
+            7u32
+        });
+        assert_eq!(tick(1), 1);
+        assert!(!task.is_finished());
+        *clock.lock().unwrap() += Duration::from_millis(10);
+        assert_eq!(tick(1), 1);
+        assert!(task.is_finished());
+        assert_eq!(poll_task(&mut task), Poll::Ready(7));
+        set_clock(None);
+    }
+
+    #[test]
+    fn sleep_does_not_complete_before_the_deadline() {
+        let clock = fake_clock();
+        let mut task = spawn(async {
+            sleep(Duration::from_millis(10)).await;
+            1u32
+        });
+        assert_eq!(tick(1), 1);
+        assert_eq!(tick(1), 0);
+        assert!(!task.is_finished());
+        *clock.lock().unwrap() += Duration::from_millis(9);
+        assert_eq!(tick(1), 0);
+        assert!(!task.is_finished());
+        *clock.lock().unwrap() += Duration::from_millis(1);
+        assert_eq!(tick(1), 1);
+        assert!(task.is_finished());
+        assert_eq!(poll_task(&mut task), Poll::Ready(1));
+        set_clock(None);
+    }
+
+    #[test]
+    fn sleep_zero_is_ready_immediately() {
+        let mut task = spawn(async {
+            sleep(Duration::ZERO).await;
+            3u32
+        });
+        assert_eq!(tick(1), 1);
+        assert!(task.is_finished());
+        assert_eq!(poll_task(&mut task), Poll::Ready(3));
+    }
+
+    #[test]
+    fn timeout_returns_elapsed_when_the_clock_advances() {
+        let clock = fake_clock();
+        let mut task =
+            spawn(async { timeout(Duration::from_millis(5), std::future::pending::<u32>()).await });
+        assert_eq!(tick(1), 1);
+        assert!(!task.is_finished());
+        *clock.lock().unwrap() += Duration::from_millis(5);
+        assert_eq!(tick(1), 1);
+        assert_eq!(poll_task(&mut task), Poll::Ready(Err(Elapsed)));
+        set_clock(None);
+    }
+
+    #[test]
+    fn timeout_returns_the_inner_value_when_it_finishes_first() {
+        let mut task = spawn(async { timeout(Duration::from_millis(5), async { 42u32 }).await });
+        assert_eq!(tick(1), 1);
+        assert_eq!(poll_task(&mut task), Poll::Ready(Ok(42)));
+    }
+
+    #[test]
+    fn join_set_join_all_returns_all_outputs() {
+        let mut set = JoinSet::new();
+        set.spawn(async { 1u32 });
+        set.spawn(async { 2u32 });
+        set.spawn(async { 3u32 });
+        let mut task = spawn(async move {
+            let mut values = set.join_all().await;
+            values.sort_unstable();
+            values
+        });
+        tick(32);
+        tick(32);
+        assert!(task.is_finished());
+        assert_eq!(poll_task(&mut task), Poll::Ready(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn join_next_returns_none_when_the_set_is_empty() {
+        let mut set: JoinSet<u32> = JoinSet::new();
+        let mut task = spawn(async move { set.join_next().await });
+        assert_eq!(tick(1), 1);
+        assert!(task.is_finished());
+        assert_eq!(poll_task(&mut task), Poll::Ready(None));
+    }
+
+    #[test]
+    fn dropping_a_join_set_cancels_pending_tasks() {
+        struct Probe(Arc<AtomicUsize>);
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let probe = Probe(dropped.clone());
+        let mut set = JoinSet::new();
+        set.spawn(async move {
+            let _probe = probe;
+            std::future::pending::<()>().await;
+        });
+        assert_eq!(tick(1), 1);
+        drop(set);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(tick(1), 0);
+    }
+
+    #[test]
+    fn block_on_returns_a_task_output() {
+        let task = spawn(async { 7u32 });
+        assert_eq!(block_on(task), 7);
+    }
+
+    #[test]
+    fn block_on_drives_a_timer() {
+        let task = spawn(async {
+            sleep(Duration::from_millis(1)).await;
+            9u32
+        });
+        assert_eq!(block_on(task), 9);
+    }
+
+    #[test]
+    fn block_with_timeout_returns_none_for_a_pending_future() {
+        assert_eq!(
+            block_with_timeout(Duration::from_millis(1), std::future::pending::<()>()),
+            None
+        );
+    }
+
+    #[test]
+    fn block_with_timeout_returns_some_for_a_ready_future() {
+        assert_eq!(
+            block_with_timeout(Duration::from_millis(100), async { 5u32 }),
+            Some(5)
+        );
     }
 
     #[test]
@@ -831,6 +1917,37 @@ mod tests {
     }
 
     #[test]
+    fn task_poll_and_drop_do_not_inherit_update_context() {
+        use crate::update_context::{UpdateContext, with_update_context};
+
+        let owner = OwnedScope::new();
+        let source = owner.run(|| Signal::new(0u32));
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let observed_in_effect = observed.clone();
+        owner.run(|| {
+            watch_effect(move || {
+                source.get();
+                observed_in_effect
+                    .borrow_mut()
+                    .push(UpdateContext::current().get::<u32>().copied());
+            });
+        });
+        let task = spawn(async move {
+            assert_eq!(UpdateContext::current().get::<u32>(), None);
+            source.set(1);
+            std::future::pending::<()>().await;
+        });
+        with_update_context(7u32, || {
+            tick(1);
+            assert_eq!(UpdateContext::current().get::<u32>(), Some(&7));
+            drop(task);
+            assert_eq!(UpdateContext::current().get::<u32>(), Some(&7));
+        });
+        assert_eq!(observed.borrow().last().copied().flatten(), None);
+        drop(owner);
+    }
+
+    #[test]
     fn scoped_future_disposal_runs_attached_child_cleanup_before_local_signal_drop() {
         use crate::runtime::resource_counts;
 
@@ -1050,6 +2167,68 @@ mod tests {
         );
         drop(resource);
         drop(owner);
+    }
+
+    #[test]
+    fn async_state_helpers_expose_loading_value_and_error() {
+        let loading = AsyncState::<u32, &'static str>::Loading;
+        assert!(loading.is_loading());
+        assert_eq!(loading.value(), None);
+        assert_eq!(loading.error(), None);
+
+        let ok = AsyncState::<u32, &'static str>::Ready(Ok(7));
+        assert!(!ok.is_loading());
+        assert_eq!(ok.value(), Some(&7));
+        assert_eq!(ok.error(), None);
+        assert_eq!(ok.clone().map(|value| value + 1), AsyncState::Ready(Ok(8)));
+
+        let error = AsyncState::<u32, &'static str>::Ready(Err("boom"));
+        assert_eq!(error.value(), None);
+        assert_eq!(error.error(), Some(&"boom"));
+        assert_eq!(
+            error.map_err(|message| message.len()),
+            AsyncState::Ready(Err(4usize))
+        );
+    }
+
+    #[test]
+    fn reload_with_replaces_the_operation() {
+        let (old_sender, old_receiver) = oneshot::channel::<Result<u32, ()>>();
+        let mut resource =
+            AsyncResource::<u32, ()>::new(async move { old_receiver.await.unwrap_or(Err(())) });
+        assert_eq!(tick(1), 1);
+        let (new_sender, new_receiver) = oneshot::channel::<Result<u32, ()>>();
+        resource.reload_with(async move { new_receiver.await.unwrap_or(Err(())) });
+        assert_eq!(resource.state().get_clone_untracked(), AsyncState::Loading);
+        assert!(old_sender.send(Ok(1)).is_err());
+        new_sender.send(Ok(2)).unwrap();
+        assert_eq!(tick(1), 1);
+        assert_eq!(
+            resource.state().get_clone_untracked(),
+            AsyncState::Ready(Ok(2))
+        );
+    }
+
+    #[test]
+    fn new_blocking_publishes_result() {
+        let resource = AsyncResource::<u32, ()>::new_blocking(|| Ok(7));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while resource.state().get_clone_untracked() != AsyncState::Ready(Ok(7)) {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for blocking result"
+            );
+            tick(1);
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn next_timer_deadline_reports_a_pending_timer() {
+        let task = spawn(async { sleep(Duration::from_millis(10)).await });
+        assert_eq!(tick(1), 1);
+        assert!(next_timer_deadline().is_some());
+        task.detach();
     }
 
     #[test]
@@ -1524,7 +2703,7 @@ mod tests {
             std::future::pending::<()>().await;
         }));
         assert_eq!(tick(1), 1);
-        let token = task.token.clone();
+        let token = task.token().clone();
         thread::spawn(move || {
             let other = spawn(std::future::pending::<()>());
             tick(1);
@@ -1605,7 +2784,7 @@ mod tests {
                 let _local = Signal::new(7u32);
                 std::future::pending::<()>().await;
             }));
-            let token = Arc::downgrade(&task.token);
+            let token = Arc::downgrade(task.token());
             task.detach();
             tick(1);
             token
@@ -1658,7 +2837,7 @@ mod tests {
             let _capture = capture;
             std::future::pending::<()>().await;
         });
-        let token = Arc::downgrade(&task.token);
+        let token = Arc::downgrade(task.token());
         drop(task);
         assert!(dropped.get());
         assert!(token.upgrade().is_none());
@@ -1688,9 +2867,10 @@ mod tests {
                 std::future::pending::<()>().await;
             });
             tick(1);
-            let queue = task.token.queue.clone();
-            let waker = EXECUTOR
-                .with_borrow(|executor| executor.tasks.get(&task.token.key).unwrap().waker.clone());
+            let queue = task.token().queue.clone();
+            let waker = EXECUTOR.with_borrow(|executor| {
+                executor.tasks.get(&task.token().key).unwrap().waker.clone()
+            });
             *queue.enqueue_hook.lock().unwrap() = Some(Arc::new(move || {
                 entered_sender.send(()).unwrap();
                 let (lock, condvar) = &*release_in_hook;

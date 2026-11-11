@@ -10,7 +10,10 @@ pub mod task;
 pub use disposable::{Disposable, Owned};
 pub use runtime::batch;
 pub use scope::{OwnedScope, ScopedFuture, scope_future};
-pub use task::{BackgroundExecutor, BackgroundTask, Task, spawn, spawn_background};
+pub use task::{
+    BlockingTask, Elapsed, ExecutorClosed, FallibleTask, JoinSet, Task, block_on,
+    block_with_timeout, next_timer_deadline, sleep, spawn, spawn_blocking, timeout, try_spawn,
+};
 pub mod units;
 pub mod update_context;
 pub use units::{FontSize, Size};
