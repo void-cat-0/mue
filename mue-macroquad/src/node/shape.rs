@@ -99,7 +99,11 @@ pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
                                 return;
                             }
                         }
-                        retained::draw_meshes(&cache.meshes, crate::math::model_matrix(model), 1.0);
+                        crate::clip::draw_retained_meshes(
+                            &cache.meshes,
+                            crate::math::model_matrix(model),
+                            1.0,
+                        );
                         return;
                     }
                 }

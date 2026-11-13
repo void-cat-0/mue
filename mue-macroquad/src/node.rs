@@ -25,6 +25,7 @@ use mue_core::{
 use slotmap::{Key, new_key_type};
 
 use crate::{
+    clip::Sector,
     event::hit_test::HitTestFn,
     gesture::GestureId,
     hook::NodeHooks,
@@ -61,6 +62,8 @@ pub(crate) struct NodeInner {
     pub(crate) hit_test: Option<HitTestFn>,
     pub(crate) gestures: Vec<GestureId>,
     pub(crate) clip: Option<ReadSignal<Rect>>,
+    pub(crate) clip_radius: Option<Prop<f32>>,
+    pub(crate) clip_sector: Option<Prop<Sector>>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
     pub(crate) matrix_transform: Prop<Matrix>,
@@ -117,6 +120,8 @@ impl NodeInner {
             hit_test: None,
             gestures: Vec::new(),
             clip: None,
+            clip_radius: None,
+            clip_sector: None,
             child_offset: None,
             center_on_layout_origin: false,
             matrix_transform: Prop::Static(Matrix::IDENTITY),
@@ -240,18 +245,40 @@ impl NodeRef {
 
                 let node = rt.node(self.id);
                 let clip = node.clip.map(|rect| rect.get());
+                let clip_radius = node.clip_radius;
+                let clip_sector = node.clip_sector;
+                let layout_rect = node.layout.rect;
                 if let Some(offset) = node.child_offset {
                     origin -= offset.get();
                 }
                 let children = *node.children;
                 drop(node);
                 let draw = || {
-                    if !children.is_null() {
-                        for child in children.get_clone().iter() {
-                            child.render(origin);
+                    let draw_children = || {
+                        if !children.is_null() {
+                            for child in children.get_clone().iter() {
+                                child.render(origin);
+                            }
+                        }
+                        rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &());
+                    };
+                    if let Some(sector) = clip_sector {
+                        let sector = sector.try_get().unwrap_or_default();
+                        if sector.is_visible() {
+                            crate::clip::with_clip_sector(layout_rect.get(), sector, draw_children);
+                            return;
                         }
                     }
-                    rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &());
+                    if let Some(radius) = clip_radius {
+                        let radius = radius.try_get().unwrap_or(0.);
+                        if radius > 0. {
+                            crate::clip::with_clip_radius(layout_rect.get(), radius, draw_children);
+                        } else {
+                            draw_children();
+                        }
+                    } else {
+                        draw_children();
+                    }
                 };
                 if let Some(clip) = clip {
                     crate::paint::with_clip(clip, draw);
@@ -399,6 +426,15 @@ impl Node {
                 NodeInner::with_mut(|node| node.children = children);
             }
             body(&mut style);
+            let clip_radius = style.take_clip_radius();
+            let clip_radius = crate::style::units::resolve_length(clip_radius, "clip-radius");
+            if !matches!(clip_radius, Prop::Static(value) if value <= 0.) {
+                NodeInner::with_mut(|node| node.clip_radius = Some(clip_radius));
+            }
+            let clip_sector = style.take_clip_sector();
+            if !matches!(clip_sector, Prop::Static(sector) if !sector.is_visible()) {
+                NodeInner::with_mut(|node| node.clip_sector = Some(clip_sector));
+            }
             NodeInner::with_mut(|node| {
                 let after_children = std::mem::take(&mut node.hooks.after_children);
                 node.hooks = style.build_hooks();

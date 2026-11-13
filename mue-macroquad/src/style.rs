@@ -14,7 +14,7 @@ pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
-use crate::{color::Color, shader::Brush};
+use crate::{clip::Sector, color::Color, shader::Brush, shadow::Shadow};
 use cosmic_text::Align;
 use cosmic_text::{FamilyOwned, Weight};
 pub use ext::StyleableExt;
@@ -373,6 +373,13 @@ define_style! {
     color: Brush = Brush::Solid(Color::WHITE);
     /// Round background corners by this radius in pixels.
     radius: Size = Size::Px(0.);
+    /// Draw a drop shadow behind the background.
+    shadow: Shadow;
+    /// Clip children to a rounded rectangle with this radius (px/vw/vh;
+    /// percent is not resolved).
+    clip_radius: Size = Size::Px(0.);
+    /// Clip children to an angular sector.
+    clip_sector: Sector;
 
     // Text
     /// Align shaped lines within the text node's content width.

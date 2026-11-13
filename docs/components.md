@@ -120,6 +120,8 @@ mounted while hidden. Content taps are swallowed; a backdrop tap only dismisses
 when `dismissible(true)` is set.
 
 ```rust
+use mue_macroquad::Shadow;
+
 let open = signal(false);
 overlay_host(
     open,
@@ -132,6 +134,7 @@ overlay_host(
             gap: 12px;
             align-items: center;
         })
+        .shadow(Shadow::new(18., 16.))
         .children((
             text("Paused"),
             button("Resume")
@@ -142,6 +145,24 @@ overlay_host(
 .dismissible(true)
 .on_dismiss(move || open.set(false));
 ```
+
+`Style::shadow(Shadow::new(elevation, radius))` draws a drop shadow behind the
+background; use the same radius as `border-radius`. The shadow follows the
+node transform (rotation and scale). Shadows are drawn by `use_background`, so
+custom nodes must call `use_container` or `use_background`.
+
+`Style::clip_radius(Size::Px(12.))` clips the node's children to a rounded
+rectangle. It does not clip the node's own background; use `border-radius` for
+that. Rotation and scale are exact via the inverse model, and hit-testing
+follows the clip. Retained text/shape use the retained clip material; they only
+fall back to immediate drawing if that material is unavailable.
+
+`Style::clip_sector(Sector::new(center, start, end))` clips children to an
+angular sector. `center` is relative to the node's layout origin, angles are
+radians in local layout space, and `.feather(radians)` softens both edges. The
+node transform applies to the sector shape. Hit-testing follows the hard
+angular boundary; feather only affects drawing. Import `Sector` from
+`mue_macroquad`.
 
 `button(label)` defaults to the secondary variant. Use `primary(true)` or
 `variant(ButtonVariant::Ghost)` for other weights, `disabled(...)` and

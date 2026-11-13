@@ -775,7 +775,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                         if ranges.iter().all(Option::is_none) {
                             return;
                         }
-                        retained::draw_meshes_ranges(
+                        crate::clip::draw_retained_meshes_ranges(
                             &cache.meshes,
                             &ranges,
                             crate::math::model_matrix(model),

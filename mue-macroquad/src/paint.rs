@@ -37,6 +37,25 @@ struct Cache {
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::default();
     static DRAW_TRANSFORM: Cell<Matrix> = const { Cell::new(Matrix::IDENTITY) };
+    static MATERIAL_CLIP_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Keeps retained geometry disabled while a clip material is active.
+pub(crate) struct MaterialClipGuard;
+
+impl Drop for MaterialClipGuard {
+    fn drop(&mut self) {
+        MATERIAL_CLIP_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+pub(crate) fn enter_material_clip() -> MaterialClipGuard {
+    MATERIAL_CLIP_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    MaterialClipGuard
+}
+
+fn material_clip_active() -> bool {
+    MATERIAL_CLIP_DEPTH.with(|depth| depth.get() > 0)
 }
 
 /// Apply a transform to a subtree without changing its layout coordinates.
@@ -66,6 +85,7 @@ pub(crate) fn current_transform() -> Matrix {
 /// geometry entirely on backends that only support the immediate path.
 pub(crate) fn retained_enabled() -> bool {
     macroquad::retained::is_supported()
+        && (!material_clip_active() || crate::clip::retained_material_active())
 }
 
 /// Axis-aligned bounds of a rectangle after a canvas transform.
@@ -745,14 +765,18 @@ impl ShapesBuilder<'_> {
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
     let radius = crate::style::units::resolve_length(style.take_radius(), "radius");
+    let shadow = style.take_shadow();
     let paint = use_paint(style);
     style.on_render.append(move |_| {
-        let brush = background.get_clone();
-        if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
-            return;
-        }
         let rect = rect.get();
         if rect.w <= 0. || rect.h <= 0. {
+            return;
+        }
+        if let Some(shadow) = shadow.try_get() {
+            crate::shadow::draw_shadow(&paint, rect, shadow);
+        }
+        let brush = background.get_clone();
+        if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
             return;
         }
         let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
@@ -773,6 +797,19 @@ mod tests {
         color::Color,
         shader::{Brush, ColorStop, LinearGradient},
     };
+
+    #[test]
+    fn material_clip_guard_tracks_nesting() {
+        assert!(!material_clip_active());
+        let outer = enter_material_clip();
+        assert!(material_clip_active());
+        let inner = enter_material_clip();
+        assert!(material_clip_active());
+        drop(inner);
+        assert!(material_clip_active());
+        drop(outer);
+        assert!(!material_clip_active());
+    }
 
     #[test]
     fn node_opacity_multiplies_ancestors_once_for_all_consumers() {

@@ -21,6 +21,7 @@ members = [
     "examples/nodes",
     "examples/portal",
     "examples/pass-probe",
+    "examples/material-probe",
     "examples/input-router",
     "examples/playground",
     "examples/tokens",
@@ -34,7 +35,7 @@ resolver = "2"
 license = "MIT"
 edition = "2024"
 repository = "https://github.com/void-cat-0/mue-core"
-rust-version = "1.89.0"
+rust-version = "1.90.0"
 
 [workspace.dependencies]
 # 临时方案：原仓库 github.com/2278535805 已 404，改为引用从 Cargo 缓存提取的本地副本，

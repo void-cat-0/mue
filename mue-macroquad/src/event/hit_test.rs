@@ -78,11 +78,13 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
             n.effective_transform(),
             n.layout.rect,
             n.clip,
+            n.clip_radius,
+            n.clip_sector,
             *n.children,
             n.hit_test.clone(),
         ))
     });
-    let Some((transform, rect, clip, children, custom)) = snapshot else {
+    let Some((transform, rect, clip, clip_radius, clip_sector, children, custom)) = snapshot else {
         return false;
     };
     if !transform.is_finite() || transform.determinant().abs() < f32::EPSILON {
@@ -90,6 +92,16 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
     }
     let pos = crate::math::project_point(transform.inverse(), pos);
     if !pos.is_finite() || clip.is_some_and(|rect| !rect.get_untracked().contains(&pos)) {
+        return false;
+    }
+    if !rect.is_null()
+        && !crate::clip::contains_point(
+            rect.get_untracked(),
+            clip_radius.and_then(|radius| radius.try_get_untracked()),
+            clip_sector.and_then(|sector| sector.try_get_untracked()),
+            pos,
+        )
+    {
         return false;
     }
     let children = if children.is_null() {
@@ -128,7 +140,9 @@ pub fn set_hit_test_fn(hit_test: HitTestFn) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::clip::Sector;
     use crate::math::{Matrix, Rect, vec2};
+    use crate::runtime::Runtime;
     use mue_core::{Disposable, prop::Prop, scope::Scope, signal::signal};
 
     pub(crate) struct TestNode(pub NodeRef);
@@ -145,6 +159,20 @@ pub(crate) mod tests {
             });
             Self(NodeRef::from_id(id))
         }
+
+        fn with_clip_radius(self, radius: f32) -> Self {
+            Runtime::with(|rt| {
+                rt.nodes.borrow_mut()[self.0.id].clip_radius = Some(Prop::Static(radius));
+            });
+            self
+        }
+
+        fn with_clip_sector(self, sector: Sector) -> Self {
+            Runtime::with(|rt| {
+                rt.nodes.borrow_mut()[self.0.id].clip_sector = Some(Prop::Static(sector));
+            });
+            self
+        }
     }
     impl Drop for TestNode {
         fn drop(&mut self) {
@@ -156,6 +184,21 @@ pub(crate) mod tests {
             .iter()
             .map(|node| node.id)
             .collect()
+    }
+
+    #[test]
+    fn rounded_clip_rejects_corner_hits() {
+        let node = TestNode::new(Some(Rect::new(0., 0., 30., 30.)), &[]).with_clip_radius(10.);
+        assert_eq!(ids(node.0, vec2(15., 15.)), vec![node.0.id]);
+        assert!(hit_test(node.0, vec2(1., 1.)).is_empty());
+    }
+
+    #[test]
+    fn sector_clip_rejects_outside_angle_hits() {
+        let sector = Sector::new(vec2(15., 15.), -std::f32::consts::FRAC_PI_2, 0.);
+        let node = TestNode::new(Some(Rect::new(0., 0., 30., 30.)), &[]).with_clip_sector(sector);
+        assert_eq!(ids(node.0, vec2(25., 5.)), vec![node.0.id]);
+        assert!(hit_test(node.0, vec2(5., 25.)).is_empty());
     }
 
     #[test]

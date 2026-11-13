@@ -7,6 +7,7 @@
 //! pausing.
 
 mod controller;
+mod session;
 
 use std::collections::HashMap;
 
@@ -15,13 +16,14 @@ use macroquad::prelude::*;
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App,
+    App, Shadow,
     color::Color as MueColor,
     font::{FamilyOwned, load_font},
     node::portal,
     shader::SharedTexture,
-    style::Styleable,
+    style::{Size, Styleable},
 };
+use session::{CommandQueue, GameUiCommand, MockSession, command_queue, drain};
 
 const CHART_WIDTH: u32 = 1280;
 const CHART_HEIGHT: u32 = 720;
@@ -166,7 +168,23 @@ impl GameChannel for MockChannel {
     }
 }
 
-fn ui(texture: Signal<SharedTexture>, font: FamilyOwned, paused: Signal<bool>) -> impl Component {
+/// Make the controller input mode follow the session pause state.
+fn sync_mode(controller: &mut GameController<MockChannel>, session: &MockSession, time: f64) {
+    match (session.is_paused(), controller.mode()) {
+        (true, InputMode::Gameplay) => controller.enter_overlay(),
+        (false, InputMode::Overlay) => controller.exit_overlay(Some(time)),
+        _ => {}
+    }
+}
+
+fn ui(
+    texture: Signal<SharedTexture>,
+    font: FamilyOwned,
+    paused: ReadSignal<bool>,
+    dead: ReadSignal<bool>,
+    title: ReadSignal<&'static str>,
+    commands: CommandQueue,
+) -> impl Component {
     let label = |value: &'static str| {
         text(value).style(mue_macroquad::style! {
             font-family: {font.clone()};
@@ -202,6 +220,7 @@ fn ui(texture: Signal<SharedTexture>, font: FamilyOwned, paused: Signal<bool>) -
                         color: {MueColor::from_rgba(255, 255, 255, 255)};
                     }),
                     label("chart texture is composited by the portal node."),
+                    label("the session owns pause; the overlay sends commands."),
                     label("the pause button is drawn by the chart channel."),
                     label("new pointers belong to mue while paused."),
                     label("hold the chart and press P: the held touch survives."),
@@ -219,20 +238,53 @@ fn ui(texture: Signal<SharedTexture>, font: FamilyOwned, paused: Signal<bool>) -
                         gap: 12px;
                         align-items: center;
                     })
+                    .shadow(Shadow::new(18., 16.))
                     .children((
-                        heading("paused").style(mue_macroquad::style! {
+                        heading(title).style(mue_macroquad::style! {
                             font-family: {font.clone()};
                             font-size: 36px;
                             color: {MueColor::from_rgba(255, 255, 255, 255)};
                         }),
-                        label("new pointers are swallowed while the overlay is open."),
+                        flexbox()
+                            .style(mue_macroquad::style! {
+                                width: 272px;
+                                height: 153px;
+                                flex-shrink: 0;
+                            })
+                            .clip_radius(Size::Px(12.))
+                            .children(portal(texture).style(mue_macroquad::style! {
+                                width: 100%;
+                                height: 100%;
+                            })),
                         button("resume")
                             .primary(true)
+                            .disabled(dead)
                             .style(mue_macroquad::style! {
                                 font-family: {font.clone()};
                                 font-size: 16px;
                             })
-                            .on_activate(move || paused.set(false)),
+                            .on_activate({
+                                let commands = commands.clone();
+                                move || commands.borrow_mut().push(GameUiCommand::Resume)
+                            }),
+                        button("retry")
+                            .style(mue_macroquad::style! {
+                                font-family: {font.clone()};
+                                font-size: 16px;
+                            })
+                            .on_activate({
+                                let commands = commands.clone();
+                                move || commands.borrow_mut().push(GameUiCommand::Retry)
+                            }),
+                        button("exit")
+                            .style(mue_macroquad::style! {
+                                font-family: {font.clone()};
+                                font-size: 16px;
+                            })
+                            .on_activate({
+                                let commands = commands.clone();
+                                move || commands.borrow_mut().push(GameUiCommand::Exit)
+                            }),
                     )),
             )
             .backdrop(MueColor::from_rgba(0, 0, 0, 170))
@@ -248,12 +300,18 @@ pub async fn run() {
     let chart_font = load_ttf_font_from_bytes(font_bytes).expect("chart font");
 
     let owner = OwnedScope::new();
-    let (texture, paused) = owner.run(|| {
+    let mut session = MockSession::new(12.0);
+    let (texture, snapshot, paused, dead, title) = owner.run(|| {
         let placeholder: SharedTexture = Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]).into();
-        (signal(placeholder), signal(false))
+        let snapshot = signal(session.snapshot());
+        let paused = snapshot.map(|s| s.paused);
+        let dead = snapshot.map(|s| s.dead);
+        let title = snapshot.map(|s| if s.dead { "failed" } else { "paused" });
+        (signal(placeholder), snapshot, paused, dead, title)
     });
+    let commands = command_queue();
     let mut controller = GameController::new(MockChannel::new(chart_font), texture);
-    let mut app = App::new(ui(texture, font, paused));
+    let mut app = App::new(ui(texture, font, paused, dead, title, commands.clone()));
 
     loop {
         clear_background(BLACK);
@@ -263,50 +321,58 @@ pub async fn run() {
             request_new_screen_size(640., 360.);
         }
 
+        // UI commands are applied at the frame boundary, before the chart
+        // update, so the session sees one consistent state per frame.
+        for command in drain(&commands) {
+            session.apply(command);
+        }
+        if session.exited() {
+            break;
+        }
+
         // Input is replayed from miniquad's event queue at frame start.
         controller.process_input();
 
-        // Test hook: P toggles the modal without a second finger, so a held
-        // chart pointer can be observed across the mode switch.
+        // Test hook: P toggles pause through the session, without a second
+        // finger, so a held chart pointer can be observed across the switch.
         if is_key_pressed(KeyCode::P) {
-            if controller.mode() == InputMode::Gameplay {
-                controller.enter_overlay();
-                paused.set(true);
+            if session.is_paused() {
+                session.resume();
             } else {
-                controller.exit_overlay(Some(get_time()));
-                paused.set(false);
+                session.pause();
             }
         }
 
         // The chart HUD owns the pause button; the channel reports the hit.
         if controller.channel_mut().take_pause_request() {
-            controller.enter_overlay();
-            paused.set(true);
+            session.pause();
         }
 
-        // Back closes the overlay before the host sees it.
+        // Back closes the overlay through the controller and resumes the
+        // session. A dead session cannot resume; retry/exit stay available.
         if (is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Back))
-            && controller.back(Some(get_time()))
+            && controller.mode() == InputMode::Overlay
+            && !session.is_dead()
         {
-            paused.set(false);
+            controller.back(Some(get_time()));
+            session.resume();
         }
 
-        // The overlay's resume button clears paused; the host returns new
-        // pointers to the chart on the next frame.
-        if !paused.get() && controller.mode() == InputMode::Overlay {
-            controller.exit_overlay(Some(get_time()));
-        }
+        // The session advances only while playing.
+        let dt = get_frame_time();
+        session.update(dt);
+
+        // The controller's input mode follows the session.
+        sync_mode(&mut controller, &session, get_time());
+
+        // Publish the snapshot after the update; the UI sees it this frame.
+        snapshot.set(session.snapshot());
 
         let window_size = (
             screen_width().max(1.0) as u32,
             screen_height().max(1.0) as u32,
         );
-        controller.render(
-            window_size,
-            screen_dpi_scale(),
-            get_time(),
-            get_frame_time(),
-        );
+        controller.render(window_size, screen_dpi_scale(), session.time(), dt);
 
         app.frame();
         next_frame().await;
