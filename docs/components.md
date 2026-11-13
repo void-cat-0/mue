@@ -3,6 +3,8 @@
 The component crate owns reusable behavior:
 
 - layout: `stack`, `wrap`, `center`, `container`, `scroll_area`, `pages`, and navigation;
+- controls: `button`;
+- overlay: `overlay_host`;
 - graphics: `image`, `shape`, and `circle`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 
@@ -15,12 +17,12 @@ use std::rc::Rc;
 use mue_components::prelude::*;
 
 #[component]
-fn button(caption: Rc<str>, #[default] primary: bool) -> impl Component {
+fn primary_button(caption: Rc<str>, #[default] primary: bool) -> impl Component {
     let opacity = primary.map(|active| if active { 1. } else { 0.7 });
     center().opacity(opacity).children(text(caption))
 }
 
-let view = button("Save").primary(true);
+let view = primary_button("Save").primary(true);
 ```
 
 A `#[component]` body returns another builder through `impl Component` or a concrete builder type. During `into_node`, the macro runs that body in the resulting node's scope and continues synchronously through its returned builder. Each body runs once, and each omitted parameter's default expression is evaluated once. Keep the return value as a builder so that the caller's styles and ownership reach the same final node. Ordinary child inputs can still include prebuilt nodes.
@@ -76,7 +78,7 @@ Use `map_keyed_prop(list, key_fn, node_fn)` when each retained node needs the la
 let rows = map_keyed_prop(items, |item| item.id, |row| {
     let value = row.value;
     let label = value.map(|item| item.name);
-    button(label, move || rename(value.get_clone()))
+    button(label).on_activate(move || rename(value.get_clone()))
 });
 ```
 
@@ -110,3 +112,41 @@ Disposing the creator scope does not cancel the task. Dropping the task handle c
 `mue_core::task::tick(limit)` polls at most `limit` ready tasks without blocking. `sleep` / `timeout` register with the same foreground executor and are driven by `tick`; they are `!Send` and cannot be used from background tasks. `spawn_blocking` runs blocking closures on fresh threads; `JoinSet` joins foreground tasks; `block_on` is for tests and headless hosts. `mue_macroquad::App::frame` drives up to 32 task polls after timeouts and before layout. One poll is not preempted: synchronous I/O or CPU-heavy code still blocks that frame. Blocking work uses `spawn_blocking` or `AsyncResource::new_blocking`; the result is published on the UI thread. Network/IO work runs on the host's runtime and is awaited from `AsyncResource::new`. For expected failures, use a `Result<T, E>` task output or `AsyncResource<T, E>`, which owns its state owner and task and exposes `Loading` then `Ready(Result<T, E>)` as a reactive signal. Its state persists until resource drop; `new` runs the operation on the foreground executor, while `new_blocking` runs a blocking closure on a fresh OS thread. A blocking operation cannot use `scope_future`. `is_finished()` becomes true after future destruction and any opt-in scoped cleanup. Polling a completed task again panics. `Task::fallible` converts the handle into a `FallibleTask<T>` that yields `Option<T>`; `None` reports a task stopped by the executor instead of panicking. `try_spawn` / `try_tick` return `Err(ExecutorClosed)` during shutdown; panics still propagate without recovery.
 
 For application-owned tokens, `provide` / `inject`, snapshots versus bindings, scope ownership, asynchronous boundaries, explicit hover, and inherited foreground, see [application tokens and context](themes.md).
+## Modal controls
+
+`overlay_host(open, content)` renders a full-screen modal layer. It is hidden
+when `open` is false, captures pointer input while open, and keeps the content
+mounted while hidden. Content taps are swallowed; a backdrop tap only dismisses
+when `dismissible(true)` is set.
+
+```rust
+let open = signal(false);
+overlay_host(
+    open,
+    flexbox()
+        .style(style! {
+            width: 320px;
+            padding: 24px;
+            border-radius: 16px;
+            flex-direction: column;
+            gap: 12px;
+            align-items: center;
+        })
+        .children((
+            text("Paused"),
+            button("Resume")
+                .primary(true)
+                .on_activate(move || open.set(false)),
+        )),
+)
+.dismissible(true)
+.on_dismiss(move || open.set(false));
+```
+
+`button(label)` defaults to the secondary variant. Use `primary(true)` or
+`variant(ButtonVariant::Ghost)` for other weights, `disabled(...)` and
+`loading(...)` with reactive values, and `on_activate(...)` for the action.
+The current overlay host is a single layer: stacking, enter/exit animation, and
+back priority are not implemented yet. IconButton and keyboard focus are also
+pending. Button colors are fixed for now; replacing them with application tokens
+is a follow-up.

@@ -74,26 +74,32 @@ A plain wrapper function can accept `Prop<Palette>` directly instead of using co
 
 ## Optional token store
 
-`mue_components::tokens` covers the common case: many named values of a few types, registered once and read as ordinary properties. It is a value store, not a theme engine — no selectors, no cascade, no dedicated syntax.
+`mue_components::tokens` covers the common case: many named values of a few types, registered once and read as ordinary properties. It is a value store, not a theme engine — no selectors, no cascade, and components still read ordinary properties.
 
 ```rust
-use mue_components::{prelude::*, tokens::{Theme, TokenSet, provide_theme}};
+use mue_components::{prelude::*, tokens::{Theme, provide_theme}};
+use mue_core::Size;
 use mue_macroquad::{color::Color, shader::Brush};
 use std::rc::Rc;
 
 let theme = Rc::new(Theme::new());
-theme.register(&TokenSet::new()
-    .with("panel", Brush::Solid(Color::WHITE))
-    .with("gap", Size::Px(12.)));
+theme.register(&token_set! {
+    panel: Brush::Solid(Color::WHITE),
+    "gap": Size::Px(12.),
+});
 
 // Read a key as a live property; the setter binds once.
 text("Label").background(theme.get::<Brush>("panel"));
 
 // Switch every registered key in place; existing bindings update.
-theme.apply(&TokenSet::new().with("panel", Brush::Solid(Color::BLACK)));
+theme.apply(&token_set! { panel: Brush::Solid(Color::BLACK) });
 ```
 
-Keys are indexed by value type first, so the same name can hold a `Brush` and a `FontSize` without colliding, and a key can never be read as the wrong type. `provide_theme(theme, || view)` installs a theme for a subtree through the ordinary scope context, and `Theme::current()` reads it back; `provide_foreground` remains the separate, narrower helper for inherited text color.
+`token_set!` stringifies bare identifiers and passes string literals through, so plain and dotted keys can be mixed. Use `TokenSet::with` when a key is computed at runtime. The macro only builds the same plain data; it adds no selectors or cascade.
+
+Inside `style!`, `token!(key)` reads the nearest installed theme and takes the value type from the property: `font-size: token!(title);`, `background: token!(panel);`. The two-argument form `token!(theme, key)` uses an explicit handle, and `token!(...)` inside a braced expression is rewritten with the property's type, so `selected.pick(token!(accent), token!(panel))` works.
+
+Keys are indexed by value type first, so the same name can hold a `Brush` and a `FontSize` without colliding, and a key can never be read as the wrong type. Reading a missing key panics with the value type, the keys registered for that type, and any other types that own the same key; `apply` only updates the type of the set it receives, so apply every type a theme defines. `provide_theme(theme, || view)` installs a theme for a subtree through the ordinary scope context, and `Theme::current()` reads it back; `provide_foreground` remains the separate, narrower helper for inherited text color.
 
 ## Snapshots and bindings
 

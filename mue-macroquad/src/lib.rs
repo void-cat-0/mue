@@ -9,6 +9,7 @@ pub mod layout;
 pub mod math;
 pub mod node;
 pub mod paint;
+pub mod render;
 pub mod runtime;
 pub mod shader;
 pub mod style;
@@ -16,6 +17,7 @@ pub mod transition;
 mod viewport;
 
 pub use app::App;
+pub use render::RenderStateGuard;
 
 /// Install a callback for waking a blocking host event loop when a task is woken.
 pub fn set_task_wake_callback(callback: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {

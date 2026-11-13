@@ -192,8 +192,8 @@ pub fn map_page() -> Node {
                 })
                 .children((
                     animate_control,
-                    button("Center image", move || offset.set(Vector::ZERO)),
-                    button("Reset transform", move || {
+                    demo_button("Center image", move || offset.set(Vector::ZERO)),
+                    demo_button("Reset transform", move || {
                         offset.set(Vector::ZERO);
                         scale.set(1.);
                         rotation.set(0.);

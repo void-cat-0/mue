@@ -25,7 +25,20 @@ style! {
 }
 ```
 
-The responsive helpers return reactive `Prop<Size>` and `Prop<FontSize>` values. They cannot be written as a static `22px` token because their value changes with the viewport.
+The responsive helpers return reactive `Prop<Size>` and `Prop<FontSize>` values. They cannot be written as a static `22px` value because their value changes with the viewport.
+
+Theme tokens use the `token!(...)` value form. It reads the nearest installed `Theme` and takes the value type from the property:
+
+```rust
+style! {
+    font-size: token!(title);
+    gap: token!(gap);
+    background: token!(panel);
+    color: {selected.pick(token!(text), token!(muted))};
+}
+```
+
+Bare identifiers are stringified and string literals pass through, so `token!("tile.accent")` covers dotted keys. `token!(theme, key)` uses an explicit theme handle. Inside braces, `token!(...)` calls are rewritten with the property value type, which lets `pick` and `computed` combine tokens; an expression that changes the type, such as `map` to `Transform`, still needs `theme.get::<T>` or a local `Prop`. `transform` and `transform-origin` do not accept the token form.
 
 Transforms include 2D functions and the common 3D functions `translate3d`, `translateZ`, `scale3d`, `scaleZ`, `rotateX`, `rotateY`, `perspective`, and `matrix3d`. The current renderer is a 2D canvas: 3D values are resolved and projected to that canvas plane.
 

@@ -1,8 +1,9 @@
 //! Optional reactive token store for application-defined themes.
 //!
-//! A [`TokenSet`] is a named bag of values of one type. A [`Theme`] registers every
-//! key once, at startup, into live signals, and hands out [`Prop`] handles that stay
-//! bound to those signals:
+//! A [`TokenSet`] is a named bag of values of one type. Build one with
+//! [`token_set!`](crate::token_set) for literal keys, or with [`TokenSet::with`]
+//! when a key is computed. A [`Theme`] registers every key once, at startup, into live signals,
+//! and hands out [`Prop`] handles that stay bound to those signals:
 //!
 //! ```
 //! use mue_components::tokens::{Theme, TokenSet};
@@ -23,13 +24,19 @@
 //!
 //! The store is indexed by value type first and by name second, so the same key can
 //! hold a `Brush` and a `FontSize` without colliding, and a key can never be read as
-//! the wrong type.
+//! the wrong type. A missing key panics with the value type, the keys registered for
+//! that type, and any other types that own the same key.
 //!
 //! This module is a value store, not a theme engine: it has no selectors, no
-//! cascade, no specificity, and no dedicated syntax. Components still read ordinary
-//! properties; the store only decides which value a property receives.
+//! cascade, and no specificity. Its macros only construct sets and read values;
+//! components still read ordinary properties, and the store only decides which
+//! value a property receives.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, hash_map::Entry},
+    rc::Rc,
+};
 
 use mue_core::{
     prelude::{Prop, Signal},
@@ -85,6 +92,96 @@ impl<T> TokenSet<T> {
     }
 }
 
+/// Build a [`TokenSet`] from `key: value` entries.
+///
+/// A key is either a bare identifier, which is stringified, or a string literal.
+/// The two forms may be mixed, so dotted keys can sit next to plain ones. Later
+/// entries replace earlier ones with the same key. The value type is inferred
+/// from the entries, so an empty set needs an explicit type.
+///
+/// ```
+/// use mue_components::{token_set, tokens::TokenSet};
+///
+/// let spacing: TokenSet<f32> = token_set! {
+///     gap: 8.,
+///     "gap.tight": 4.,
+/// };
+///
+/// assert_eq!(spacing.get("gap"), Some(&8.));
+/// assert_eq!(spacing.get("gap.tight"), Some(&4.));
+/// ```
+#[macro_export]
+macro_rules! token_set {
+    () => {
+        $crate::tokens::TokenSet::new()
+    };
+    ($($key:tt : $value:expr),+ $(,)?) => {{
+        let mut set = $crate::tokens::TokenSet::new();
+        $(
+            set.set($crate::__token_set_key!($key), $value);
+        )+
+        set
+    }};
+}
+
+/// Turn a [`token_set!`] key into its string form.
+///
+/// Internal helper: bare identifiers are stringified, string literals pass
+/// through unchanged.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __token_set_key {
+    ($key:ident) => {
+        ::core::stringify!($key)
+    };
+    ($key:literal) => {
+        $key
+    };
+}
+
+/// Read a theme token as a live [`Prop`].
+///
+/// `token!(key)` uses the nearest installed [`Theme`]; `token!(theme, key)`
+/// uses an explicit theme handle. A key is a bare identifier, which is
+/// stringified, or a string literal. The value type is inferred from context,
+/// so inside [`style!`](crate::style) the style macro supplies it; elsewhere,
+/// annotate the binding or argument when inference is ambiguous.
+///
+/// ```
+/// use mue_components::{token, token_set, tokens::Theme};
+/// use mue_core::{FontSize, prelude::*};
+/// use std::rc::Rc;
+///
+/// let owner = mue_core::scope::OwnedScope::new();
+/// owner.run(|| {
+///     let theme = Rc::new(Theme::new());
+///     theme.register(&token_set! { title: FontSize::Px(28.) });
+///     Theme::install(&theme);
+///
+///     let title: Prop<FontSize> = token!(title);
+///     assert_eq!(title.get(), FontSize::Px(28.));
+/// });
+/// ```
+#[macro_export]
+macro_rules! token {
+    ($theme:expr, $key:ident) => {
+        ($theme).get(::core::stringify!($key))
+    };
+    ($theme:expr, $key:literal) => {
+        ($theme).get($key)
+    };
+    ($key:ident) => {
+        $crate::tokens::Theme::current()
+            .expect("token! needs an installed theme")
+            .get(::core::stringify!($key))
+    };
+    ($key:literal) => {
+        $crate::tokens::Theme::current()
+            .expect("token! needs an installed theme")
+            .get($key)
+    };
+}
+
 /// Live signals for one value type.
 struct TokenStore<T> {
     slots: HashMap<Rc<str>, Signal<T>>,
@@ -97,12 +194,16 @@ impl<T: Clone + PartialEq + 'static> TokenStore<T> {
         }
     }
 
-    fn register(&mut self, set: &TokenSet<T>) {
+    /// Create signals for keys that are not registered yet, returning those keys.
+    fn register(&mut self, set: &TokenSet<T>) -> Vec<Rc<str>> {
+        let mut inserted = Vec::new();
         for (key, value) in set.iter() {
-            self.slots
-                .entry(key.clone())
-                .or_insert_with(|| Signal::new(value.clone()));
+            if let Entry::Vacant(slot) = self.slots.entry(key.clone()) {
+                slot.insert(Signal::new(value.clone()));
+                inserted.push(key.clone());
+            }
         }
+        inserted
     }
 
     fn get(&self, key: &str) -> Option<Prop<T>> {
@@ -134,6 +235,13 @@ impl<T: Clone + PartialEq + 'static> TokenStore<T> {
 #[derive(Default)]
 pub struct Theme {
     stores: RefCell<TypeMap>,
+    registrations: RefCell<Vec<Registration>>,
+}
+
+/// One `(key, value type)` pair, kept for diagnostics.
+struct Registration {
+    key: Rc<str>,
+    type_name: &'static str,
 }
 
 impl Theme {
@@ -143,17 +251,55 @@ impl Theme {
 
     /// Register every key in `set`. Keys that already exist keep their signal.
     pub fn register<T: Clone + PartialEq + 'static>(&self, set: &TokenSet<T>) {
-        self.stores
+        let inserted = self
+            .stores
             .borrow_mut()
             .entry::<TokenStore<T>>()
             .or_insert_with(TokenStore::new)
             .register(set);
+        if !inserted.is_empty() {
+            self.registrations
+                .borrow_mut()
+                .extend(inserted.into_iter().map(|key| Registration {
+                    key,
+                    type_name: std::any::type_name::<T>(),
+                }));
+        }
     }
 
-    /// Read a token as a live property. Panics when the key is not registered.
+    /// Read a token as a live property.
+    ///
+    /// Panics when the key is not registered for this value type. The panic
+    /// names the type, lists the keys registered for it, and reports other
+    /// types that own the same key.
     pub fn get<T: Clone + PartialEq + 'static>(&self, key: &str) -> Prop<T> {
         self.try_get(key)
-            .unwrap_or_else(|| panic!("token key {key:?} is not registered for this value type"))
+            .unwrap_or_else(|| panic!("{}", self.missing_token_message::<T>(key)))
+    }
+
+    fn missing_token_message<T: Clone + PartialEq + 'static>(&self, key: &str) -> String {
+        let type_name = std::any::type_name::<T>();
+        let mut registered = self.keys::<T>();
+        registered.sort();
+        let mut other_types: Vec<&'static str> = self
+            .registrations
+            .borrow()
+            .iter()
+            .filter(|registration| {
+                registration.key.as_ref() == key && registration.type_name != type_name
+            })
+            .map(|registration| registration.type_name)
+            .collect();
+        other_types.sort_unstable();
+        if other_types.is_empty() {
+            format!(
+                "token key {key:?} is not registered for {type_name}; registered keys for this type: {registered:?}"
+            )
+        } else {
+            format!(
+                "token key {key:?} is not registered for {type_name}; the same key is registered for: {other_types:?}; registered keys for this type: {registered:?}"
+            )
+        }
     }
 
     /// Read a token as a live property, or `None` when it is not registered.
@@ -290,6 +436,42 @@ mod tests {
     }
 
     #[test]
+    fn missing_token_message_names_the_type_and_other_owners() {
+        in_scope(|| {
+            let theme = Theme::new();
+            theme.register(&TokenSet::new().with("primary", 1_f32));
+            theme.register(&TokenSet::new().with("gap", Size::Px(2.)));
+
+            let message = theme.missing_token_message::<Size>("primary");
+            assert!(message.contains("Size"), "{message}");
+            assert!(message.contains("f32"), "{message}");
+            assert!(
+                message.contains("the same key is registered for"),
+                "{message}"
+            );
+            assert!(message.contains("\"gap\""), "{message}");
+
+            let message = theme.missing_token_message::<Size>("missing");
+            assert!(message.contains("Size"), "{message}");
+            assert!(message.contains("\"gap\""), "{message}");
+            assert!(
+                !message.contains("the same key is registered for"),
+                "{message}"
+            );
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "the same key is registered for")]
+    fn reading_a_key_under_the_wrong_type_names_the_other_type() {
+        in_scope(|| {
+            let theme = Theme::new();
+            theme.register(&TokenSet::new().with("primary", 1_f32));
+            let _ = theme.get::<Size>("primary");
+        });
+    }
+
+    #[test]
     #[should_panic(expected = "not registered")]
     fn unknown_keys_panic() {
         in_scope(|| {
@@ -303,6 +485,26 @@ mod tests {
     fn install_without_a_scope_panics() {
         let theme = Rc::new(Theme::new());
         Theme::install(&theme);
+    }
+
+    #[test]
+    fn token_set_macro_accepts_bare_and_quoted_keys() {
+        let set: TokenSet<f32> = token_set! {
+            gap: 8.,
+            "body.opacity": 1.,
+            gap: 9.,
+        };
+        assert_eq!(set.get("gap"), Some(&9.), "later entries win");
+        assert_eq!(set.get("body.opacity"), Some(&1.));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn token_set_macro_handles_empty_and_trailing_comma() {
+        let empty: TokenSet<f32> = token_set! {};
+        assert!(empty.is_empty());
+        let one: TokenSet<f32> = token_set! { gap: 8., };
+        assert_eq!(one.get("gap"), Some(&8.));
     }
 
     #[test]

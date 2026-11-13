@@ -37,6 +37,27 @@ pub fn hit_test(node: NodeRef, pos: Vector) -> IndexSet<NodeRef> {
     result.path
 }
 
+/// Whether `pos` hits a node that wants pointer input.
+///
+/// A node is interactive when it has a pointer handler, a gesture, or a custom
+/// hit test. Layout-only containers are pass-through, so an empty overlay area
+/// does not claim a chart touch.
+pub fn hit_test_interactive(root: NodeRef, pos: Vector) -> bool {
+    hit_test(root, pos).iter().any(|node| is_interactive(*node))
+}
+
+fn is_interactive(node: NodeRef) -> bool {
+    Runtime::with(|rt| {
+        let nodes = rt.nodes.borrow();
+        let Some(inner) = nodes.get(node.id) else {
+            return false;
+        };
+        !inner.hooks.pointer_event.is_empty()
+            || !inner.gestures.is_empty()
+            || inner.hit_test.is_some()
+    })
+}
+
 /// Visit a direct child from a custom hit test. Returns whether a target exists.
 /// Once a target is found, later siblings cannot replace it or join its path.
 pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
@@ -207,5 +228,72 @@ pub(crate) mod tests {
         back.0.dispose();
         assert!(hit_test(back.0, vec2(5., 5.)).is_empty());
         assert!(hit_test(root.0, vec2(5., 5.)).is_empty());
+    }
+
+    fn set_pointer_hook(node: NodeRef) {
+        Runtime::with(|rt| {
+            rt.nodes.borrow_mut()[node.id]
+                .hooks
+                .pointer_event
+                .append(|_| {});
+        });
+    }
+
+    fn set_render_hook(node: NodeRef) {
+        Runtime::with(|rt| {
+            rt.nodes.borrow_mut()[node.id].hooks.render.append(|_| {});
+        });
+    }
+
+    fn set_hover_hook(node: NodeRef) {
+        Runtime::with(|rt| {
+            rt.nodes.borrow_mut()[node.id]
+                .hooks
+                .hover_event
+                .append(|_| {});
+        });
+    }
+
+    #[test]
+    fn interactive_requires_pointer_hook_gesture_or_custom_hit() {
+        let rect = Some(Rect::new(0., 0., 30., 30.));
+        let child = TestNode::new(rect, &[]);
+        let root = TestNode::new(rect, &[child.0]);
+        assert!(!hit_test_interactive(root.0, vec2(5., 5.)));
+        set_pointer_hook(child.0);
+        assert!(hit_test_interactive(root.0, vec2(5., 5.)));
+        assert!(!hit_test_interactive(root.0, vec2(100., 100.)));
+    }
+
+    #[test]
+    fn render_and_hover_hooks_do_not_make_a_pointer_target() {
+        let rect = Some(Rect::new(0., 0., 30., 30.));
+        let child = TestNode::new(rect, &[]);
+        let root = TestNode::new(None, &[child.0]);
+        set_render_hook(child.0);
+        set_hover_hook(child.0);
+        assert!(!hit_test_interactive(root.0, vec2(5., 5.)));
+    }
+
+    #[test]
+    fn custom_hit_test_is_interactive() {
+        let rect = Some(Rect::new(0., 0., 30., 30.));
+        let child = TestNode::new(rect, &[]);
+        let root = TestNode::new(None, &[child.0]);
+        Runtime::with(|rt| {
+            rt.nodes.borrow_mut()[child.0.id].hit_test = Some(Rc::new(|node, _, result| {
+                result.hit_self(node);
+            }));
+        });
+        assert!(hit_test_interactive(root.0, vec2(5., 5.)));
+    }
+
+    #[test]
+    fn ancestor_pointer_hook_counts() {
+        let rect = Some(Rect::new(0., 0., 30., 30.));
+        let child = TestNode::new(rect, &[]);
+        let root = TestNode::new(rect, &[child.0]);
+        set_pointer_hook(root.0);
+        assert!(hit_test_interactive(root.0, vec2(5., 5.)));
     }
 }

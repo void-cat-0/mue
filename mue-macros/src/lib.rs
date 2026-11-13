@@ -46,7 +46,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 mod paths;
 mod style;
 
-/// style declarations with typed Rust expressions in braces.
+/// Style declarations with typed Rust expressions in braces.
+///
+/// `token!(key)` reads a value from the nearest installed `mue-components` theme;
+/// the property supplies the value type. `token!(theme, key)` uses an explicit
+/// theme handle. Inside braces, `token!(...)` calls are rewritten the same way.
 #[proc_macro]
 pub fn style(input: TokenStream) -> TokenStream {
     match syn::parse::<style::Declarations>(input).and_then(|style| style.expand()) {

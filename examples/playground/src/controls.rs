@@ -43,31 +43,35 @@ impl Palette {
 
 fn light_palette() -> Palette {
     Palette {
-        brushes: TokenSet::new()
-            .with("canvas", Brush::Solid(CANVAS_LIGHT))
-            .with("panel", Brush::Solid(Color::WHITE))
-            .with("foreground", Brush::Solid(FOREGROUND_LIGHT))
-            .with("tile.panel", Brush::Solid(BLUE))
-            .with("tile.accent", Brush::Solid(CORAL)),
-        colors: TokenSet::new().with("canvas", CANVAS_LIGHT),
-        numbers: TokenSet::new()
-            .with("tile.scale.panel", 1.02_f32)
-            .with("tile.scale.accent", 1.04_f32),
+        brushes: token_set! {
+            canvas: Brush::Solid(CANVAS_LIGHT),
+            panel: Brush::Solid(Color::WHITE),
+            foreground: Brush::Solid(FOREGROUND_LIGHT),
+            "tile.panel": Brush::Solid(BLUE),
+            "tile.accent": Brush::Solid(CORAL),
+        },
+        colors: token_set! { canvas: CANVAS_LIGHT },
+        numbers: token_set! {
+            "tile.scale.panel": 1.02_f32,
+            "tile.scale.accent": 1.04_f32,
+        },
     }
 }
 
 fn dark_palette() -> Palette {
     Palette {
-        brushes: TokenSet::new()
-            .with("canvas", Brush::Solid(CANVAS_DARK))
-            .with("panel", Brush::Solid(PANEL_DARK))
-            .with("foreground", Brush::Solid(FOREGROUND_DARK))
-            .with("tile.panel", Brush::Solid(PANEL_DARK))
-            .with("tile.accent", Brush::Solid(BLUE)),
-        colors: TokenSet::new().with("canvas", CANVAS_DARK),
-        numbers: TokenSet::new()
-            .with("tile.scale.panel", 1_f32)
-            .with("tile.scale.accent", 1_f32),
+        brushes: token_set! {
+            canvas: Brush::Solid(CANVAS_DARK),
+            panel: Brush::Solid(PANEL_DARK),
+            foreground: Brush::Solid(FOREGROUND_DARK),
+            "tile.panel": Brush::Solid(PANEL_DARK),
+            "tile.accent": Brush::Solid(BLUE),
+        },
+        colors: token_set! { canvas: CANVAS_DARK },
+        numbers: token_set! {
+            "tile.scale.panel": 1_f32,
+            "tile.scale.accent": 1_f32,
+        },
     }
 }
 
@@ -121,7 +125,7 @@ pub fn background_color() -> Color {
     THEME.with(|theme| theme.get::<Color>("canvas").get())
 }
 
-pub fn button(label: impl Into<Prop<Rc<str>>>, action: impl FnMut() + 'static) -> Node {
+pub fn demo_button(label: impl Into<Prop<Rc<str>>>, action: impl FnMut() + 'static) -> Node {
     sized_button(label, action, 16.)
 }
 
@@ -177,7 +181,7 @@ fn sized_button(
 
 pub fn toggle(label: &'static str) -> (Signal<bool>, Node) {
     let value = signal(false);
-    let control = button(
+    let control = demo_button(
         value.map(move |v| format!("{label}: {}", if v { "on" } else { "off" })),
         move || value.toggle(),
     );
@@ -195,7 +199,7 @@ pub fn choice<T: Clone + PartialEq + 'static>(
         let values = values.clone();
         move |i| values[i].1.clone()
     });
-    let control = button(
+    let control = demo_button(
         index.map(move |i| format!("{label}: {}", values[i].0)),
         move || index.update(|i| *i = (*i + 1) % len),
     );

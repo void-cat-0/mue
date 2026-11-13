@@ -33,85 +33,85 @@ impl Palette {
 
 fn light() -> Palette {
     Palette {
-        brushes: TokenSet::new()
-            .with("canvas", Brush::Solid(Color::from_rgba(236, 242, 247, 255)))
-            .with("panel", Brush::Solid(Color::WHITE))
-            .with("text", Brush::Solid(Color::from_rgba(30, 40, 55, 255)))
-            .with("muted", Brush::Solid(Color::from_rgba(118, 130, 149, 255)))
-            .with("accent", Brush::Solid(Color::from_rgba(39, 80, 135, 255))),
-        fonts: TokenSet::new()
-            .with("title", FontSize::Px(28.))
-            .with("body", FontSize::Px(17.))
-            .with("button", FontSize::Px(16.)),
-        sizes: TokenSet::new()
-            .with("radius", Size::Px(14.))
-            .with("gap", Size::Px(14.)),
-        numbers: TokenSet::new().with("body.opacity", 1_f32),
+        brushes: token_set! {
+            canvas: Brush::Solid(Color::from_rgba(236, 242, 247, 255)),
+            panel: Brush::Solid(Color::WHITE),
+            text: Brush::Solid(Color::from_rgba(30, 40, 55, 255)),
+            muted: Brush::Solid(Color::from_rgba(118, 130, 149, 255)),
+            accent: Brush::Solid(Color::from_rgba(39, 80, 135, 255)),
+        },
+        fonts: token_set! {
+            title: FontSize::Px(28.),
+            body: FontSize::Px(17.),
+            button: FontSize::Px(16.),
+        },
+        sizes: token_set! {
+            radius: Size::Px(14.),
+            gap: Size::Px(14.),
+        },
+        numbers: token_set! { "body.opacity": 1_f32 },
     }
 }
 
 fn dark() -> Palette {
     Palette {
-        brushes: TokenSet::new()
-            .with("canvas", Brush::Solid(Color::from_rgba(22, 30, 44, 255)))
-            .with("panel", Brush::Solid(Color::from_rgba(33, 42, 57, 255)))
-            .with("text", Brush::Solid(Color::from_rgba(240, 244, 250, 255)))
-            .with("muted", Brush::Solid(Color::from_rgba(154, 166, 184, 255)))
-            .with("accent", Brush::Solid(Color::from_rgba(46, 110, 76, 255))),
-        fonts: TokenSet::new()
-            .with("title", FontSize::Px(28.))
-            .with("body", FontSize::Px(17.))
-            .with("button", FontSize::Px(16.)),
-        sizes: TokenSet::new()
-            .with("radius", Size::Px(14.))
-            .with("gap", Size::Px(14.)),
-        numbers: TokenSet::new().with("body.opacity", 0.86_f32),
+        brushes: token_set! {
+            canvas: Brush::Solid(Color::from_rgba(22, 30, 44, 255)),
+            panel: Brush::Solid(Color::from_rgba(33, 42, 57, 255)),
+            text: Brush::Solid(Color::from_rgba(240, 244, 250, 255)),
+            muted: Brush::Solid(Color::from_rgba(154, 166, 184, 255)),
+            accent: Brush::Solid(Color::from_rgba(46, 110, 76, 255)),
+        },
+        fonts: token_set! {
+            title: FontSize::Px(28.),
+            body: FontSize::Px(17.),
+            button: FontSize::Px(16.),
+        },
+        sizes: token_set! {
+            radius: Size::Px(14.),
+            gap: Size::Px(14.),
+        },
+        numbers: token_set! { "body.opacity": 0.86_f32 },
     }
 }
 
 #[component]
 fn card(title: Rc<str>, body: Rc<str>, #[default] selected: bool) -> impl Component {
-    let theme = Theme::current().expect("theme installed");
-    let panel = theme.get::<Brush>("panel");
-    let accent = theme.get::<Brush>("accent");
-    let text_brush = theme.get::<Brush>("text");
-    let muted = theme.get::<Brush>("muted");
     flexbox()
         .style(style! {
             flex-direction: column;
-            gap: {theme.get::<Size>("gap")};
+            gap: token!(gap);
             padding: 20px;
-            border-radius: {theme.get::<Size>("radius")};
+            border-radius: token!(radius);
             // pick() is only for component state; the theme axis lives in the tokens.
-            background: {selected.pick(accent, panel)};
+            background: {selected.pick(token!(accent), token!(panel))};
             transition: 260ms ease-in-out;
         })
         .children((
             text(title).style(style! {
-                font-size: {theme.get::<FontSize>("title")};
-                color: {selected.pick(Brush::Solid(Color::WHITE), text_brush)};
+                font-size: token!(title);
+                color: {selected.pick(Brush::Solid(Color::WHITE), token!(text))};
             }),
             text(body).style(style! {
-                font-size: {theme.get::<FontSize>("body")};
-                color: {selected.pick(Brush::Solid(Color::WHITE), muted)};
+                font-size: token!(body);
+                color: {selected.pick(Brush::Solid(Color::WHITE), token!(muted))};
             }),
         ))
 }
 
 #[component]
 fn action_button(caption: Rc<str>) -> impl Component {
-    let theme = Theme::current().expect("theme installed");
     flexbox()
         .style(style! {
             align-items: center;
             justify-content: center;
             padding: 12px 20px;
-            border-radius: {theme.get::<Size>("radius")};
-            background: {theme.get::<Brush>("accent")};
+            border-radius: token!(radius);
+            background: token!(accent);
             transition: 260ms ease-in-out;
         })
         .children(text(caption).style(style! {
-            font-size: {theme.get::<FontSize>("button")};
+            font-size: token!(button);
             color: {Color::WHITE};
         }))
 }
@@ -139,13 +139,12 @@ async fn run() {
 
     let is_dark = signal(false);
     let toggle_theme = Rc::clone(&theme);
-    let view_theme = Rc::clone(&theme);
 
     let mut app = App::new(provide_theme(theme, move || {
         scroll_area()
                 .style(style! {
                     width: 100%; height: 100%;
-                    background: {view_theme.get::<Brush>("canvas")};
+                    background: token!(canvas);
                     transition: 260ms ease-in-out;
                 })
                 .content_style(style! {
@@ -155,14 +154,14 @@ async fn run() {
                 })
                 .children((
                     text("Reactive tokens").style(style! {
-                        font-size: {view_theme.get::<FontSize>("title")};
-                        color: {view_theme.get::<Brush>("text")};
+                        font-size: token!(title);
+                        color: token!(text);
                     }),
                     text("Every property reads one named value. Switching a theme writes new values into the same signals.")
                         .style(style! {
-                            font-size: {view_theme.get::<FontSize>("body")};
-                            color: {view_theme.get::<Brush>("muted")};
-                            opacity: {view_theme.get::<f32>("body.opacity")};
+                            font-size: token!(body);
+                            color: token!(muted);
+                            opacity: token!("body.opacity");
                         }),
                     card("Panel", "Reads panel, accent, text and radius tokens."),
                     card("Selected", "This card uses pick() for its selected state.").selected(true),

@@ -6,6 +6,7 @@ use syn::{
     ext::IdentExt,
     parenthesized,
     parse::{Parse, ParseStream},
+    visit_mut::VisitMut,
 };
 
 pub struct Declarations(Vec<TokenStream>);
@@ -53,6 +54,171 @@ fn expression(input: ParseStream) -> Result<Option<TokenStream>> {
         return Err(content.error("expected one Rust expression"));
     }
     Ok(Some(quote!(#value)))
+}
+
+/// Parse a `token!(key)` or `token!(theme, key)` value.
+///
+/// The style property determines the value type, so callers pass it in. A bare
+/// key reads the nearest installed theme; the two-argument form takes an
+/// explicit theme handle.
+fn token(input: ParseStream, ty: &TokenStream) -> Result<Option<TokenStream>> {
+    let fork = input.fork();
+    let Ok(mac) = fork.parse::<syn::Macro>() else {
+        return Ok(None);
+    };
+    if !mac.path.is_ident("token") {
+        return Ok(None);
+    }
+
+    let mac: syn::Macro = input.parse()?;
+    let args: TokenArgs = syn::parse2(mac.tokens)?;
+    let mut components = None;
+    Ok(Some(expand_token(args, ty, &mut components)?))
+}
+
+/// Arguments of `token!(key)` or `token!(theme, key)`.
+struct TokenArgs {
+    theme: Option<syn::Expr>,
+    key: TokenStream,
+}
+
+impl Parse for TokenArgs {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let first: syn::Expr = input.parse()?;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            Ok(Self {
+                theme: Some(first),
+                key: token_key(input)?,
+            })
+        } else {
+            Ok(Self {
+                theme: None,
+                key: token_key_expr(first)?,
+            })
+        }
+    }
+}
+
+fn expand_token(
+    args: TokenArgs,
+    ty: &TokenStream,
+    components: &mut Option<TokenStream>,
+) -> Result<TokenStream> {
+    let key = args.key;
+    Ok(match args.theme {
+        Some(theme) => quote!((#theme).get::<#ty>(#key)),
+        None => {
+            let components = match components {
+                Some(components) => components.clone(),
+                None => {
+                    let resolved = crate::paths::components()?;
+                    *components = Some(resolved.clone());
+                    resolved
+                }
+            };
+            quote!(
+                #components::tokens::Theme::current()
+                    .expect("token! needs an installed theme")
+                    .get::<#ty>(#key)
+            )
+        }
+    })
+}
+
+fn token_key(input: ParseStream) -> Result<TokenStream> {
+    if input.peek(LitStr) {
+        let key: LitStr = input.parse()?;
+        Ok(quote!(#key))
+    } else if input.peek(Ident) {
+        let key: Ident = input.parse()?;
+        Ok(quote!(::core::stringify!(#key)))
+    } else {
+        Err(input.error("expected a token key: an identifier or a string literal"))
+    }
+}
+
+fn token_key_expr(expr: syn::Expr) -> Result<TokenStream> {
+    match expr {
+        syn::Expr::Path(path) if path.qself.is_none() && path.path.segments.len() == 1 => {
+            let key = &path.path.segments[0].ident;
+            Ok(quote!(::core::stringify!(#key)))
+        }
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(key),
+            ..
+        }) => Ok(quote!(#key)),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "expected a token key: an identifier or a string literal",
+        )),
+    }
+}
+
+/// Parse `{expr}` and rewrite `token!(...)` calls inside it with `ty`.
+fn expression_with_token(input: ParseStream, ty: &TokenStream) -> Result<Option<TokenStream>> {
+    if !input.peek(syn::token::Brace) {
+        return Ok(None);
+    }
+    let content;
+    braced!(content in input);
+    let mut value: syn::Expr = content.parse()?;
+    if !content.is_empty() {
+        return Err(content.error("expected one Rust expression"));
+    }
+    rewrite_token_calls(&mut value, ty)?;
+    Ok(Some(quote!(#value)))
+}
+
+/// Rewrite `token!(key)` / `token!(theme, key)` calls inside a Rust expression.
+fn rewrite_token_calls(expr: &mut syn::Expr, ty: &TokenStream) -> Result<()> {
+    struct Rewriter<'a> {
+        ty: &'a TokenStream,
+        components: Option<TokenStream>,
+        error: Option<syn::Error>,
+    }
+
+    impl Rewriter<'_> {
+        fn expand_macro(&mut self, node: &syn::ExprMacro) -> Result<syn::Expr> {
+            let args: TokenArgs = syn::parse2(node.mac.tokens.clone())?;
+            let tokens = expand_token(args, self.ty, &mut self.components)?;
+            syn::parse2(tokens)
+        }
+    }
+
+    impl VisitMut for Rewriter<'_> {
+        fn visit_expr_mut(&mut self, node: &mut syn::Expr) {
+            if self.error.is_some() {
+                return;
+            }
+            let is_token = matches!(
+                node,
+                syn::Expr::Macro(expr) if expr.mac.path.is_ident("token")
+            );
+            if !is_token {
+                syn::visit_mut::visit_expr_mut(self, node);
+                return;
+            }
+            let syn::Expr::Macro(expr) = node else {
+                unreachable!("matched a token macro above");
+            };
+            match self.expand_macro(expr) {
+                Ok(expr) => *node = expr,
+                Err(error) => self.error = Some(error),
+            }
+        }
+    }
+
+    let mut rewriter = Rewriter {
+        ty,
+        components: None,
+        error: None,
+    };
+    rewriter.visit_expr_mut(expr);
+    match rewriter.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn setter(method: &str, value: TokenStream) -> TokenStream {
@@ -155,7 +321,11 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
             "border-radius" => setter("radius", length(input, host, false, false, false, false)?),
             "font-size" => setter("font_size", length(input, host, true, false, false, true)?),
             "line-height" => {
-                if let Some(expr) = expression(input)? {
+                if let Some(value) = token(input, &quote!(#host::style::Size))? {
+                    quote!(#style.line_height(#value).line_height_multiplier(None))
+                } else if let Some(expr) =
+                    expression_with_token(input, &quote!(#host::style::Size))?
+                {
                     quote!(#style.line_height(#expr).line_height_multiplier(None))
                 } else if input.peek(Ident) {
                     keyword(input, &["normal"])?;
@@ -183,7 +353,9 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 length(input, host, false, false, false, true)?,
             ),
             "opacity" => {
-                let value = if let Some(expr) = expression(input)? {
+                let value = if let Some(value) = token(input, &quote!(f32))? {
+                    value
+                } else if let Some(expr) = expression_with_token(input, &quote!(f32))? {
                     expr
                 } else {
                     let (mut value, unit, at) = number(input)?;
@@ -340,11 +512,13 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 ],
                 false,
             )?,
-            "flex-grow" | "flex-shrink" => setter(&method, scalar(input, false)?),
+            "flex-grow" | "flex-shrink" => setter(&method, scalar(input, &quote!(f32), false)?),
             "flex" => flex(input, host)?,
             "transition" => setter("transition", transition(input, host)?),
             "aspect-ratio" => {
-                let value = if let Some(expr) = expression(input)? {
+                let value = if let Some(value) = token(input, &quote!(Option<f32>))? {
+                    value
+                } else if let Some(expr) = expression_with_token(input, &quote!(Option<f32>))? {
                     expr
                 } else if input.peek(Ident) {
                     keyword(input, &["auto"])?;
@@ -366,7 +540,11 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 setter("aspect_ratio", value)
             }
             "font-weight" => {
-                let value = if let Some(expr) = expression(input)? {
+                let value = if let Some(value) = token(input, &quote!(#host::font::Weight))? {
+                    value
+                } else if let Some(expr) =
+                    expression_with_token(input, &quote!(#host::font::Weight))?
+                {
                     expr
                 } else {
                     let value = if input.peek(Ident) {
@@ -389,7 +567,11 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 setter("font_weight", value)
             }
             "font-family" => {
-                let value = if let Some(expr) = expression(input)? {
+                let value = if let Some(value) = token(input, &quote!(#host::font::FamilyOwned))? {
+                    value
+                } else if let Some(expr) =
+                    expression_with_token(input, &quote!(#host::font::FamilyOwned))?
+                {
                     expr
                 } else if input.peek(LitStr) {
                     let name: LitStr = input.parse()?;
@@ -414,7 +596,9 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 setter("font_family", value)
             }
             "font-style" => {
-                let value = if let Some(expr) = expression(input)? {
+                let value = if let Some(value) = token(input, &quote!(bool))? {
+                    value
+                } else if let Some(expr) = expression_with_token(input, &quote!(bool))? {
                     expr
                 } else {
                     let italic = keyword(input, &["normal", "italic"])? == "italic";
@@ -438,17 +622,35 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                     "text-vertical-align" => "text_vertical_align",
                     _ => "text_wrap_mode",
                 };
-                let value = expression(input)?.ok_or_else(|| {
-                    syn::Error::new(
-                        span,
-                        "this style property expects a Rust expression in braces",
-                    )
-                })?;
+                let ty = match name.as_str() {
+                    "font-italic" | "text-wrap" | "text-underline" | "text-strikethrough" => {
+                        quote!(bool)
+                    }
+                    "text-max-lines" => quote!(Option<usize>),
+                    "text-vertical-align" => quote!(#host::node::text::TextVerticalAlign),
+                    _ => quote!(#host::node::text::TextWrap),
+                };
+                let value = if let Some(value) = token(input, &ty)? {
+                    value
+                } else {
+                    expression_with_token(input, &ty)?.ok_or_else(|| {
+                        syn::Error::new(
+                            span,
+                            "this style property expects a Rust expression in braces",
+                        )
+                    })?
+                };
                 setter(method, value)
             }
-            "tab-width" => setter("tab_width", scalar(input, false)?),
+            "tab-width" => setter("tab_width", scalar(input, &quote!(u16), false)?),
             "text-align" => {
-                let value = if let Some(expr) = expression(input)? {
+                let value = if let Some(value) =
+                    token(input, &quote!(Option<#host::style::values::TextAlign>))?
+                {
+                    value
+                } else if let Some(expr) =
+                    expression_with_token(input, &quote!(Option<#host::style::values::TextAlign>))?
+                {
                     expr
                 } else {
                     let name = keyword(input, &["left", "right", "center", "justify"])?;
@@ -466,9 +668,14 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 setter("text_align", value)
             }
             "white-space" => {
-                let name = keyword(input, &["normal", "nowrap", "pre", "pre-wrap"])?;
-                let wrap = matches!(name.as_str(), "normal" | "pre-wrap");
-                setter("text_wrap", quote!(#wrap))
+                let value = if let Some(value) = token(input, &quote!(bool))? {
+                    value
+                } else {
+                    let name = keyword(input, &["normal", "nowrap", "pre", "pre-wrap"])?;
+                    let wrap = matches!(name.as_str(), "normal" | "pre-wrap");
+                    quote!(#wrap)
+                };
+                setter("text_wrap", value)
             }
             "text-decoration" | "text-decoration-line" => {
                 let (mut underline, mut strike) = (false, false);
@@ -485,7 +692,11 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
                 quote!(#style.text_underline(#underline).text_strikethrough(#strike))
             }
             "text-overflow" => {
-                if let Some(expr) = expression(input)? {
+                if let Some(value) = token(input, &quote!(#host::node::text::TextOverflow))? {
+                    setter("text_overflow", value)
+                } else if let Some(expr) =
+                    expression_with_token(input, &quote!(#host::node::text::TextOverflow))?
+                {
                     setter("text_overflow", expr)
                 } else {
                     let name = keyword(input, &["clip", "ellipsis"])?;
@@ -528,7 +739,10 @@ fn parse_declarations(input: ParseStream, host: &TokenStream) -> Result<Declarat
 }
 
 fn transition(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
-    if let Some(expr) = expression(input)? {
+    if let Some(value) = token(input, &quote!(#host::transition::Transition))? {
+        return Ok(value);
+    }
+    if let Some(expr) = expression_with_token(input, &quote!(#host::transition::Transition))? {
         return Ok(expr);
     }
     if input.peek(Ident) && input.fork().parse::<Ident>()? == "none" {
@@ -692,8 +906,11 @@ fn numeric(input: ParseStream, negative: bool) -> Result<f32> {
     Ok(value)
 }
 
-fn scalar(input: ParseStream, negative: bool) -> Result<TokenStream> {
-    if let Some(expr) = expression(input)? {
+fn scalar(input: ParseStream, ty: &TokenStream, negative: bool) -> Result<TokenStream> {
+    if let Some(value) = token(input, ty)? {
+        return Ok(value);
+    }
+    if let Some(expr) = expression_with_token(input, ty)? {
         return Ok(expr);
     }
     let value = numeric(input, negative)?;
@@ -708,7 +925,15 @@ fn length(
     negative: bool,
     percent: bool,
 ) -> Result<TokenStream> {
-    if let Some(expr) = expression(input)? {
+    let ty = if font {
+        quote!(#host::style::FontSize)
+    } else {
+        quote!(#host::style::Size)
+    };
+    if let Some(value) = token(input, &ty)? {
+        return Ok(value);
+    }
+    if let Some(expr) = expression_with_token(input, &ty)? {
         return Ok(expr);
     }
     if input.peek(Ident) {
@@ -801,7 +1026,16 @@ fn enum_value(
     values: &[(&str, &str)],
     optional: bool,
 ) -> Result<TokenStream> {
-    if let Some(expr) = expression(input)? {
+    let value_ty = format_ident!("{ty}");
+    let token_ty = if optional {
+        quote!(Option<#host::style::values::#value_ty>)
+    } else {
+        quote!(#host::style::values::#value_ty)
+    };
+    if let Some(value) = token(input, &token_ty)? {
+        return Ok(value);
+    }
+    if let Some(expr) = expression_with_token(input, &token_ty)? {
         return Ok(expr);
     }
     let (name, span) = property(input)?;
@@ -873,7 +1107,10 @@ fn flex(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
 }
 
 fn color(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
-    if let Some(expr) = expression(input)? {
+    if let Some(value) = token(input, &quote!(#host::shader::Brush))? {
+        return Ok(value);
+    }
+    if let Some(expr) = expression_with_token(input, &quote!(#host::shader::Brush))? {
         return Ok(expr);
     }
     if input.peek(Token![#]) || input.peek(LitStr) {
@@ -1009,6 +1246,11 @@ fn comma(input: ParseStream) -> Result<()> {
 }
 
 fn transform(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
+    if input.peek(Ident) && input.fork().parse::<Ident>()? == "token" {
+        return Err(
+            input.error("token!(...) is not supported for transform; use a {Rust expression}")
+        );
+    }
     if input.peek(Ident) && input.fork().parse::<Ident>()? == "none" {
         input.parse::<Ident>()?;
         return Ok(quote!(#host::style::Transform::default()));
@@ -1157,6 +1399,10 @@ fn transform(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
 }
 
 fn transform_origin(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
+    if input.peek(Ident) && input.fork().parse::<Ident>()? == "token" {
+        return Err(input
+            .error("token!(...) is not supported for transform-origin; use a {Rust expression}"));
+    }
     if let Some(expr) = expression(input)? {
         return Ok(expr);
     }
@@ -1258,5 +1504,39 @@ mod tests {
         ] {
             assert!(parse(source).is_ok(), "{source}");
         }
+    }
+
+    #[test]
+    fn token_values_expand_to_typed_theme_lookups() {
+        let declarations = parse(
+            "font-size: token!(theme, title); color: token!(theme, \"text\"); gap: token!(theme, gap);",
+        )
+        .expect("token values parse");
+        let statements = declarations.0;
+        let font_size = statements[0].to_string();
+        assert!(font_size.contains("get"), "{font_size}");
+        assert!(font_size.contains("FontSize"), "{font_size}");
+        assert!(font_size.contains("stringify"), "{font_size}");
+        assert!(font_size.contains("title"), "{font_size}");
+        let color = statements[1].to_string();
+        assert!(color.contains("Brush"), "{color}");
+        assert!(color.contains("\"text\""), "{color}");
+        let gap = statements[2].to_string();
+        assert!(gap.contains("Size"), "{gap}");
+    }
+
+    #[test]
+    fn token_values_reject_unknown_keys_and_transforms() {
+        let error = match parse("font-size: token!(theme, 1 + 2);") {
+            Ok(_) => panic!("accepted a non-literal key"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("expected a token key"), "{error}");
+
+        let error = match parse("transform: token!(theme, x);") {
+            Ok(_) => panic!("accepted a token transform"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("not supported for transform"), "{error}");
     }
 }

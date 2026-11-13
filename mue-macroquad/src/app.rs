@@ -12,6 +12,7 @@ use taffy::{AvailableSpace, Size};
 
 use crate::{
     event::pointer::PointerManager,
+    math::Vector,
     node::{IntoNode, Node},
     runtime::get_time,
     runtime::{Runtime, TimeoutKey},
@@ -45,11 +46,23 @@ impl App {
         }
     }
 
+    /// Whether `pos` hits an interactive UI node from the last published layout.
+    ///
+    /// Interactive nodes have a pointer handler, a gesture, or a custom hit test.
+    /// Layout-only containers are pass-through, so a chart touch under an empty
+    /// overlay is not claimed by the UI. Call this before [`Self::frame`] to route
+    /// input against the previous frame's layout.
+    pub fn hit_test_ui(&self, pos: Vector) -> bool {
+        crate::event::hit_test::hit_test_interactive(*self.root_node, pos)
+    }
+
     /// Advance transitions and render one frame, then dispatch pointer events.
     /// Call once per frame before `macroquad::next_frame`.
     ///
-    /// The host must have an active render pass; mue does not call
-    /// `begin_default_pass`/`end_pass` itself.
+    /// `App::frame` queues macroquad draw calls; it does not begin or end a
+    /// render pass. Macroquad's batched submission manages passes at
+    /// `end_frame`. A host that interleaves raw miniquad draws must manage its
+    /// own pass; a macroquad-only host does not need to begin one.
     pub fn frame(&mut self) {
         let root_node = *self.root_node;
         let viewport = crate::viewport::Viewport {

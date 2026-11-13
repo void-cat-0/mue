@@ -137,7 +137,7 @@ pub fn page() -> Node {
                 gap: {vw(1.)};
                 })
                 .children((
-                    button("Reset", move || offset.set(Vector::ZERO)),
+                    demo_button("Reset", move || offset.set(Vector::ZERO)),
                     text(offset.map(|v| format!("{:.0}, {:.0}", v.x, v.y))).style(
                         mue_macroquad::style! {
                         font-size: {responsive::font(18.)};
@@ -161,7 +161,7 @@ pub fn page() -> Node {
                         gap: {vw(1.)};
                         })
                         .children((
-                            button("Previous", move || {
+                            demo_button("Previous", move || {
                                 page.update(|p| *p = p.saturating_sub(1))
                             }),
                             text(page.map(|p| format!("{} / 8", p + 1)))
@@ -171,7 +171,7 @@ pub fn page() -> Node {
                                 .style(
                                     mue_macroquad::style! { line-height: {responsive::ui(28.)}; },
                                 ),
-                            button("Next", move || page.update(|p| *p = (*p + 1).min(7))),
+                            demo_button("Next", move || page.update(|p| *p = (*p + 1).min(7))),
                         )),
                 )),
             ),

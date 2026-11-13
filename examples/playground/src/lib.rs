@@ -209,13 +209,13 @@ fn build_ui(selected: Signal<usize>, fps: Signal<u32>, zoom: ReadSignal<f32>) ->
                     gap: {vw(1.)};
                     })
                     .children((
-                        button("Previous", move || {
+                        demo_button("Previous", move || {
                             selected.update(|index| *index = index.saturating_sub(1));
                         }),
-                        button("Next", move || {
+                        demo_button("Next", move || {
                             selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1));
                         }),
-                        button(
+                        demo_button(
                             computed(move |_| format!("Scale {:.0}%", zoom.get() * 100.)),
                             responsive::cycle_zoom,
                         ),

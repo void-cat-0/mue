@@ -19,6 +19,9 @@ members = [
     "examples/animation",
     "examples/navigation",
     "examples/nodes",
+    "examples/portal",
+    "examples/pass-probe",
+    "examples/input-router",
     "examples/playground",
     "examples/tokens",
 ]

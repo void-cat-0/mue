@@ -1,8 +1,11 @@
 //! Layout, typography, and graphics components for the Macroquad renderer.
+pub mod controls;
 pub mod graphics;
 pub mod layout;
+pub mod overlay;
 pub mod tokens;
 pub mod typography;
+pub use controls::*;
 pub use graphics::*;
 pub use layout::*;
 pub use mue_macroquad::node::{
@@ -12,6 +15,7 @@ pub use mue_macroquad::node::{
     show_if, text,
 };
 pub use mue_macros::{component, node, style};
+pub use overlay::*;
 pub use tokens::{Theme, ThemeProvider, TokenSet, provide_theme};
 pub use typography::*;
 
