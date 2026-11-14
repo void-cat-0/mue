@@ -500,7 +500,8 @@ impl<T> Task<T> {
     /// This is a polling API for migrating synchronous `take()` patterns; new
     /// code should prefer `await` or [`AsyncResource`]. The task is still driven
     /// by [`tick`]; `try_take` does not run it. If the executor stopped the task,
-    /// this panics like `await`; use [`Task::fallible`] when `None` is preferred.
+    /// this panics like `await`; use [`Task::fallible`] and
+    /// [`FallibleTask::try_take`] when `None` is preferred.
     ///
     /// ```
     /// use mue_core::task::{spawn, tick};
@@ -635,6 +636,7 @@ impl<T> fmt::Debug for Task<T> {
 enum FallibleTaskState<T> {
     Ready(Option<T>),
     Spawned(Option<async_task::FallibleTask<T, RunnableMeta>>),
+    Stopped,
 }
 
 /// A task that yields `Option<T>` instead of panicking when the executor stops it.
@@ -662,13 +664,46 @@ impl<T> FallibleTask<T> {
                     .expect("fallible task handle already consumed")
                     .detach();
             }
+            FallibleTaskState::Stopped => {}
+        }
+    }
+
+    /// Poll once without blocking.
+    ///
+    /// Returns `Some(Some(value))` when the task completed, `Some(None)` when
+    /// the executor stopped it, and `None` while it is pending or after the
+    /// value/stop has already been taken. Like [`Task::try_take`], this does
+    /// not drive the task; the executor's `tick` does.
+    pub fn try_take(&mut self) -> Option<Option<T>> {
+        let polled = match &mut self.state {
+            FallibleTaskState::Ready(value) => return value.take().map(Some),
+            FallibleTaskState::Spawned(task) => {
+                let handle = task
+                    .as_mut()
+                    .expect("fallible task handle already consumed");
+                let waker = Waker::noop();
+                let mut context = Context::from_waker(waker);
+                Pin::new(handle).poll(&mut context)
+            }
+            FallibleTaskState::Stopped => return None,
+        };
+        match polled {
+            Poll::Ready(Some(value)) => {
+                self.state = FallibleTaskState::Ready(None);
+                Some(Some(value))
+            }
+            Poll::Ready(None) => {
+                self.state = FallibleTaskState::Stopped;
+                Some(None)
+            }
+            Poll::Pending => None,
         }
     }
 
     /// Whether the task has completed, been cancelled, or been stopped by shutdown.
     pub fn is_finished(&self) -> bool {
         match &self.state {
-            FallibleTaskState::Ready(_) => true,
+            FallibleTaskState::Ready(_) | FallibleTaskState::Stopped => true,
             FallibleTaskState::Spawned(task) => {
                 task.as_ref().is_some_and(|task| task.is_finished())
             }
@@ -681,14 +716,21 @@ impl<T> Future for FallibleTask<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
         let this = self.get_mut();
-        match &mut this.state {
-            FallibleTaskState::Ready(value) => Poll::Ready(value.take()),
+        let polled = match &mut this.state {
+            FallibleTaskState::Ready(value) => return Poll::Ready(value.take()),
             FallibleTaskState::Spawned(task) => Pin::new(
                 task.as_mut()
                     .expect("fallible task handle already consumed"),
             )
             .poll(cx),
+            FallibleTaskState::Stopped => return Poll::Ready(None),
+        };
+        match &polled {
+            Poll::Ready(Some(_)) => this.state = FallibleTaskState::Ready(None),
+            Poll::Ready(None) => this.state = FallibleTaskState::Stopped,
+            Poll::Pending => {}
         }
+        polled
     }
 }
 
@@ -719,6 +761,9 @@ impl<T> fmt::Debug for FallibleTask<T> {
                     debug.field("spawned", &token.meta.spawned);
                     debug.field("finished", &token.is_finished());
                 }
+            }
+            FallibleTaskState::Stopped => {
+                debug.field("state", &"stopped");
             }
         }
         debug.finish()
@@ -1358,6 +1403,77 @@ mod tests {
         assert!(task.is_finished());
         let mut task = task;
         assert_eq!(poll_fallible(&mut task), Poll::Ready(None));
+    }
+
+    #[test]
+    fn fallible_try_take_ready_task_yields_once() {
+        let mut task = Task::ready(7u32).fallible();
+        assert_eq!(task.try_take(), Some(Some(7)));
+        assert_eq!(task.try_take(), None);
+        assert!(task.is_finished());
+        task.detach();
+    }
+
+    #[test]
+    fn fallible_try_take_pending_task_returns_none() {
+        let mut task = spawn(std::future::pending::<u32>()).fallible();
+        assert_eq!(task.try_take(), None);
+        assert!(!task.is_finished());
+        task.detach();
+    }
+
+    #[test]
+    fn fallible_try_take_completed_task_yields_output() {
+        let mut task = spawn(async { 42u32 }).fallible();
+        assert_eq!(tick(1), 1);
+        assert_eq!(task.try_take(), Some(Some(42)));
+        assert_eq!(task.try_take(), None);
+    }
+
+    #[test]
+    fn fallible_try_take_does_not_drive_the_task() {
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_in_task = ran.clone();
+        let mut task = spawn(async move {
+            ran_in_task.store(1, Ordering::SeqCst);
+            5u32
+        })
+        .fallible();
+        assert_eq!(task.try_take(), None);
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        assert_eq!(tick(1), 1);
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+        assert_eq!(task.try_take(), Some(Some(5)));
+    }
+
+    #[test]
+    fn fallible_try_take_stopped_task_reports_none() {
+        let task = thread::spawn(|| {
+            let task = spawn(std::future::pending::<()>()).fallible();
+            tick(1);
+            task
+        })
+        .join()
+        .unwrap();
+        let mut task = task;
+        assert!(task.is_finished());
+        assert_eq!(task.try_take(), Some(None));
+        assert_eq!(task.try_take(), None);
+    }
+
+    #[test]
+    fn fallible_try_take_after_shutdown_reports_stopped() {
+        let task = thread::spawn(|| {
+            let task = spawn(std::future::pending::<()>()).fallible();
+            tick(1);
+            shutdown();
+            task
+        })
+        .join()
+        .unwrap();
+        let mut task = task;
+        assert!(task.is_finished());
+        assert_eq!(task.try_take(), Some(None));
     }
 
     #[test]

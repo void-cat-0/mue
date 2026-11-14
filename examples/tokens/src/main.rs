@@ -9,7 +9,7 @@ use mue_core::{FontSize, Size, prelude::*};
 use mue_macroquad::{
     App,
     color::Color,
-    shader::Brush,
+    shader::{Brush, solid},
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;
@@ -34,11 +34,11 @@ impl Palette {
 fn light() -> Palette {
     Palette {
         brushes: token_set! {
-            canvas: Brush::Solid(Color::from_rgba(236, 242, 247, 255)),
-            panel: Brush::Solid(Color::WHITE),
-            text: Brush::Solid(Color::from_rgba(30, 40, 55, 255)),
-            muted: Brush::Solid(Color::from_rgba(118, 130, 149, 255)),
-            accent: Brush::Solid(Color::from_rgba(39, 80, 135, 255)),
+            canvas: solid(Color::from_rgba(236, 242, 247, 255)),
+            panel: solid(Color::WHITE),
+            text: solid(Color::from_rgba(30, 40, 55, 255)),
+            muted: solid(Color::from_rgba(118, 130, 149, 255)),
+            accent: solid(Color::from_rgba(39, 80, 135, 255)),
         },
         fonts: token_set! {
             title: FontSize::Px(28.),
@@ -56,11 +56,11 @@ fn light() -> Palette {
 fn dark() -> Palette {
     Palette {
         brushes: token_set! {
-            canvas: Brush::Solid(Color::from_rgba(22, 30, 44, 255)),
-            panel: Brush::Solid(Color::from_rgba(33, 42, 57, 255)),
-            text: Brush::Solid(Color::from_rgba(240, 244, 250, 255)),
-            muted: Brush::Solid(Color::from_rgba(154, 166, 184, 255)),
-            accent: Brush::Solid(Color::from_rgba(46, 110, 76, 255)),
+            canvas: solid(Color::from_rgba(22, 30, 44, 255)),
+            panel: solid(Color::from_rgba(33, 42, 57, 255)),
+            text: solid(Color::from_rgba(240, 244, 250, 255)),
+            muted: solid(Color::from_rgba(154, 166, 184, 255)),
+            accent: solid(Color::from_rgba(46, 110, 76, 255)),
         },
         fonts: token_set! {
             title: FontSize::Px(28.),
@@ -90,11 +90,11 @@ fn card(title: Rc<str>, body: Rc<str>, #[default] selected: bool) -> impl Compon
         .children((
             text(title).style(style! {
                 font-size: token!(title);
-                color: {selected.pick(Brush::Solid(Color::WHITE), token!(text))};
+                color: {selected.pick(solid(Color::WHITE), token!(text))};
             }),
             text(body).style(style! {
                 font-size: token!(body);
-                color: {selected.pick(Brush::Solid(Color::WHITE), token!(muted))};
+                color: {selected.pick(solid(Color::WHITE), token!(muted))};
             }),
         ))
 }
@@ -203,16 +203,13 @@ mod tests {
             let gap = theme.get::<Size>("gap");
             let opacity = theme.get::<f32>("body.opacity");
 
-            assert_eq!(panel.get_clone(), Brush::Solid(Color::WHITE));
+            assert_eq!(panel.get_clone(), solid(Color::WHITE));
             assert_eq!(gap.get(), Size::Px(14.));
             assert_eq!(opacity.get(), 1.);
 
             dark.apply(&theme);
 
-            assert_eq!(
-                panel.get_clone(),
-                Brush::Solid(Color::from_rgba(33, 42, 57, 255))
-            );
+            assert_eq!(panel.get_clone(), solid(Color::from_rgba(33, 42, 57, 255)));
             assert_eq!(opacity.get(), 0.86);
             // Unchanged tokens keep the same handle and value.
             assert_eq!(gap.get(), Size::Px(14.));
@@ -232,18 +229,18 @@ mod tests {
             let background =
                 selected.pick(theme.get::<Brush>("accent"), theme.get::<Brush>("panel"));
 
-            assert_eq!(background.get_clone(), Brush::Solid(Color::WHITE));
+            assert_eq!(background.get_clone(), solid(Color::WHITE));
 
             dark.apply(&theme);
             assert_eq!(
                 background.get_clone(),
-                Brush::Solid(Color::from_rgba(33, 42, 57, 255))
+                solid(Color::from_rgba(33, 42, 57, 255))
             );
 
             selected.set(true);
             assert_eq!(
                 background.get_clone(),
-                Brush::Solid(Color::from_rgba(46, 110, 76, 255))
+                solid(Color::from_rgba(46, 110, 76, 255))
             );
         });
     }

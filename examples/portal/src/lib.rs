@@ -6,24 +6,27 @@
 //! keeps its owner across the mode switch, so a held touch is not cancelled by
 //! pausing.
 
-mod controller;
+mod input;
 mod session;
+mod target;
 
 use std::collections::HashMap;
 
-use controller::{ChannelTouch, GameChannel, GameController, InputMode, TouchPhase};
+use input::{ChartInput, ChartTouch, InputEvent, InputEvents, InputMode, TouchPhase};
 use macroquad::prelude::*;
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, Shadow,
+    App, RenderStateGuard, Shadow,
     color::Color as MueColor,
     font::{FamilyOwned, load_font},
+    input::InputSubscriber,
     node::portal,
     shader::SharedTexture,
     style::{Size, Styleable},
 };
 use session::{CommandQueue, GameUiCommand, MockSession, command_queue, drain};
+use target::TargetMap;
 
 const CHART_WIDTH: u32 = 1280;
 const CHART_HEIGHT: u32 = 720;
@@ -64,10 +67,8 @@ impl MockChannel {
     fn take_pause_request(&mut self) -> bool {
         std::mem::take(&mut self.pause_requested)
     }
-}
 
-impl GameChannel for MockChannel {
-    fn resize(&mut self, size: (u32, u32), _dpi: f32) {
+    fn resize(&mut self, size: (u32, u32)) {
         if self.target.texture.width() as u32 == size.0
             && self.target.texture.height() as u32 == size.1
         {
@@ -86,7 +87,7 @@ impl GameChannel for MockChannel {
         self.touches.clear();
     }
 
-    fn render(&mut self, time: f64, _dt: f32) {
+    fn render(&mut self, time: f64) {
         let width = self.width;
         let height = self.height;
         set_camera(&self.camera);
@@ -135,31 +136,27 @@ impl GameChannel for MockChannel {
         set_default_camera();
     }
 
-    fn touch(&mut self, event: ChannelTouch) -> bool {
+    fn touch(&mut self, event: ChartTouch) {
         match event.phase {
             TouchPhase::Down => {
                 if self.pause_rect().contains(event.position) {
                     self.pause_requested = true;
-                    return true;
+                } else {
+                    self.touches.insert(event.id, event.position);
                 }
-                self.touches.insert(event.id, event.position);
-                true
             }
             TouchPhase::Hold => {
-                // A pointer held from the pause: track it, but do not treat
-                // it as a click or a chart HUD press.
+                // Track a held pointer without a click or a chart HUD press.
                 self.touches.insert(event.id, event.position);
-                true
             }
             TouchPhase::Move => {
                 if let Some(position) = self.touches.get_mut(&event.id) {
                     *position = event.position;
-                    true
-                } else {
-                    false
                 }
             }
-            TouchPhase::Up | TouchPhase::Cancel => self.touches.remove(&event.id).is_some(),
+            TouchPhase::Up | TouchPhase::Cancel => {
+                self.touches.remove(&event.id);
+            }
         }
     }
 
@@ -168,13 +165,50 @@ impl GameChannel for MockChannel {
     }
 }
 
-/// Make the controller input mode follow the session pause state.
-fn sync_mode(controller: &mut GameController<MockChannel>, session: &MockSession, time: f64) {
-    match (session.is_paused(), controller.mode()) {
-        (true, InputMode::Gameplay) => controller.enter_overlay(),
-        (false, InputMode::Overlay) => controller.exit_overlay(Some(time)),
-        _ => {}
-    }
+/// Translate raw physical window events through the currently displayed map.
+fn route_input(
+    input: &mut ChartInput,
+    map: TargetMap,
+    dpi: f32,
+    event: InputEvent,
+) -> Vec<ChartTouch> {
+    let InputEvent::Pointer(event) = event else {
+        return input.cancel_all();
+    };
+    let logical = event.position / dpi;
+    let position = map.window_to_target_unclamped(logical);
+    let routed = match event.phase {
+        TouchPhase::Down => map
+            .window_to_target(logical)
+            .and_then(|position| input.pointer_down(event.id, position, event.time)),
+        TouchPhase::Move => input.pointer_move(event.id, position, event.time),
+        TouchPhase::Up => input.pointer_up(event.id, position, event.time),
+        TouchPhase::Cancel => input.pointer_cancel(event.id),
+        TouchPhase::Hold => unreachable!("the host only synthesizes Hold on resume"),
+    };
+    routed.into_iter().collect()
+}
+
+/// Both subscribers consume a batch before its new mode or overlay is published.
+/// The next UI frame displays the snapshot; no Down is re-hit on a new modal.
+fn finish_input_frame(
+    input: &mut ChartInput,
+    session: &MockSession,
+    snapshot: Signal<session::GameUiSnapshot>,
+    time: f64,
+    dispatch_ui: impl FnOnce(),
+) -> Vec<ChartTouch> {
+    dispatch_ui();
+    let held = match (session.is_paused(), input.mode()) {
+        (true, InputMode::Gameplay) => {
+            input.enter_overlay();
+            Vec::new()
+        }
+        (false, InputMode::Overlay) => input.exit_overlay(Some(time)),
+        _ => Vec::new(),
+    };
+    snapshot.set(session.snapshot());
+    held
 }
 
 fn ui(
@@ -310,7 +344,11 @@ pub async fn run() {
         (signal(placeholder), snapshot, paused, dead, title)
     });
     let commands = command_queue();
-    let mut controller = GameController::new(MockChannel::new(chart_font), texture);
+    let mut chart = MockChannel::new(chart_font);
+    let mut input = ChartInput::new();
+    let mut subscriber = InputSubscriber::new();
+    let mut events = InputEvents::default();
+    let mut displayed_map = None;
     let mut app = App::new(ui(texture, font, paused, dead, title, commands.clone()));
 
     loop {
@@ -324,14 +362,50 @@ pub async fn run() {
         // UI commands are applied at the frame boundary, before the chart
         // update, so the session sees one consistent state per frame.
         for command in drain(&commands) {
+            if command == GameUiCommand::Retry {
+                // A new attempt is not a resume of the old session's touches.
+                for event in input.cancel_all() {
+                    chart.touch(event);
+                }
+            }
             session.apply(command);
         }
         if session.exited() {
             break;
         }
 
-        // Input is replayed from miniquad's event queue at frame start.
-        controller.process_input();
+        // This example follows window DPI for resolution; TargetMap itself is
+        // independent of that policy. Establish a real map before first input.
+        let scale = screen_dpi_scale();
+        let dpi = if scale.is_finite() && scale > 0. {
+            scale
+        } else {
+            1.
+        };
+        let layout =
+            mue_macroquad::math::Rect::new(0., 0., screen_width().max(1.), screen_height().max(1.));
+        let size = (
+            (layout.w * dpi).round().max(1.) as u32,
+            (layout.h * dpi).round().max(1.) as u32,
+        );
+        let next_map = TargetMap::new(layout, size);
+        if displayed_map.is_none() {
+            chart.resize(size);
+        }
+        let input_map = displayed_map.unwrap_or(next_map);
+
+        // Replay while mode and overlay visibility still match the displayed
+        // frame. In particular, don't publish a HUD pause between subscribers.
+        let batch = subscriber.read();
+        if batch.is_interrupted() {
+            events.interrupt();
+        }
+        batch.repeat(&mut events);
+        for event in events.drain() {
+            for event in route_input(&mut input, input_map, dpi, event) {
+                chart.touch(event);
+            }
+        }
 
         // Test hook: P toggles pause through the session, without a second
         // finger, so a held chart pointer can be observed across the switch.
@@ -344,17 +418,15 @@ pub async fn run() {
         }
 
         // The chart HUD owns the pause button; the channel reports the hit.
-        if controller.channel_mut().take_pause_request() {
+        if chart.take_pause_request() {
             session.pause();
         }
 
-        // Back closes the overlay through the controller and resumes the
-        // session. A dead session cannot resume; retry/exit stay available.
+        // Back is a session policy, not a renderer or framework operation.
         if (is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Back))
-            && controller.mode() == InputMode::Overlay
+            && input.mode() == InputMode::Overlay
             && !session.is_dead()
         {
-            controller.back(Some(get_time()));
             session.resume();
         }
 
@@ -362,20 +434,145 @@ pub async fn run() {
         let dt = get_frame_time();
         session.update(dt);
 
-        // The controller's input mode follows the session.
-        sync_mode(&mut controller, &session, get_time());
+        // Resizing cancels chart tracking explicitly. Moving a layout alone
+        // would only change its mapping; no hidden cancellation in TargetMap.
+        if chart.target.texture.width() as u32 != size.0
+            || chart.target.texture.height() as u32 != size.1
+        {
+            for event in input.cancel_all() {
+                chart.touch(event);
+            }
+            chart.resize(size);
+        }
+        displayed_map = Some(next_map);
+        let guard = RenderStateGuard::enter();
+        chart.render(session.time());
+        drop(guard);
+        texture.set(chart.texture());
 
-        // Publish the snapshot after the update; the UI sees it this frame.
-        snapshot.set(session.snapshot());
-
-        let window_size = (
-            screen_width().max(1.0) as u32,
-            screen_height().max(1.0) as u32,
-        );
-        controller.render(window_size, screen_dpi_scale(), session.time(), dt);
-
-        app.frame();
+        for event in finish_input_frame(&mut input, &session, snapshot, get_time(), || app.frame())
+        {
+            chart.touch(event);
+        }
         next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use macroquad::miniquad::{EventHandler, TouchPhase as RawPhase};
+    use mue_macroquad::{
+        event::hit_test::{hit_test_interactive, set_hit_test_fn},
+        math::{Rect as MueRect, Vector as MueVector},
+        node::{BuildNode, IntoNode, Node, NodeContext, show_if},
+        style::Style,
+    };
+    use std::rc::Rc;
+
+    struct ModalButton;
+    impl BuildNode for ModalButton {
+        fn build(self, ctx: NodeContext) -> Node {
+            ctx.finish(Style::new().on_pointer_event(|_| {}), |_| {
+                // Explicit hit bounds make this test independent of layout/GPU.
+                set_hit_test_fn(Rc::new(|node, pos, result| {
+                    if MueRect::new(40., 40., 20., 20.).contains(&pos) {
+                        result.hit_self(node);
+                    }
+                }));
+            })
+        }
+    }
+
+    struct ModalRoot(ReadSignal<bool>);
+    impl BuildNode for ModalRoot {
+        fn build(self, ctx: NodeContext) -> Node {
+            ctx.finish(Style::new().children(show_if(self.0, ModalButton)), |_| {})
+        }
+    }
+
+    #[test]
+    fn pause_batch_cannot_hit_the_new_modal_button() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let mut session = MockSession::new(12.);
+            let snapshot = signal(session.snapshot());
+            let mut input = ChartInput::new();
+            let root = ModalRoot(snapshot.map(|s| s.paused)).into_node();
+            let map = TargetMap::new(MueRect::new(0., 0., 100., 100.), (100, 100));
+            let mut events = InputEvents::default();
+            // A presses the HUD pause; B completes a tap at a future modal button.
+            events.touch_event(RawPhase::Started, 1, 90., 10., 1.);
+            events.touch_event(RawPhase::Started, 2, 50., 50., 1.);
+            events.touch_event(RawPhase::Ended, 2, 50., 50., 1.);
+            let batch: Vec<_> = events.drain().collect();
+            let mut chart_events = Vec::new();
+            for event in &batch {
+                chart_events.extend(route_input(&mut input, map, 1., *event));
+            }
+            assert_eq!(chart_events.len(), 3);
+            session.pause();
+            let held = finish_input_frame(&mut input, &session, snapshot, 1., || {
+                // The actual node hit-test still sees the old hidden modal
+                // while the UI subscriber dispatches this same batch.
+                for event in &batch {
+                    if let InputEvent::Pointer(event) = event {
+                        assert!(!hit_test_interactive(
+                            *root,
+                            MueVector::new(event.position.x, event.position.y)
+                        ));
+                    }
+                }
+            });
+            assert!(held.is_empty());
+            assert_eq!(input.mode(), InputMode::Overlay);
+            assert!(hit_test_interactive(*root, MueVector::new(50., 50.)));
+            // A's release in the next batch still belongs to the chart.
+            assert_eq!(
+                input
+                    .pointer_up(1, Vec2::new(50., 50.), None)
+                    .unwrap()
+                    .phase,
+                TouchPhase::Up
+            );
+        });
+    }
+
+    #[test]
+    fn resume_batch_keeps_overlay_visible_until_ui_dispatch_and_emits_hold() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let mut session = MockSession::new(12.);
+            session.pause();
+            let snapshot = signal(session.snapshot());
+            let root = ModalRoot(snapshot.map(|s| s.paused)).into_node();
+            let mut input = ChartInput::new();
+            input.enter_overlay();
+            assert!(input.pointer_down(2, Vec2::new(50., 50.), None).is_none());
+            session.resume();
+            let held = finish_input_frame(&mut input, &session, snapshot, 2., || {
+                assert!(hit_test_interactive(*root, MueVector::new(50., 50.)));
+            });
+            assert_eq!(held.len(), 1);
+            assert_eq!(held[0].phase, TouchPhase::Hold);
+            assert_eq!(held[0].time, Some(2.));
+            assert!(!hit_test_interactive(*root, MueVector::new(50., 50.)));
+        });
+    }
+
+    #[test]
+    fn raw_dpi_coordinates_use_real_target_mapping_from_first_input() {
+        let mut input = ChartInput::new();
+        let map = TargetMap::new(MueRect::new(0., 0., 100., 50.), (320, 180));
+        let event = InputEvent::Pointer(ChartTouch::new(
+            7,
+            TouchPhase::Down,
+            Vec2::new(100., 50.),
+            Some(1.),
+        ));
+        let routed = route_input(&mut input, map, 2., event);
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0].position, Vec2::new(160., 90.));
     }
 }
 

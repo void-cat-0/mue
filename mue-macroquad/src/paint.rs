@@ -795,7 +795,7 @@ mod tests {
     use super::*;
     use crate::{
         color::Color,
-        shader::{Brush, ColorStop, LinearGradient},
+        shader::{ColorStop, linear_gradient},
     };
 
     #[test]
@@ -1087,14 +1087,14 @@ mod tests {
 
     #[test]
     fn maximum_gradient_subdivision_is_split_without_loss() {
-        let brush = Brush::LinearGradient(LinearGradient::new(
-            vec2(0., 0.),
-            vec2(1., 1.),
+        let brush = linear_gradient(
+            (0., 0.),
+            (1., 1.),
             [
                 ColorStop::new(0., Color::BLACK),
                 ColorStop::new(1., Color::WHITE),
             ],
-        ));
+        );
         let shapes = Shapes::build(|builder| {
             builder.fill_rect(
                 Rect::new(0., 0., 192., 192.),

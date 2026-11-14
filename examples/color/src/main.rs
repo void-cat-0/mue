@@ -9,8 +9,7 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     color::Color,
-    math::vec2,
-    shader::{Brush, ColorStop, LinearGradient, RadialGradient, SharedTexture},
+    shader::{Brush, ColorStop, SharedTexture, linear_gradient, radial_gradient},
     style::{Size, Styleable, StyleableExt},
 };
 
@@ -50,15 +49,15 @@ fn main() {
 async fn run() {
     let blue = Color::from_rgba(64, 99, 181, 255);
     let coral = Color::from_rgba(249, 168, 107, 255);
-    let linear = LinearGradient::new(
-        vec2(0., 0.),
-        vec2(1., 1.),
-        vec![ColorStop::new(0., blue), ColorStop::new(1., coral)],
+    let linear = linear_gradient(
+        (0., 0.),
+        (1., 1.),
+        [ColorStop::new(0., blue), ColorStop::new(1., coral)],
     );
-    let radial = RadialGradient::new(
-        vec2(0.5, 0.5),
+    let radial = radial_gradient(
+        (0.5, 0.5),
         0.7,
-        vec![ColorStop::new(0., coral), ColorStop::new(1., blue)],
+        [ColorStop::new(0., coral), ColorStop::new(1., blue)],
     );
     // Downloaded once; the example works offline. Source credit is beside the asset.
     let photo: SharedTexture =

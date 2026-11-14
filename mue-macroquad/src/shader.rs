@@ -4,7 +4,8 @@ use macroquad::{models::Vertex, texture::Texture2D};
 use mue_core::prop::{Prop, PropValue};
 
 use crate::color::Color;
-use crate::math::{Matrix, Rect, Vector, vec2};
+use crate::math::{Matrix, Rect, Vector};
+use crate::texture::SafeTexture;
 
 pub struct BrushShader {
     brush: Brush,
@@ -35,9 +36,19 @@ impl Shader for BrushShader {
     }
 }
 
+/// A UI-thread-only texture handle. Cheap to clone; `!Send` by design.
+///
+/// Use [`SafeTexture`] when the handle may cross threads.
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct SharedTexture(Rc<Texture2D>);
+
+impl SharedTexture {
+    /// Create a [`SafeTexture`] that shares this texture's managed slot.
+    pub fn to_safe(&self) -> SafeTexture {
+        SafeTexture::from(self)
+    }
+}
 
 impl PartialEq for SharedTexture {
     fn eq(&self, other: &Self) -> bool {
@@ -210,6 +221,39 @@ impl From<macroquad::color::Color> for Brush {
     }
 }
 
+/// A flat fill.
+///
+/// Accepts any color convertible to [`Color`], including macroquad colors.
+pub fn solid(color: impl Into<Color>) -> Brush {
+    Brush::Solid(color.into())
+}
+
+/// A linear gradient between two points.
+///
+/// Endpoints are fractions of the painted bounds, for example `(0., 0.)`
+/// to `(1., 0.)`. Stops can be a `Vec`, an array, or any other value that
+/// converts into one.
+pub fn linear_gradient(
+    start: impl Into<Vector>,
+    end: impl Into<Vector>,
+    stops: impl Into<Vec<ColorStop>>,
+) -> Brush {
+    Brush::LinearGradient(LinearGradient::new(start.into(), end.into(), stops))
+}
+
+/// A radial gradient.
+///
+/// The center is a fraction of the painted bounds and the radius is a
+/// fraction of its shortest side. Stops can be a `Vec`, an array, or any
+/// other value that converts into one.
+pub fn radial_gradient(
+    center: impl Into<Vector>,
+    radius: f32,
+    stops: impl Into<Vec<ColorStop>>,
+) -> Brush {
+    Brush::RadialGradient(RadialGradient::new(center.into(), radius, stops))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorStop {
     pub offset: f32,
@@ -349,14 +393,14 @@ impl<C: Into<Color>> IntoShader for (C, (f32, f32), C, (f32, f32)) {
     type Target = BrushShader;
     fn into_shader(self) -> Self::Target {
         let (start_color, start, end_color, end) = self;
-        Brush::LinearGradient(LinearGradient::new(
-            vec2(start.0, start.1),
-            vec2(end.0, end.1),
-            vec![
+        linear_gradient(
+            start,
+            end,
+            [
                 ColorStop::new(0., start_color.into()),
                 ColorStop::new(1., end_color.into()),
             ],
-        ))
+        )
         .shader(Rect::new(0., 0., 1., 1.))
     }
 }
@@ -365,14 +409,66 @@ impl<C: Into<Color>> IntoShader for (C, (f32, f32), C, f32) {
     type Target = BrushShader;
     fn into_shader(self) -> Self::Target {
         let (start_color, center, end_color, radius) = self;
-        Brush::RadialGradient(RadialGradient::new(
-            vec2(center.0, center.1),
+        radial_gradient(
+            center,
             radius,
-            vec![
+            [
                 ColorStop::new(0., start_color.into()),
                 ColorStop::new(1., end_color.into()),
             ],
-        ))
+        )
         .shader(Rect::new(0., 0., 1., 1.))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brush_constructors_build_each_variant() {
+        let color = Color::from_rgba(12, 34, 56, 255);
+        assert_eq!(solid(color), Brush::Solid(color));
+        assert_eq!(solid(macroquad::color::WHITE), Brush::Solid(Color::WHITE));
+
+        let linear = linear_gradient(
+            (0., 0.),
+            (1., 1.),
+            [
+                ColorStop::new(1., Color::WHITE),
+                ColorStop::new(0., Color::BLACK),
+            ],
+        );
+        match linear {
+            Brush::LinearGradient(gradient) => {
+                assert_eq!(gradient.start, Vector::new(0., 0.));
+                assert_eq!(gradient.end, Vector::new(1., 1.));
+                assert_eq!(
+                    gradient.stops,
+                    vec![
+                        ColorStop::new(0., Color::BLACK),
+                        ColorStop::new(1., Color::WHITE),
+                    ]
+                );
+            }
+            _ => panic!("expected a linear gradient"),
+        }
+
+        let radial = radial_gradient(
+            (0.5, 0.5),
+            0.75,
+            [
+                ColorStop::new(0., Color::WHITE),
+                ColorStop::new(1., Color::BLACK),
+            ],
+        );
+        match radial {
+            Brush::RadialGradient(gradient) => {
+                assert_eq!(gradient.center, Vector::new(0.5, 0.5));
+                assert_eq!(gradient.radius, 0.75);
+                assert_eq!(gradient.stops.len(), 2);
+            }
+            _ => panic!("expected a radial gradient"),
+        }
     }
 }

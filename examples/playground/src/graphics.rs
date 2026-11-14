@@ -2,7 +2,7 @@ use super::{assets, controls::*, halftone, responsive};
 use mue_components::*;
 use mue_macroquad::{
     math::{Rect, vec2},
-    shader::{Brush, ColorStop, LinearGradient, RadialGradient},
+    shader::{ColorStop, linear_gradient, radial_gradient, solid},
     style::{Styleable, percent, vh},
 };
 
@@ -36,24 +36,22 @@ pub fn page() -> Node {
     let (brush, j) = choice(
         "Brush",
         vec![
-            ("Solid", Brush::Solid(BLUE)),
+            ("Solid", solid(BLUE)),
             (
                 "Linear",
-                LinearGradient::new(
-                    vec2(0., 0.),
-                    vec2(1., 1.),
-                    vec![ColorStop::new(0., BLUE), ColorStop::new(1., CORAL)],
-                )
-                .into(),
+                linear_gradient(
+                    (0., 0.),
+                    (1., 1.),
+                    [ColorStop::new(0., BLUE), ColorStop::new(1., CORAL)],
+                ),
             ),
             (
                 "Radial",
-                RadialGradient::new(
-                    vec2(0.5, 0.5),
+                radial_gradient(
+                    (0.5, 0.5),
                     0.7,
-                    vec![ColorStop::new(0., CORAL), ColorStop::new(1., BLUE)],
-                )
-                .into(),
+                    [ColorStop::new(0., CORAL), ColorStop::new(1., BLUE)],
+                ),
             ),
         ],
     );
@@ -76,8 +74,8 @@ pub fn page() -> Node {
                 .object_position(position)
                 .region(crop.map(|on| on.then_some(Rect::new(100., 100., 400., 300.))))
                 .style(mue_macroquad::style! { color: {tint.select(
-                    Brush::Solid(CORAL),
-                    Brush::Solid(mue_macroquad::color::Color::WHITE),
+                    solid(CORAL),
+                    solid(mue_macroquad::color::Color::WHITE),
                 )}; }),
             center()
                 .style(mue_macroquad::style! {

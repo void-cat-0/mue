@@ -48,6 +48,9 @@ impl App {
 
     /// Whether `pos` hits an interactive UI node from the last published layout.
     ///
+    /// `pos` is in logical window coordinates (the same space as layout and
+    /// `PointerManager` events).
+    ///
     /// Interactive nodes have a pointer handler, a gesture, or a custom hit test.
     /// Layout-only containers are pass-through, so a chart touch under an empty
     /// overlay is not claimed by the UI. Call this before [`Self::frame`] to route
@@ -64,6 +67,7 @@ impl App {
     /// `end_frame`. A host that interleaves raw miniquad draws must manage its
     /// own pass; a macroquad-only host does not need to begin one.
     pub fn frame(&mut self) {
+        let input = self.pointer_manager.prepare_input();
         let root_node = *self.root_node;
         let viewport = crate::viewport::Viewport {
             width: macroquad::window::screen_width(),
@@ -118,13 +122,22 @@ impl App {
         Runtime::end_text_render_pass();
         // Hit-test against this frame's published bounds. Hover owns its atomic
         // signal batch; changes to layout are handled by the next normal frame.
-        self.pointer_manager.process(root_node);
+        self.pointer_manager.process_input(root_node, &input);
         batch(|| crate::event::wheel::check_wheel(root_node));
+        // Drop textures queued by `SafeTexture` on the render thread. The
+        // actual GL deletion is scheduled by `Texture2D::drop` and runs at
+        // the next macroquad frame boundary.
+        crate::texture::flush_pending_texture_deletions();
     }
 
-    /// Advance timeouts and tasks without layout, rendering, or input.
+    /// Discard UI input and cancel active pointers, then advance timeouts/tasks
+    /// without layout or rendering. No queued clicks replay after resuming.
     /// Use while the host surface is suspended; call [`Self::frame`] after resuming.
+    ///
+    /// This does not flush [`crate::texture::SafeTexture`] deletions; the next
+    /// [`Self::frame`] does.
     pub fn frame_paused(&mut self) {
+        self.pointer_manager.pause_input();
         self.drive_tasks();
     }
 

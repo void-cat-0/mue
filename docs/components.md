@@ -171,3 +171,22 @@ The current overlay host is a single layer: stacking, enter/exit animation, and
 back priority are not implemented yet. IconButton and keyboard focus are also
 pending. Button colors are fixed for now; replacing them with application tokens
 is a follow-up.
+
+## Textures
+
+`SharedTexture` (`mue_macroquad::SharedTexture`) is the UI-thread handle:
+`Rc<Texture2D>`, cheap to clone, and `!Send` by design. Use it for `image`,
+`Portal`, shaders, and any render-thread-only sharing.
+
+`SafeTexture` (`mue_macroquad::SafeTexture`) is the `Send + Sync` handle for
+textures that may be dropped on a worker thread. It queues the underlying
+`Texture2D`; `App::frame` flushes the queue on the render thread. Hosts that do
+not use `App` call `flush_pending_texture_deletions()` after their draw calls.
+`SafeTexture::to_shared()` clones the `Texture2D` into a `SharedTexture`
+(sharing macroquad's managed slot); `try_into_inner()` and `into_shared()`
+transfer only when there is a single owner.
+
+Macroquad 0.4's `Texture2D` is `Clone` (not `Copy`); dropping the last clone on
+a worker thread panics. Do not replace `SharedTexture` with `SafeTexture` for
+UI-thread-only work: the `!Send` bound is a useful guard, and `SafeTexture`
+adds atomic refcounting plus a deletion queue.

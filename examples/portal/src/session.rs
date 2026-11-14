@@ -2,8 +2,8 @@
 //!
 //! The example uses this to validate the §7 contract: the UI reads a snapshot
 //! and sends commands; the session applies commands at the frame boundary and
-//! publishes a new snapshot after its update. This is a mock, not the final
-//! Phira session API.
+//! publishes a new snapshot after both chart and UI consume the input batch.
+//! The UI displays it next frame. This is a mock, not the final Phira session API.
 
 use std::cell::RefCell;
 use std::rc::Rc;

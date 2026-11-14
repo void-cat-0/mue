@@ -1,12 +1,19 @@
 # Examples
 
-The workspace examples cover the public API:
+The workspace examples cover the public UI API and local host integration patterns:
 
 - `style`: declaration syntax, transforms, transitions, and component composition;
 - `playground`: interactive layout, typography, graphics, input, application tokens, and style declarations;
-- `theme`: application-defined tokens, explicit reactive button styles, hover, and light/dark switching;
+- `theme`: theme tokens, reactive button styles, hover, and light/dark switching;
 - `animation`: reactive style transitions;
 - `document` and `atlas`: typography and glyph atlas behavior;
+- `portal`: a concrete external renderer, texture composition, frame-start chart input, and a modal pause UI; its input and coordinate helpers are local to the example;
 - `nodes`, `basics`, `color`, `gestures`, `navigation`, `pages`, and `tab`: layout, input, graphics, and navigation.
 
-Run one with `cargo run -p style-example` or `cargo run -p theme`. Shared appearance data is ordinary application code: [application tokens and context](themes.md) explains `Prop` bindings, `map`, and `provide` / `inject`.
+Run one with `cargo run -p style-example`, `cargo run -p theme`, or `cargo run -p portal`. The theme example uses the optional token store (`Theme`, `TokenSet`, `token_set!`, `token!`, and `provide_theme`); [application tokens and context](themes.md) explains the store and plain `Prop` / `map` / `provide` bindings.
+
+In [the portal host](../examples/portal/src/lib.rs), the host owns a concrete `MockChannel` and calls its resize/render/texture operations directly. [input.rs](../examples/portal/src/input.rs) contains the local `ChartInput`, event collection/replay, pointer ownership, Hold-on-resume, and cancel behavior; [target.rs](../examples/portal/src/target.rs) maps a logical rect to the actual target pixel size. DPI and resize policy belong to the host. The public `GameController`/`GameChannel` layer and related root exports have been removed; Portal, RenderStateGuard, and SharedTexture/SafeTexture remain in their existing modules. Here "channel" can still describe the external renderer.
+
+Chart events replay at frame start; UI pointer events remain post-render. The host keeps mode and pause-overlay visibility fixed for the whole input batch, then commits snapshot and mode after `app.frame()`. The UI sees that state next frame, so an overlay opened by a chart Down cannot consume the same batch's UI Down. Mouse Move uses the local state during replay; it does not query the final global mouse-button state for the entire batch. Retry explicitly cancels the old attempt's pointers; target resize also has an explicit cancel boundary. Input routes through the map for the last displayed texture, with the initial target resized before the first batch.
+
+The portal collector and UI PointerManager use [mue input cursors](../mue-macroquad/src/input.rs), sharing one legacy macroquad input source: `InputSubscriber::new()`, then `read()`, handle `InputBatch::is_interrupted()`, and `repeat(&mut handler)`. No consumer queue is allocated; unread events expire each frame, even with no App. Use cursors in the main application future and synchronous callbacks, before `next_frame`, rather than automatic macroquad coroutines. On a missed frame portal clears its buffered/held state and cancels chart pointers; normal game pause still retains owner/Hold semantics. `App::frame_paused()` discards UI input and cancels capture/gestures before ticking tasks. [Session/snapshot details](phira-integration.md) and the [unimplemented Scene direction](app-scenes.md) remain separate records; this example does not implement Scene management.

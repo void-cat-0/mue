@@ -6,7 +6,7 @@ This page keeps the former theme guide's URL. Obsolete selector-theme records ha
 
 ## Bind values explicitly
 
-A `Prop<T>` holds either a static value or a read-only signal. A setter accepts that property without taking a snapshot of its current value. Use `map` to project application data into the exact type required by a style property. For example, foreground and background setters accept `Prop<Brush>`, so this example maps palette colors to `Brush::Solid`:
+A `Prop<T>` holds either a static value or a read-only signal. A setter accepts that property without taking a snapshot of its current value. Use `map` to project application data into the exact type required by a style property. For example, foreground and background setters accept `Prop<Brush>`, so this example maps palette colors with `solid`:
 
 ```rust
 use std::rc::Rc;
@@ -15,7 +15,7 @@ use mue_core::{prelude::*, scope::{inject, provide}};
 use mue_macroquad::{
     App,
     color::Color,
-    shader::Brush,
+    shader::{Brush, solid},
     style::{Styleable, StyleableExt},
 };
 
@@ -45,8 +45,8 @@ struct AppTokens {
 fn token_label(caption: Rc<str>) -> impl Component {
     let tokens = inject::<AppTokens>().expect("AppTokens provider");
     // These local projections belong to this component's node build scope.
-    let foreground = tokens.palette.map(|p| Brush::Solid(p.foreground));
-    let surface = tokens.palette.map(|p| Brush::Solid(p.surface));
+    let foreground = tokens.palette.map(|p| solid(p.foreground));
+    let surface = tokens.palette.map(|p| solid(p.surface));
     text(caption).color(foreground).background(surface).padding((12.,))
 }
 
@@ -79,12 +79,15 @@ A plain wrapper function can accept `Prop<Palette>` directly instead of using co
 ```rust
 use mue_components::{prelude::*, tokens::{Theme, provide_theme}};
 use mue_core::Size;
-use mue_macroquad::{color::Color, shader::Brush};
+use mue_macroquad::{
+    color::Color,
+    shader::{Brush, solid},
+};
 use std::rc::Rc;
 
 let theme = Rc::new(Theme::new());
 theme.register(&token_set! {
-    panel: Brush::Solid(Color::WHITE),
+    panel: solid(Color::WHITE),
     "gap": Size::Px(12.),
 });
 
@@ -92,12 +95,14 @@ theme.register(&token_set! {
 text("Label").background(theme.get::<Brush>("panel"));
 
 // Switch every registered key in place; existing bindings update.
-theme.apply(&token_set! { panel: Brush::Solid(Color::BLACK) });
+theme.apply(&token_set! { panel: solid(Color::BLACK) });
 ```
 
 `token_set!` stringifies bare identifiers and passes string literals through, so plain and dotted keys can be mixed. Use `TokenSet::with` when a key is computed at runtime. The macro only builds the same plain data; it adds no selectors or cascade.
 
 Inside `style!`, `token!(key)` reads the nearest installed theme and takes the value type from the property: `font-size: token!(title);`, `background: token!(panel);`. The two-argument form `token!(theme, key)` uses an explicit handle, and `token!(...)` inside a braced expression is rewritten with the property's type, so `selected.pick(token!(accent), token!(panel))` works.
+
+Resolve token handles while the theme scope is current, then capture them in deferred computations. A `token!` call inside a `computed` or `map` callback re-reads the current scope whenever the callback reruns, which can be outside the provider; read the handle first and use it inside the callback.
 
 Keys are indexed by value type first, so the same name can hold a `Brush` and a `FontSize` without colliding, and a key can never be read as the wrong type. Reading a missing key panics with the value type, the keys registered for that type, and any other types that own the same key; `apply` only updates the type of the set it receives, so apply every type a theme defines. `provide_theme(theme, || view)` installs a theme for a subtree through the ordinary scope context, and `Theme::current()` reads it back; `provide_foreground` remains the separate, narrower helper for inherited text color.
 

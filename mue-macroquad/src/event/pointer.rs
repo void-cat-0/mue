@@ -8,7 +8,6 @@ use std::{
 use bitflags::bitflags;
 use glam::vec2;
 use indexmap::IndexSet;
-use macroquad::input::utils::{register_input_subscriber, repeat_all_miniquad_input};
 use miniquad::{EventHandler, MouseButton};
 
 use slotmap::{Key, SlotMap};
@@ -16,10 +15,20 @@ use slotmap::{Key, SlotMap};
 use crate::{
     event::{hit_test::hit_test, hover::HoverState},
     gesture::{Gesture, GestureId},
+    input::{InputBatch, InputSubscriber},
     math::Vector,
     node::NodeRef,
     runtime::Runtime,
 };
+
+fn screen_scale() -> f32 {
+    let scale = macroquad::window::screen_dpi_scale();
+    if scale.is_finite() && scale > 0. {
+        scale
+    } else {
+        1.
+    }
+}
 
 fn input_time() -> f32 {
     #[cfg(not(test))]
@@ -343,9 +352,12 @@ impl PointerTrack {
 
 pub struct PointerManager {
     root_node: NodeRef,
-    subscriber_id: usize,
+    subscriber: Option<InputSubscriber>,
     tracks: HashMap<PointerId, PointerTrack>,
     hover: HoverState,
+    /// Ratio of physical miniquad event coordinates to logical layout
+    /// coordinates. Updated from macroquad on every frame.
+    dpi_scale: f32,
 }
 
 impl Default for PointerManager {
@@ -361,23 +373,72 @@ impl PointerManager {
         macroquad::input::simulate_mouse_with_touch(false);
         Self {
             root_node: NodeRef::null(),
-            subscriber_id: register_input_subscriber(),
+            subscriber: Some(InputSubscriber::new()),
             tracks: HashMap::new(),
             hover: HoverState::default(),
+            dpi_scale: screen_scale(),
         }
     }
 
+    /// Collect before timers/tasks can trigger gestures from stale presses.
+    pub(crate) fn prepare_input(&mut self) -> InputBatch {
+        let batch = self
+            .subscriber
+            .as_mut()
+            .map_or_else(InputBatch::default, InputSubscriber::read);
+        self.handle_interruption(&batch);
+        batch
+    }
+
+    fn handle_interruption(&mut self, input: &InputBatch) {
+        if input.is_interrupted() {
+            self.cancel_input();
+        }
+    }
+
+    /// Discard suspended UI input and cancel capture/gestures before ticking.
+    pub(crate) fn pause_input(&mut self) {
+        if let Some(subscriber) = &mut self.subscriber {
+            drop(subscriber.read());
+        }
+        self.cancel_input();
+    }
+
+    fn cancel_input(&mut self) {
+        // A restore event may have expired while this consumer was inactive.
+        // Forget focus together with position, and wait for a fresh event.
+        mue_core::batch(|| {
+            self.hover.set_focused(true);
+            self.invalidate_mouse();
+            let ids: Vec<_> = self.tracks.keys().copied().collect();
+            for id in ids {
+                self.on_pointer_cancel(id);
+            }
+        });
+    }
+
     pub fn process(&mut self, root_node: NodeRef) {
+        let input = self.prepare_input();
+        self.process_input(root_node, &input);
+    }
+
+    pub(crate) fn process_input(&mut self, root_node: NodeRef, input: &InputBatch) {
+        self.dpi_scale = screen_scale();
         self.root_node = root_node;
         for track in self.tracks.values_mut() {
             track.flush_updates();
         }
         // Recognizers may synchronously schedule disposal; flush after their
         // gesture arena borrow has been released. Hover writes remain atomic.
-        mue_core::batch(|| repeat_all_miniquad_input(self, self.subscriber_id));
+        mue_core::batch(|| input.repeat(self));
         // Always re-hit after the frame's layout/transform/scroll publication,
         // even if no mouse event arrived or a button is currently held.
         self.refresh_hover(false);
+    }
+
+    fn logical_position(&self, x: f32, y: f32) -> Vector {
+        let scale = self.dpi_scale.max(f32::EPSILON);
+        Vector::new(x / scale, y / scale)
     }
 
     fn refresh_hover(&mut self, moved: bool) {
@@ -524,7 +585,7 @@ impl EventHandler for PointerManager {
     fn draw(&mut self) {}
 
     fn mouse_motion_event(&mut self, x: f32, y: f32) {
-        let pos = Vector::new(x, y);
+        let pos = self.logical_position(x, y);
         self.hover.observe_mouse(pos);
         self.on_pointer_move(PointerId::MOUSE, PointerType::Mouse, pos);
         self.refresh_hover(true);
@@ -532,7 +593,7 @@ impl EventHandler for PointerManager {
 
     fn mouse_button_down_event(&mut self, button: MouseButton, x: f32, y: f32) {
         let button_state = ButtonState::from_mouse_button(button);
-        let pos = Vector::new(x, y);
+        let pos = self.logical_position(x, y);
         self.hover.observe_mouse(pos);
         self.on_pointer_button_down(PointerId::MOUSE, PointerType::Mouse, button_state, pos);
         self.refresh_hover(true);
@@ -540,7 +601,7 @@ impl EventHandler for PointerManager {
 
     fn mouse_button_up_event(&mut self, button: MouseButton, x: f32, y: f32) {
         let button_state = ButtonState::from_mouse_button(button);
-        let pos = Vector::new(x, y);
+        let pos = self.logical_position(x, y);
         self.hover.observe_mouse(pos);
         self.on_pointer_move(PointerId::MOUSE, PointerType::Mouse, pos);
         self.on_pointer_button_up(PointerId::MOUSE, button_state, pos);
@@ -572,7 +633,7 @@ impl EventHandler for PointerManager {
 
     fn touch_event(&mut self, phase: miniquad::TouchPhase, id: u64, x: f32, y: f32, _time: f64) {
         let pointer_id = PointerId::from_touch_id(id);
-        let pos = Vector::new(x, y);
+        let pos = self.logical_position(x, y);
         match phase {
             miniquad::TouchPhase::Started => {
                 self.on_pointer_start(pointer_id, PointerType::Touch, pos)
@@ -598,9 +659,10 @@ mod tests {
     fn manager(root: NodeRef) -> PointerManager {
         PointerManager {
             root_node: root,
-            subscriber_id: 0,
+            subscriber: None,
             tracks: HashMap::new(),
             hover: HoverState::default(),
+            dpi_scale: 1.,
         }
     }
     #[test]
@@ -664,6 +726,110 @@ mod tests {
         assert!(!hovered.get());
         input.mouse_enter_event(MouseButton::Unknown, 5., 5.);
         assert!(hovered.get());
+        hovered.dispose();
+    }
+
+    #[test]
+    fn interruption_cancels_capture_and_claims_once_then_accepts_fresh_input() {
+        struct Recorder(
+            Rc<RefCell<Vec<PointerAction>>>,
+            Rc<RefCell<Vec<ClaimToken>>>,
+        );
+        impl Gesture for Recorder {
+            fn on_event(&mut self, event: &PointerEvent, token: &ClaimToken) {
+                self.0.borrow_mut().push(event.action());
+                if event.action() == PointerAction::Down {
+                    self.1.borrow_mut().push(token.clone());
+                }
+            }
+        }
+        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
+        let hovered = signal(false);
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let tokens = Rc::new(RefCell::new(Vec::new()));
+        let gesture = Runtime::with(|rt| {
+            let id = rt
+                .gestures
+                .borrow_mut()
+                .insert(Box::new(Recorder(actions.clone(), tokens.clone())));
+            let mut nodes = rt.nodes.borrow_mut();
+            nodes[root.0.id].gestures.push(id);
+            nodes[root.0.id].hovered = Some(hovered);
+            id
+        });
+        let mut input = manager(root.0);
+        input.mouse_motion_event(5., 5.);
+        input.mouse_button_down_event(MouseButton::Left, 5., 5.);
+        input.touch_event(miniquad::TouchPhase::Started, 1, 5., 5., 0.);
+        assert!(hovered.get());
+        assert!(tokens.borrow().iter().all(ClaimToken::can_claim));
+        input.handle_interruption(&InputBatch::interrupted());
+        input.handle_interruption(&InputBatch::interrupted());
+        assert!(!hovered.get());
+        assert!(input.tracks.is_empty());
+        assert!(tokens.borrow().iter().all(|token| !token.can_claim()));
+        assert_eq!(
+            actions
+                .borrow()
+                .iter()
+                .filter(|a| **a == PointerAction::Cancel)
+                .count(),
+            2
+        );
+        input.touch_event(miniquad::TouchPhase::Started, 2, 6., 6., 0.);
+        assert_eq!(input.tracks.len(), 1);
+        assert_eq!(actions.borrow().last(), Some(&PointerAction::Down));
+        input.pause_input();
+        Runtime::with(|rt| {
+            rt.gestures.borrow_mut().remove(gesture);
+        });
+        hovered.dispose();
+    }
+
+    #[test]
+    fn interruption_after_a_lost_restore_waits_for_a_fresh_mouse_position() {
+        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
+        let hovered = signal(false);
+        Runtime::with(|rt| rt.nodes.borrow_mut()[root.0.id].hovered = Some(hovered));
+        let mut input = manager(root.0);
+        input.mouse_motion_event(5., 5.);
+        input.window_minimized_event();
+        input.handle_interruption(&InputBatch::interrupted());
+        input.refresh_hover(false);
+        assert!(!hovered.get());
+        input.mouse_motion_event(5., 5.);
+        assert!(hovered.get());
+        input.pause_input();
+        input.pause_input();
+        assert!(!hovered.get());
+        assert!(input.tracks.is_empty());
+        hovered.dispose();
+    }
+
+    #[test]
+    fn dpi_scale_normalizes_pointer_events_to_logical_pixels() {
+        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
+        let hovered = signal(false);
+        Runtime::with(|rt| rt.nodes.borrow_mut()[root.0.id].hovered = Some(hovered));
+        let mut input = manager(root.0);
+        input.dpi_scale = 2.;
+
+        // Physical (10, 10) is logical (5, 5), inside the 20x20 root.
+        input.mouse_motion_event(10., 10.);
+        assert!(hovered.get());
+        input.mouse_button_down_event(MouseButton::Left, 10., 10.);
+        assert!(input.tracks.contains_key(&PointerId::MOUSE));
+        input.mouse_button_up_event(MouseButton::Left, 10., 10.);
+        assert!(
+            input.tracks[&PointerId::MOUSE]
+                .event
+                .button_state
+                .is_empty()
+        );
+
+        // Physical (50, 50) is logical (25, 25), outside the root.
+        input.mouse_motion_event(50., 50.);
+        assert!(!hovered.get());
         hovered.dispose();
     }
 }

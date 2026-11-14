@@ -31,7 +31,7 @@
 | `examples/pages` | 页面切换与切换动画。 |
 | `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
 | `examples/style` | style 声明、响应式变换，以及滚动区域、图片、形状、圆和文档组件。 |
-| `examples/theme` | 练习计数、应用 tokens、响应式按钮参数、显式 hover 与明暗切换。 |
+| `examples/theme` | 练习计数、主题 tokens、响应式按钮参数、显式 hover 与明暗切换。 |
 | `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
 | `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
 | `examples/navigation` | 导航栈、自适应双栏、返回、深链接与页面状态保留。 |
@@ -188,7 +188,7 @@ Rust 矩阵、`Transform` 函数列表及其响应式属性，并参与现有动
 同类、同单位的列表及 `none` 与列表之间可插值，不兼容列表立即切换。
 
 这是当前画布渲染器支持的 style 声明子集，不包含 `calc()`、grid 或完整的 3D 场景渲染；3D 变换会投影到 2D 画布。
-`background` 当前只接受颜色或 Rust Brush 表达式，圆角只支持统一半径；`white-space` 只控制换行，不实现空白折叠。
+`background` 当前只接受颜色或 Rust Brush 表达式（`mue_macroquad::shader` 的 `solid`、`linear_gradient`、`radial_gradient`），圆角只支持统一半径；`white-space` 只控制换行，不实现空白折叠。
 `overflow` 是布局属性，交互滚动使用 `scroll_area` 组件。不支持的属性或值在编译期报错。
 运行 `cargo run -p style-example` 查看组合示例。
 
@@ -273,7 +273,7 @@ let label = text("Hello")
 
 更完整的[应用 tokens 与上下文](docs/themes.md)、[组件声明](docs/factories.md)、[自定义节点](docs/components.md)和[示例说明](docs/examples.md)位于 [`docs/`](docs/)。
 
-`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、显式状态样式，以及由应用 tokens 驱动的颜色过渡。
+`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、显式状态样式，以及由主题 tokens 驱动的颜色过渡。
 
 ## 同级页面
 

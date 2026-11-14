@@ -1,64 +1,45 @@
-//! Host-side game controller prototype.
+//! Input policy local to the portal example; not a framework game-input API.
 //!
-//! The controller owns the channel and drives it at frame start. It decides
-//! which pointers belong to the chart; it does not own chart time, pause state,
-//! or the mue overlay.
-//!
-//! A mode switch only changes the owner of *new* pointers. Pointers that are
-//! already down keep their owner, so a touch held across pause/resume keeps
-//! participating in judgement instead of being cancelled by the overlay.
-
-use std::collections::HashMap;
+//! The host keeps the input mode and the UI snapshot fixed while both input
+//! subscribers consume a batch, then commits pause/resume after UI dispatch.
 
 use macroquad::{
-    input::{
-        is_mouse_button_down, simulate_mouse_with_touch,
-        utils::{register_input_subscriber, repeat_all_miniquad_input},
-    },
     math::Vec2,
     miniquad::{EventHandler, MouseButton, TouchPhase as MiniquadTouchPhase},
 };
-use mue_core::prelude::Signal;
-use mue_macroquad::{RenderStateGuard, shader::SharedTexture};
+use std::collections::HashMap;
 
-/// Reserved pointer id for the mouse.
 pub const MOUSE_POINTER: u64 = u64::MAX;
 
-/// Who owns a newly pressed pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputMode {
-    /// The chart owns new pointers, including its own HUD.
     Gameplay,
-    /// The modal mue overlay owns new pointers.
     Overlay,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TouchPhase {
     Down,
-    /// A pointer that was already down when gameplay resumed. The chart must
-    /// add it to its touch state and initialize tracking, but must not treat
-    /// it as a click.
+    /// Synchronize a pointer held across resume without judging a click.
     Hold,
     Move,
     Up,
     Cancel,
 }
 
-/// A pointer event in the chart's coordinate space.
+/// Chart event in physical target coordinates.
 #[derive(Clone, Copy, Debug)]
-pub struct ChannelTouch {
+pub struct ChartTouch {
     pub id: u64,
     pub phase: TouchPhase,
     pub position: Vec2,
-    /// Hardware event time when the host has one. Mouse events are usually
-    /// None; the chart falls back to its own time.
-    #[allow(dead_code)] // part of the host contract; the mock channel ignores it
+    // The mock ignores hardware timestamps; a real judge would use them.
+    #[allow(dead_code)]
     pub time: Option<f64>,
 }
 
-impl ChannelTouch {
-    fn new(id: u64, phase: TouchPhase, position: Vec2, time: Option<f64>) -> Self {
+impl ChartTouch {
+    pub fn new(id: u64, phase: TouchPhase, position: Vec2, time: Option<f64>) -> Self {
         Self {
             id,
             phase,
@@ -68,15 +49,85 @@ impl ChannelTouch {
     }
 }
 
-/// The chart renderer/session adapter.
-///
-/// The channel owns its render target, camera, effects, and pass. It must
-/// restore macroquad state before returning from render.
-pub trait GameChannel {
-    fn resize(&mut self, size: (u32, u32), dpi: f32);
-    fn render(&mut self, time: f64, dt: f32);
-    fn touch(&mut self, event: ChannelTouch) -> bool;
-    fn texture(&self) -> SharedTexture;
+/// Raw subscriber events. Positions are physical window pixels, not target pixels.
+#[derive(Clone, Copy, Debug)]
+pub enum InputEvent {
+    Pointer(ChartTouch),
+    CancelAll,
+}
+
+/// Collect events without reading macroquad's final mouse-button state.
+#[derive(Default)]
+pub struct InputEvents {
+    events: Vec<InputEvent>,
+    mouse_down: bool,
+}
+
+impl InputEvents {
+    /// A missed host frame invalidates both buffered events and held state.
+    pub fn interrupt(&mut self) {
+        self.events.clear();
+        self.mouse_down = false;
+        self.events.push(InputEvent::CancelAll);
+    }
+
+    pub fn drain(&mut self) -> impl Iterator<Item = InputEvent> + '_ {
+        self.events.drain(..)
+    }
+
+    fn pointer(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32, time: Option<f64>) {
+        self.events.push(InputEvent::Pointer(ChartTouch::new(
+            id,
+            phase,
+            Vec2::new(x, y),
+            time,
+        )));
+    }
+}
+
+impl EventHandler for InputEvents {
+    fn update(&mut self) {}
+    fn draw(&mut self) {}
+
+    fn touch_event(&mut self, phase: MiniquadTouchPhase, id: u64, x: f32, y: f32, time: f64) {
+        let phase = match phase {
+            MiniquadTouchPhase::Started => TouchPhase::Down,
+            MiniquadTouchPhase::Moved => TouchPhase::Move,
+            MiniquadTouchPhase::Ended => TouchPhase::Up,
+            MiniquadTouchPhase::Cancelled => TouchPhase::Cancel,
+        };
+        self.pointer(id, phase, x, y, Some(time));
+    }
+
+    fn mouse_motion_event(&mut self, x: f32, y: f32) {
+        if self.mouse_down {
+            self.pointer(MOUSE_POINTER, TouchPhase::Move, x, y, None);
+        }
+    }
+
+    fn mouse_button_down_event(&mut self, button: MouseButton, x: f32, y: f32) {
+        if button == MouseButton::Left {
+            self.mouse_down = true;
+            self.pointer(MOUSE_POINTER, TouchPhase::Down, x, y, None);
+        }
+    }
+
+    fn mouse_button_up_event(&mut self, button: MouseButton, x: f32, y: f32) {
+        if button == MouseButton::Left {
+            self.mouse_down = false;
+            self.pointer(MOUSE_POINTER, TouchPhase::Up, x, y, None);
+        }
+    }
+
+    fn mouse_leave_event(&mut self) {
+        self.mouse_down = false;
+        self.pointer(MOUSE_POINTER, TouchPhase::Cancel, 0., 0., None);
+    }
+
+    fn window_minimized_event(&mut self) {
+        self.mouse_down = false;
+        self.events.push(InputEvent::CancelAll);
+    }
 }
 
 /// Per-pointer owner state for the chart.
@@ -115,7 +166,7 @@ impl ChartInput {
     /// New pointers now belong to the chart. Pointers that are still down but
     /// started in the overlay are synced as Hold events, not Down: the chart
     /// must track them for flick/drag but must not judge a click.
-    pub fn exit_overlay(&mut self, time: Option<f64>) -> Vec<ChannelTouch> {
+    pub fn exit_overlay(&mut self, time: Option<f64>) -> Vec<ChartTouch> {
         if self.mode == InputMode::Gameplay {
             return Vec::new();
         }
@@ -131,7 +182,7 @@ impl ChartInput {
         let mut events = Vec::with_capacity(held.len());
         for (id, position) in held {
             self.chart_pointers.insert(id, position);
-            events.push(ChannelTouch::new(id, TouchPhase::Hold, position, time));
+            events.push(ChartTouch::new(id, TouchPhase::Hold, position, time));
         }
         events.sort_by_key(|event| event.id);
         events
@@ -142,13 +193,13 @@ impl ChartInput {
         id: u64,
         position: Vec2,
         time: Option<f64>,
-    ) -> Option<ChannelTouch> {
+    ) -> Option<ChartTouch> {
         self.active_pointers.insert(id, position);
         if self.mode != InputMode::Gameplay {
             return None;
         }
         self.chart_pointers.insert(id, position);
-        Some(ChannelTouch::new(id, TouchPhase::Down, position, time))
+        Some(ChartTouch::new(id, TouchPhase::Down, position, time))
     }
 
     pub fn pointer_move(
@@ -156,226 +207,51 @@ impl ChartInput {
         id: u64,
         position: Vec2,
         time: Option<f64>,
-    ) -> Option<ChannelTouch> {
+    ) -> Option<ChartTouch> {
         if let Some(last) = self.active_pointers.get_mut(&id) {
             *last = position;
         }
         let last = self.chart_pointers.get_mut(&id)?;
         *last = position;
-        Some(ChannelTouch::new(id, TouchPhase::Move, position, time))
+        Some(ChartTouch::new(id, TouchPhase::Move, position, time))
     }
 
-    pub fn pointer_up(
-        &mut self,
-        id: u64,
-        position: Vec2,
-        time: Option<f64>,
-    ) -> Option<ChannelTouch> {
+    pub fn pointer_up(&mut self, id: u64, position: Vec2, time: Option<f64>) -> Option<ChartTouch> {
         self.active_pointers.remove(&id);
         self.chart_pointers.remove(&id)?;
-        Some(ChannelTouch::new(id, TouchPhase::Up, position, time))
+        Some(ChartTouch::new(id, TouchPhase::Up, position, time))
     }
 
-    #[allow(dead_code)] // used by tests and by hosts that cancel one pointer
-    pub fn pointer_cancel(&mut self, id: u64) -> Option<ChannelTouch> {
+    pub fn pointer_cancel(&mut self, id: u64) -> Option<ChartTouch> {
         self.active_pointers.remove(&id);
         let position = self.chart_pointers.remove(&id)?;
-        Some(ChannelTouch::new(id, TouchPhase::Cancel, position, None))
+        Some(ChartTouch::new(id, TouchPhase::Cancel, position, None))
     }
 
     /// Cancel every chart-owned pointer, e.g. when the window is minimized.
-    pub fn cancel_all(&mut self) -> Vec<ChannelTouch> {
+    pub fn cancel_all(&mut self) -> Vec<ChartTouch> {
         self.active_pointers.clear();
         let mut events: Vec<_> = self
             .chart_pointers
             .drain()
-            .map(|(id, position)| ChannelTouch::new(id, TouchPhase::Cancel, position, None))
+            .map(|(id, position)| ChartTouch::new(id, TouchPhase::Cancel, position, None))
             .collect();
         events.sort_by_key(|event| event.id);
         events
     }
 
-    #[allow(dead_code)] // used by tests
+    #[cfg(test)]
     pub fn chart_pointer_count(&self) -> usize {
         self.chart_pointers.len()
-    }
-}
-
-/// Drives one channel at frame start.
-///
-/// Call begin_frame before App::frame, and feed pointer events before
-/// begin_frame. The controller publishes the channel texture through a signal.
-pub struct GameController<C: GameChannel> {
-    channel: C,
-    texture: Signal<SharedTexture>,
-    input: ChartInput,
-    target_size: (u32, u32),
-    subscriber_id: usize,
-}
-
-impl<C: GameChannel> GameController<C> {
-    pub fn new(channel: C, texture: Signal<SharedTexture>) -> Self {
-        // Touch events already carry their own pointer id. Letting macroquad
-        // synthesize a mouse stream as well would deliver every finger twice.
-        simulate_mouse_with_touch(false);
-        Self {
-            channel,
-            texture,
-            input: ChartInput::new(),
-            target_size: (0, 0),
-            subscriber_id: register_input_subscriber(),
-        }
-    }
-
-    /// Replay queued input, resize/render the channel, and publish its texture.
-    #[allow(dead_code)] // convenience for hosts that do not inspect input before render
-    pub fn begin_frame(&mut self, size: (u32, u32), dpi: f32, time: f64, dt: f32) {
-        self.process_input();
-        self.render(size, dpi, time, dt);
-    }
-
-    /// Replay queued miniquad input through the controller.
-    ///
-    /// Call this before inspecting pause requests or mode changes; the host
-    /// can then call render in the same frame.
-    pub fn process_input(&mut self) {
-        let subscriber_id = self.subscriber_id;
-        repeat_all_miniquad_input(self, subscriber_id);
-    }
-
-    /// Resize the channel if needed, render it, and publish its texture.
-    pub fn render(&mut self, size: (u32, u32), dpi: f32, time: f64, dt: f32) {
-        let size = (size.0.max(1), size.1.max(1));
-        if size != self.target_size {
-            self.target_size = size;
-            // Target coordinates change with the surface; cancel held pointers
-            // before the channel rebuilds its target.
-            self.cancel_all();
-            self.channel.resize(size, dpi);
-        }
-
-        let guard = RenderStateGuard::enter();
-        self.channel.render(time, dt);
-        drop(guard);
-
-        self.texture.set(self.channel.texture());
-    }
-
-    pub fn pointer_down(&mut self, id: u64, position: Vec2, time: Option<f64>) {
-        if let Some(event) = self.input.pointer_down(id, position, time) {
-            self.channel.touch(event);
-        }
-    }
-
-    pub fn pointer_move(&mut self, id: u64, position: Vec2, time: Option<f64>) {
-        if let Some(event) = self.input.pointer_move(id, position, time) {
-            self.channel.touch(event);
-        }
-    }
-
-    pub fn pointer_up(&mut self, id: u64, position: Vec2, time: Option<f64>) {
-        if let Some(event) = self.input.pointer_up(id, position, time) {
-            self.channel.touch(event);
-        }
-    }
-
-    #[allow(dead_code)] // used by hosts that cancel one pointer
-    pub fn pointer_cancel(&mut self, id: u64) {
-        if let Some(event) = self.input.pointer_cancel(id) {
-            self.channel.touch(event);
-        }
-    }
-
-    pub fn cancel_all(&mut self) {
-        for event in self.input.cancel_all() {
-            self.channel.touch(event);
-        }
-    }
-
-    pub fn enter_overlay(&mut self) {
-        self.input.enter_overlay();
-    }
-
-    pub fn exit_overlay(&mut self, time: Option<f64>) {
-        for event in self.input.exit_overlay(time) {
-            self.channel.touch(event);
-        }
-    }
-
-    /// Close the overlay if it is open. Returns true when the back press was
-    /// consumed.
-    pub fn back(&mut self, time: Option<f64>) -> bool {
-        if self.mode() == InputMode::Overlay {
-            self.exit_overlay(time);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn mode(&self) -> InputMode {
-        self.input.mode()
-    }
-
-    #[allow(dead_code)] // used by tests
-    pub fn chart_pointer_count(&self) -> usize {
-        self.input.chart_pointer_count()
-    }
-
-    pub fn channel_mut(&mut self) -> &mut C {
-        &mut self.channel
-    }
-}
-
-impl<C: GameChannel> EventHandler for GameController<C> {
-    fn update(&mut self) {}
-    fn draw(&mut self) {}
-
-    fn touch_event(&mut self, phase: MiniquadTouchPhase, id: u64, x: f32, y: f32, time: f64) {
-        let position = Vec2::new(x, y);
-        match phase {
-            MiniquadTouchPhase::Started => self.pointer_down(id, position, Some(time)),
-            MiniquadTouchPhase::Moved => self.pointer_move(id, position, Some(time)),
-            MiniquadTouchPhase::Ended => self.pointer_up(id, position, Some(time)),
-            MiniquadTouchPhase::Cancelled => self.pointer_cancel(id),
-        }
-    }
-
-    fn mouse_motion_event(&mut self, x: f32, y: f32) {
-        if is_mouse_button_down(MouseButton::Left) {
-            self.pointer_move(MOUSE_POINTER, Vec2::new(x, y), None);
-        }
-    }
-
-    fn mouse_button_down_event(&mut self, button: MouseButton, x: f32, y: f32) {
-        if button == MouseButton::Left {
-            self.pointer_down(MOUSE_POINTER, Vec2::new(x, y), None);
-        }
-    }
-
-    fn mouse_button_up_event(&mut self, button: MouseButton, x: f32, y: f32) {
-        if button == MouseButton::Left {
-            self.pointer_up(MOUSE_POINTER, Vec2::new(x, y), None);
-        }
-    }
-
-    fn mouse_leave_event(&mut self) {
-        self.pointer_cancel(MOUSE_POINTER);
-    }
-
-    fn window_minimized_event(&mut self) {
-        self.cancel_all();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn pos(x: f32, y: f32) -> Vec2 {
         Vec2::new(x, y)
     }
-
     #[test]
     fn gameplay_routes_new_pointer_to_chart() {
         let mut input = ChartInput::new();
@@ -586,5 +462,56 @@ mod tests {
         let down = input.pointer_down(1, pos(2., 2.), None).unwrap();
         assert_eq!(down.phase, TouchPhase::Down);
         assert_eq!(input.chart_pointer_count(), 1);
+    }
+
+    #[test]
+    fn mouse_move_is_preserved_in_a_batch_ending_with_release() {
+        let mut events = InputEvents::default();
+        events.mouse_button_down_event(MouseButton::Left, 1., 2.);
+        events.mouse_motion_event(3., 4.);
+        events.mouse_button_up_event(MouseButton::Left, 5., 6.);
+        let phases: Vec<_> = events
+            .drain()
+            .map(|event| match event {
+                InputEvent::Pointer(event) => event.phase,
+                InputEvent::CancelAll => panic!("unexpected cancel"),
+            })
+            .collect();
+        assert_eq!(phases, [TouchPhase::Down, TouchPhase::Move, TouchPhase::Up]);
+    }
+
+    #[test]
+    fn interruption_drops_buffered_clicks_and_held_mouse_before_current_events() {
+        let mut events = InputEvents::default();
+        events.mouse_button_down_event(MouseButton::Left, 1., 2.);
+        events.interrupt();
+        events.mouse_motion_event(3., 4.);
+        assert!(matches!(
+            events.drain().collect::<Vec<_>>().as_slice(),
+            [InputEvent::CancelAll]
+        ));
+        events.mouse_button_down_event(MouseButton::Left, 5., 6.);
+        assert!(
+            matches!(events.drain().collect::<Vec<_>>().as_slice(), [InputEvent::Pointer(event)] if event.phase == TouchPhase::Down)
+        );
+    }
+
+    #[test]
+    fn mouse_move_survives_release_in_the_next_batch() {
+        let mut events = InputEvents::default();
+        events.mouse_button_down_event(MouseButton::Left, 1., 2.);
+        events.drain().for_each(drop);
+        events.mouse_motion_event(3., 4.);
+        events.mouse_button_up_event(MouseButton::Left, 5., 6.);
+        let phases: Vec<_> = events
+            .drain()
+            .map(|event| match event {
+                InputEvent::Pointer(event) => event.phase,
+                InputEvent::CancelAll => panic!("unexpected cancel"),
+            })
+            .collect();
+        assert_eq!(phases, [TouchPhase::Move, TouchPhase::Up]);
+        events.mouse_motion_event(7., 8.);
+        assert_eq!(events.drain().count(), 0);
     }
 }
