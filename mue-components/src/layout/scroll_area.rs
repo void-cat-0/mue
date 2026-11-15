@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use mue_macroquad::node::flexbox::flexbox;
 use std::{cell::RefCell, rc::Rc};
 
@@ -183,7 +186,7 @@ impl BuildNode for ScrollAreaBuilder {
             let rect = layout.rect;
             let layout_id = layout.layout_id;
             use_background(style, rect);
-            style.on_render.append({
+            style.on_layout.append({
                 let state = state.clone();
                 move |_| {
                     let (viewport, extent) = mue_macroquad::layout::with_taffy(|taffy| {
@@ -218,29 +221,12 @@ impl BuildNode for ScrollAreaBuilder {
                     state.max = options
                         .axis
                         .mask((extent - viewport.size()).max(Vector::ZERO));
-                    // External navigation cancels an old fling.
-                    if state.offset.get() != state.last_offset {
-                        state.velocity = Vector::ZERO;
-                    }
-                    state.set_offset(state.offset.get());
-                    if state.drag.is_none() && options.momentum {
-                        let dt = macroquad::time::get_frame_time().clamp(0., 0.05);
-                        let decay = (-options.friction * dt).exp();
-                        let delta = state.velocity * (1. - decay) / options.friction;
-                        let moved = state.scroll_by(delta);
-                        if (moved.x - delta.x).abs() > 0.01 {
-                            state.velocity.x = 0.;
-                        }
-                        if (moved.y - delta.y).abs() > 0.01 {
-                            state.velocity.y = 0.;
-                        }
-                        state.velocity *= decay;
-                        if state.velocity.length() < 5. {
-                            state.velocity = Vector::ZERO;
-                        }
-                    }
-                    state.last_offset = state.offset.get();
+                    state.correct_offset();
                 }
+            });
+            style.on_update.append({
+                let state = state.clone();
+                move |dt| state.borrow_mut().advance(*dt)
             });
             style.on_wheel_event.append({
                 let state = state.clone();
@@ -330,6 +316,36 @@ struct ScrollState {
 }
 
 impl ScrollState {
+    fn correct_offset(&mut self) {
+        // External navigation cancels an old fling. This also runs before the
+        // time step so an observer of prepared geometry can stop momentum.
+        if self.offset.get() != self.last_offset {
+            self.velocity = Vector::ZERO;
+        }
+        self.set_offset(self.offset.get());
+        self.last_offset = self.offset.get();
+    }
+
+    fn advance(&mut self, dt: f32) {
+        self.correct_offset();
+        if self.drag.is_none() && self.options.momentum {
+            let dt = dt.clamp(0., 0.05);
+            let decay = (-self.options.friction * dt).exp();
+            let delta = self.velocity * (1. - decay) / self.options.friction;
+            let moved = self.scroll_by(delta);
+            if (moved.x - delta.x).abs() > 0.01 {
+                self.velocity.x = 0.;
+            }
+            if (moved.y - delta.y).abs() > 0.01 {
+                self.velocity.y = 0.;
+            }
+            self.velocity *= decay;
+            if self.velocity.length() < 5. {
+                self.velocity = Vector::ZERO;
+            }
+        }
+    }
+
     fn set_offset(&self, value: Vector) {
         let value = Vector::new(
             if value.x.is_finite() { value.x } else { 0. },

@@ -24,6 +24,8 @@ members = [
     "examples/material-probe",
     "examples/texture-probe",
     "examples/input-router",
+    "examples/input-timing",
+    "examples/scenes",
     "examples/playground",
     "examples/tokens",
 ]

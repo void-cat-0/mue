@@ -6,6 +6,7 @@ use crate::{math::Vector, node::NodeRef, runtime::Runtime};
 use super::hit_test::hit_test;
 
 /// Mouse location is independent of the pressed pointer's captured down path.
+#[derive(Clone)]
 pub(crate) struct HoverState {
     position: Option<Vector>,
     focused: bool,
@@ -45,7 +46,11 @@ impl HoverState {
         next
     }
 
-    fn update_path(&mut self, next: IndexSet<NodeRef>) {
+    pub(crate) fn position(&self) -> Option<Vector> {
+        self.position
+    }
+
+    pub(crate) fn update_path(&mut self, next: IndexSet<NodeRef>) {
         let writes: Vec<(Signal<bool>, bool)> = Runtime::with(|rt| {
             let nodes = rt.nodes.borrow();
             self.path

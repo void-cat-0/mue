@@ -21,12 +21,12 @@ use miniquad::{EventHandler, KeyCode, KeyMods, MouseButton, TouchPhase};
 macro_rules! input_events {
     ($($variant:ident => $callback:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
         #[derive(Clone, Debug)]
-        enum InputEvent {
+        pub(crate) enum InputEvent {
             $($variant { $($arg: $ty),* }),*
         }
 
         impl InputEvent {
-            fn repeat(&self, handler: &mut impl EventHandler) {
+            pub(crate) fn repeat(&self, handler: &mut impl EventHandler) {
                 match *self {
                     $(Self::$variant { $($arg),* } => handler.$callback($($arg),*)),*
                 }
@@ -246,6 +246,35 @@ pub struct InputBatch {
 }
 
 impl InputBatch {
+    #[cfg(test)]
+    /// Build a recorded test batch, preserving its interruption status.
+    pub(crate) fn from_events(events: Vec<InputEvent>, interrupted: bool) -> Self {
+        let end = events.len();
+        Self {
+            events: Rc::new(events),
+            start: 0,
+            end,
+            interrupted,
+        }
+    }
+
+    pub(crate) fn events(&self) -> &[InputEvent] {
+        &self.events[self.start..self.end]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recorded(record: impl FnOnce(&mut dyn EventHandler)) -> Self {
+        let mut collector = Collector::default();
+        record(&mut collector);
+        let end = collector.0.len();
+        Self {
+            events: Rc::new(collector.0),
+            start: 0,
+            end,
+            interrupted: false,
+        }
+    }
+
     /// Whether one or more complete host frames were skipped by this consumer.
     pub fn is_interrupted(&self) -> bool {
         self.interrupted
@@ -266,6 +295,15 @@ impl InputBatch {
             event.repeat(handler);
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn inject(record: impl FnOnce(&mut dyn EventHandler)) {
+    with_source(|source| {
+        let mut collector = Collector::default();
+        record(&mut collector);
+        source.frame.append(&mut collector);
+    });
 }
 
 #[cfg(test)]

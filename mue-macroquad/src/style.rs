@@ -144,7 +144,7 @@ macro_rules! define_style {
     (
         $($(#[$property_doc:meta])* $name:ident : $ty:ty $(= $default:expr)?;)*
         @rects { $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)* }
-        @hooks { $($hook_name:ident : CallbackList<$hook_ty:ty>;)* }
+        @hooks { $($(#[$hook_doc:meta])* $hook_name:ident : CallbackList<$hook_ty:ty>;)* }
     ) => {
         paste! {
             /// Optional layout, paint, font, child, and event properties for a node.
@@ -157,7 +157,7 @@ macro_rules! define_style {
                     pub(crate) [<$rect_name _top>]: Option<Prop<$rect_ty>>,
                     pub(crate) [<$rect_name _bottom>]: Option<Prop<$rect_ty>>,
                 )*
-                $(pub $hook_name: CallbackList<$hook_ty>,)*
+                $($(#[$hook_doc])* pub $hook_name: CallbackList<$hook_ty>,)*
                 pub(crate) children: Option<ChildrenPlan>,
                 pub(crate) hover_owners: Vec<Rc<HoverOwner>>,
             }
@@ -228,6 +228,7 @@ macro_rules! define_style {
                     }
                 )*
                 $(
+                    $(#[$hook_doc])*
                     fn $hook_name(mut self, hook: impl FnMut(&$hook_ty) + 'static) -> Self {
                         self.style_mut().$hook_name.append(hook);
                         self
@@ -419,6 +420,13 @@ define_style! {
     }
 
     @hooks {
+        /// Advance local frame state once per App frame, with delta time in seconds.
+        /// Layout preparation and repeated drawing do not invoke this hook.
+        on_update: CallbackList<f32>;
+        /// Prepare geometry after publishing this node's absolute rect, before its children.
+        /// May run repeatedly while layout stabilizes; do not advance time here.
+        on_layout: CallbackList<()>;
+        /// Draw using prepared geometry. Do not change layout or advance time here.
         on_render: CallbackList<()>;
         on_pointer_event: CallbackList<PointerEvent>;
         on_hover_event: CallbackList<PointerEvent>;
@@ -461,6 +469,8 @@ impl Style {
 
     pub(crate) fn build_hooks(&mut self) -> NodeHooks {
         NodeHooks {
+            update: self.take_on_update(),
+            layout: self.take_on_layout(),
             render: self.take_on_render(),
             after_children: CallbackList::default(),
             pointer_event: self.take_on_pointer_event(),

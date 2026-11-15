@@ -46,7 +46,7 @@ pub fn hit_test_interactive(root: NodeRef, pos: Vector) -> bool {
     hit_test(root, pos).iter().any(|node| is_interactive(*node))
 }
 
-fn is_interactive(node: NodeRef) -> bool {
+pub(crate) fn is_interactive(node: NodeRef) -> bool {
     Runtime::with(|rt| {
         let nodes = rt.nodes.borrow();
         let Some(inner) = nodes.get(node.id) else {
@@ -113,7 +113,7 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
     if let Some(custom) = custom {
         custom(node, pos, result);
     } else {
-        // Render has already baked scroll offsets into children's canvas rects.
+        // Layout preparation has baked scroll offsets into children's canvas rects.
         for &child in children.iter().rev() {
             if hit_test_into(child, pos, result) {
                 break;

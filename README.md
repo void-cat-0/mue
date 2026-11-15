@@ -15,6 +15,8 @@
 - **显式外观配置**：应用自定义 tokens，通过 `Prop` / `map` 绑定样式，并用普通 `provide` / `inject` 共享上下文。
 - **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
 - **样式过渡**：节点 `.transition(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
+- **Scene 调度**：Scene 拥有 Node 和 gameplay 资源、组织交错绘制；App 保留场景栈，只调度栈顶的输入、多根布局与每帧更新。支持 push/pop、结果回传、覆盖/宿主暂停恢复、栈顶替换和全栈退出，见 [Scenes](docs/scenes.md)。
+- **独立输入契约**：Node 按已显示内容整批预命中并维持 UI capture；当前 Scene 收到完整原始输入，包括 UI 命中及跨 Scene 持续 Move/Up，不做 UI/gameplay 按压归属过滤。
 
 ## 工作区结构
 
@@ -22,7 +24,7 @@
 | --- | --- |
 | `mue-core` | 与渲染无关的响应式内核：signal、effect、scope、prop。可通过 feature 接入 taffy / cosmic-text。 |
 | `mue-macros` | `#[component]` / `#[node]` 属性过程宏与 style 风格的 `style!`。 |
-| `mue-macroquad` | 渲染与运行时：节点生命周期、样式、布局、事件、手势、字体、shader。核心导出 `App`。 |
+| `mue-macroquad` | 渲染与应用运行时：Node 生命周期、布局准备/绘制、事件、手势、字体、shader，以及 `App` / `Scene` 场景栈与顶层调度。 |
 | `mue-components` | 布局、排版与图形组件，包括滚动区域、图片、形状、圆和文档；重导出组件宏与 `style!`。 |
 | `examples/basics` | 响应式样式、图片、字体（Space Mono 400/700）示例。 |
 | `examples/events` | 简单的点击、长按、hover、滚轮与 `set_timeout` 示例。 |
@@ -38,10 +40,13 @@
 | `examples/nodes` | 布局、排版、动态列表、嵌套滚动与链接卡片。 |
 | `examples/color` | 纯色、渐变、图片与移动半调线条 shader。 |
 | `examples/playground` | 多页节点与属性练习、分页、独立动画开关。 |
+| [scenes](examples/scenes/README.md) | Scene 拥有 gameplay、HUD 与模态 UI，验证多根交错绘制、push/pop 结果、原状态返回和退出。 |
+| [portal](docs/examples.md) | 外部 renderer 的纹理合成、局部暂停输入策略与 UI overlay。 |
+| [input-timing](examples/input-timing/README.md) | 1–2 FPS 的已显示几何与下一布局命中对照。 |
 
 ## 快速开始
 
-需要 Rust 1.89+。
+需要 Rust 1.90+（与 workspace 的 `rust-version` 一致）。
 
 ```bash
 cargo run -p basics
@@ -58,6 +63,8 @@ cargo run -p navigation
 cargo run -p nodes
 cargo run -p color
 cargo run -p playground
+cargo run -p scenes
+cargo run -p portal
 ```
 
 `#[component]` / `#[node]` 都生成 builder；调用构造器和 setter 只配置输入，不执行声明 body。消耗式 `into_node()` 同步构建一次，`App::new` 会为根 builder 调用这一转换。组件 body 在节点 scope 内执行并返回另一个 builder，参数在 body 内是响应式 `Prop`。用 `map` 或 `computed` 把状态显式映射为样式：
@@ -138,6 +145,16 @@ async fn the_main() {
     }
 }
 ```
+
+## Scene 与输入阶段
+
+`App::new(root)` 保留单棵 UI 树的便捷入口；组合 gameplay、自定义绘制或多个 UI 根时，使用 `App::with_scene(scene)`。Scene 持有 Node 与业务资源，统一 `event` 响应 Enter/Pause/Resume/Input/Returned 通知，`update` 推进业务，通过 `layout` 提交借用根及逻辑 bounds，通过 `SceneRender::draw` 在完整 UI 绘制入口之间穿插自定义绘制。根的实际绘制顺序决定下一批 Node 输入顺序，提交但未绘制的根不接新 Node 输入。
+
+当前普通帧顺序为：Node 整批预命中 → 必要的 event(Returned/Enter/Resume) → Node pointer/hover/wheel 派发 → 当前 event(Input) 收完整原始批次 → transition/timeout/tasks 与 host/Scene update → App 多根几何准备 → 一次 Node 更新 → 再稳定几何 → Scene 绘制 → 纹理清理。Scene 应用用 `try_frame()` 接收 `anyhow::Result` 错误；`frame()` 等便利方法在错误时 panic。
+
+Node capture 只保证一次 UI 操作的目标稳定，不决定 gameplay 输入归属。UI 命中、模态层内事件及没有本 Scene Down 的持续 Move/Up 都可见于原始批次，顺序、物理坐标和原触摸时间戳不变。切换时取消旧 UI capture，但不把后续接触屏蔽到抬起：旧批次不重放给新 Scene，后续 Move/Up 直接交新 Scene，是否参与判定由游戏决定。`RootInput::None/Interactive/Modal` 只控制 Node 根之间的路由。
+
+当前未提供静止接触快照、伪造 Down 或逐事件消费接口；App 默认先自动派发 UI，Scene 自行管理游戏的模态、暂停与接触策略。宿主挂起仍排空旧输入并取消 UI，恢复首个正常帧接收新输入；首帧和 resize/DPI 变化不做整批丢弃。Scene stack 与 push/pop 结果已实现：旧实例保留，pop 先发送 Returned 再 Resume，不重复 Enter；被覆盖与宿主挂起条件分别维护。转场帧不重放输入、不更新新顶层业务，Node 更新使用零 dt；恢复首普通帧 Scene/Node 亦用零 dt，不回拨全局时间。异步退场尚未实现。完整契约、错误处理与验证见 [Scenes](docs/scenes.md)、[项目现状](docs/project-status.md#2026-11-15scene-stack-与返回结果) 和 [scenes 示例](examples/scenes/README.md)。
 
 ## style 风格的 `style!`
 

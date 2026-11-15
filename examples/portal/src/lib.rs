@@ -190,7 +190,7 @@ fn route_input(
 }
 
 /// Both subscribers consume a batch before its new mode or overlay is published.
-/// The next UI frame displays the snapshot; no Down is re-hit on a new modal.
+/// Publish before the next layout/render; no Down is re-hit on a new modal.
 fn finish_input_frame(
     input: &mut ChartInput,
     session: &MockSession,
@@ -450,10 +450,11 @@ pub async fn run() {
         drop(guard);
         texture.set(chart.texture());
 
-        for event in finish_input_frame(&mut input, &session, snapshot, get_time(), || app.frame())
-        {
-            chart.touch(event);
-        }
+        app.frame_with_update(|| {
+            for event in finish_input_frame(&mut input, &session, snapshot, get_time(), || {}) {
+                chart.touch(event);
+            }
+        });
         next_frame().await;
     }
 }

@@ -62,14 +62,16 @@ pub fn halftone(ctx: NodeContext, density: f32, moving: bool) -> Node {
             .expect("halftone material"),
         );
         let rect = use_layout(style).rect;
-        let mut time = 0.;
-        style.on_render.append(move |_| {
+        let time = signal(0.);
+        style.on_update.append(move |dt| {
             if moving.get() {
-                time += get_frame_time();
+                time.update(|time| *time += *dt);
             }
+        });
+        style.on_render.append(move |_| {
             let r = rect.get();
             let material = &material;
-            material.0.set_uniform("time", time);
+            material.0.set_uniform("time", time.get());
             material.0.set_uniform("density", density.get());
             material.0.set_uniform("origin", (r.x, r.y));
             gl_use_material(&material.0);

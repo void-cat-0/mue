@@ -14,6 +14,7 @@ pub mod node;
 pub mod paint;
 pub mod render;
 pub mod runtime;
+pub mod scene;
 pub mod shader;
 pub mod shadow;
 pub mod style;
@@ -25,6 +26,9 @@ pub use app::App;
 pub use clip::Sector;
 pub use material::{UiMaterial, UniformValue, with_material};
 pub use render::RenderStateGuard;
+pub use scene::{
+    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneResult, SceneRoot,
+};
 pub use shader::SharedTexture;
 pub use shadow::Shadow;
 pub use texture::{SafeTexture, flush_pending_texture_deletions, pending_texture_deletions};

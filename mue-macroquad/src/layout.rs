@@ -26,7 +26,8 @@ where
 }
 
 #[non_exhaustive]
-/// A node's layout handle and current absolute bounds.
+/// A node's layout handle and absolute logical-pixel bounds, published by
+/// [`crate::node::NodeRef::prepare_layout`] before drawing.
 pub struct Layout {
     pub layout_id: taffy::NodeId,
     pub rect: ReadSignal<Rect>,

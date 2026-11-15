@@ -7,6 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow = "1.0"
 bitflags = "2.11.0"
 cosmic-text = { workspace = true }
 glam = "0.32.1"

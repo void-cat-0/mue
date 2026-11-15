@@ -272,10 +272,11 @@ impl BuildNode for MapBuilder {
                         state.transform(anchor, anchor, (event.delta.y * 0.12).exp(), 0.);
                     }
                 });
-                style.on_render.append(move |_| {
-                    let mut state = state.borrow_mut();
+                let updating = state.clone();
+                style.on_update.append(move |dt| {
+                    let mut state = updating.borrow_mut();
                     if state.contacts.is_empty() {
-                        let dt = get_frame_time().min(0.05);
+                        let dt = dt.min(0.05);
                         let decay = (-5. * dt).exp();
                         let velocity = state.velocity;
                         state.offset += velocity * ((1. - decay) / 5.);
@@ -284,6 +285,9 @@ impl BuildNode for MapBuilder {
                             state.velocity = Vec2::ZERO;
                         }
                     }
+                });
+                style.on_render.append(move |_| {
+                    let state = state.borrow();
                     let r = rect.get();
                     let center = vec2(r.x + r.w * 0.5, r.y + r.h * 0.5) + state.offset;
                     let screen = |world: Vec2| center + rotate(world, state.rotation) * state.scale;

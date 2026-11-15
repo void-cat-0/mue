@@ -1,4 +1,5 @@
 pub(crate) mod build;
+mod frame;
 pub(crate) use build::HoverOwner;
 pub use build::{BuildNode, NodeContext};
 pub mod atlas;
@@ -220,24 +221,23 @@ impl NodeRef {
         changed
     }
 
-    pub(crate) fn render(&self, mut origin: Vector) {
+    /// Draw a prepared tree without computing layout or advancing frame state.
+    ///
+    /// Call [`Self::prepare_layout`] after geometry changes. The node owner must
+    /// remain alive throughout this call. Custom render hooks must only draw or
+    /// update rendering caches; changes to layout/state belong in update hooks.
+    /// This queues macroquad draws and brackets the UI text-atlas pass, which
+    /// can flush pending draws. It does not manage a host GPU pass or flush
+    /// texture deletions; the host retains camera/pass ownership.
+    pub fn render(&self) {
+        Runtime::begin_text_render_pass();
+        mue_core::batch(|| self.render_inner());
+        Runtime::end_text_render_pass();
+    }
+
+    fn render_inner(&self) {
         Runtime::with(|rt| {
             let node = rt.node(self.id);
-            if let Some(layout_id) = node.layout_id {
-                let taffy = rt.taffy.borrow();
-                let layout = taffy.layout(layout_id).unwrap();
-                let loc = layout.location;
-                let size = layout.size;
-                origin.x += loc.x;
-                origin.y += loc.y;
-                if node.center_on_layout_origin {
-                    origin -= Vector::new(size.width, size.height) / 2.;
-                }
-                node.layout
-                    .rect
-                    .set(Rect::new(origin.x, origin.y, size.width, size.height));
-            }
-
             let transform = node.effective_transform();
             drop(node);
             crate::paint::with_transform(transform, || {
@@ -248,16 +248,13 @@ impl NodeRef {
                 let clip_radius = node.clip_radius;
                 let clip_sector = node.clip_sector;
                 let layout_rect = node.layout.rect;
-                if let Some(offset) = node.child_offset {
-                    origin -= offset.get();
-                }
                 let children = *node.children;
                 drop(node);
                 let draw = || {
                     let draw_children = || {
                         if !children.is_null() {
                             for child in children.get_clone().iter() {
-                                child.render(origin);
+                                child.render_inner();
                             }
                         }
                         rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &());
@@ -341,9 +338,15 @@ fn dispose_inner(node: NodeInner) {
         if let Some(layout_id) = node.layout_id {
             let _ = rt.taffy.borrow_mut().remove(layout_id);
         }
-        for gesture_id in node.gestures {
-            rt.gestures.borrow_mut().remove(gesture_id);
-        }
+        let removed: Vec<_> = {
+            let mut gestures = rt.gestures.borrow_mut();
+            node.gestures
+                .into_iter()
+                .filter_map(|id| gestures.remove(id))
+                .collect()
+        };
+        // Gesture closures can own further Nodes. Drop outside the arena borrow.
+        drop(removed);
     });
 }
 impl Disposable for NodeRef {
@@ -458,7 +461,7 @@ fn append_hooks(node: &mut NodeInner, style: &mut Style) {
 
     Runtime::with(|rt| {
         let mut gestures = rt.gestures.borrow_mut();
-        let mut insert = |gesture| node.gestures.push(gestures.insert(gesture));
+        let mut insert = |gesture| node.gestures.push(gestures.insert(Some(gesture)));
 
         if !style.on_tap.is_empty() {
             let mut gesture = Box::new(gesture::TapGesture::default());
@@ -575,7 +578,7 @@ pub fn on_after_children(hook: impl FnMut(&()) + 'static) {
 }
 
 pub fn add_gesture(gesture: impl crate::gesture::Gesture + 'static) {
-    let id = Runtime::with(|rt| rt.gestures.borrow_mut().insert(Box::new(gesture)));
+    let id = Runtime::with(|rt| rt.gestures.borrow_mut().insert(Some(Box::new(gesture))));
     NodeInner::with_mut(|node| node.gestures.push(id));
 }
 

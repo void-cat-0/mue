@@ -44,6 +44,12 @@ impl LongPressGesture {
     }
 }
 
+impl Drop for LongPressGesture {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 impl Gesture for LongPressGesture {
     fn on_event(&mut self, event: &PointerEvent, claim_token: &ClaimToken) {
         if let Some(active) = &self.active {
