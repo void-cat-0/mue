@@ -36,11 +36,11 @@
 | `examples/theme` | 练习计数、主题 tokens、响应式按钮参数、显式 hover 与明暗切换。 |
 | `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
 | `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
-| `examples/navigation` | 导航栈、自适应双栏、返回、深链接与页面状态保留。 |
 | `examples/nodes` | 布局、排版、动态列表、嵌套滚动与链接卡片。 |
 | `examples/color` | 纯色、渐变、图片与移动半调线条 shader。 |
 | `examples/playground` | 多页节点与属性练习、分页、独立动画开关。 |
 | [scenes](examples/scenes/README.md) | Scene 拥有 gameplay、HUD 与模态 UI，验证多根交错绘制、push/pop 结果、原状态返回和退出。 |
+| [scene-flow](examples/scene-flow/README.md) | 详情、可取消/失败加载、CPU→GPU 移交、显式启动、结束/重试/返回，以及宿主局部淡入淡出。 |
 | [portal](docs/examples.md) | 外部 renderer 的纹理合成、局部暂停输入策略与 UI overlay。 |
 | [input-timing](examples/input-timing/README.md) | 1–2 FPS 的已显示几何与下一布局命中对照。 |
 
@@ -59,11 +59,11 @@ cargo run -p theme
 cargo run -p style-example
 cargo run -p document
 cargo run -p animation
-cargo run -p navigation
 cargo run -p nodes
 cargo run -p color
 cargo run -p playground
 cargo run -p scenes
+cargo run -p scene-flow
 cargo run -p portal
 ```
 
@@ -154,7 +154,7 @@ async fn the_main() {
 
 Node capture 只保证一次 UI 操作的目标稳定，不决定 gameplay 输入归属。UI 命中、模态层内事件及没有本 Scene Down 的持续 Move/Up 都可见于原始批次，顺序、物理坐标和原触摸时间戳不变。切换时取消旧 UI capture，但不把后续接触屏蔽到抬起：旧批次不重放给新 Scene，后续 Move/Up 直接交新 Scene，是否参与判定由游戏决定。`RootInput::None/Interactive/Modal` 只控制 Node 根之间的路由。
 
-当前未提供静止接触快照、伪造 Down 或逐事件消费接口；App 默认先自动派发 UI，Scene 自行管理游戏的模态、暂停与接触策略。宿主挂起仍排空旧输入并取消 UI，恢复首个正常帧接收新输入；首帧和 resize/DPI 变化不做整批丢弃。Scene stack 与 push/pop 结果已实现：旧实例保留，pop 先发送 Returned 再 Resume，不重复 Enter；被覆盖与宿主挂起条件分别维护。转场帧不重放输入、不更新新顶层业务，Node 更新使用零 dt；恢复首普通帧 Scene/Node 亦用零 dt，不回拨全局时间。异步退场尚未实现。完整契约、错误处理与验证见 [Scenes](docs/scenes.md)、[项目现状](docs/project-status.md#2026-11-15scene-stack-与返回结果) 和 [scenes 示例](examples/scenes/README.md)。
+当前未提供静止接触快照、伪造 Down 或逐事件消费接口；App 默认先自动派发 UI，Scene 自行管理游戏的模态、暂停与接触策略。宿主挂起仍排空旧输入并取消 UI，恢复首个正常帧接收新输入；首帧和 resize/DPI 变化不做整批丢弃。Scene stack 与 push/pop 结果已实现：旧实例保留，pop 先发送 Returned 再 Resume，不重复 Enter；被覆盖与宿主挂起条件分别维护。转场帧不重放输入、不更新新顶层业务，Node 更新使用零 dt；恢复首普通帧 Scene/Node 亦用零 dt，不回拨全局时间。通用异步退场未实现；[scene-flow](examples/scene-flow/README.md) 已用现有接口验证可取消加载与资源移交，并通过独立 GPU 画面缓存实现切换淡入淡出，不保活旧 Scene 业务。完整契约、错误处理与验证见 [Scenes](docs/scenes.md)、[项目现状](docs/project-status.md#2026-11-15scene-stack-与返回结果) 和 [scenes 示例](examples/scenes/README.md)。
 
 ## style 风格的 `style!`
 
@@ -284,7 +284,7 @@ let label = text("Hello")
 
 `.transition(...)` 为节点的可插值属性提供默认动画。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`Transition::Instant` 立即切换。
 
-支持 `Transition::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。导航节点负责屏幕进入/退出过渡；普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
+支持 `Transition::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
 
 实现 `mue_macroquad::transition::Interpolatable` 可以扩展可过渡值。`App::frame` 会在布局前调用 `mue_macroquad::transition::advance(dt)`。
 
@@ -303,38 +303,12 @@ use mue_macroquad::style::StyleableExt;
 
 let selected = signal(0usize);
 let view = pages(selected, [text("Home"), text("Notes"), text("Settings")])
-    .transition(PagesTransition::Slide);
+    .page_transition(PagesTransition::Slide);
 selected.set(2);
 selected.set(1); // 向右滑动回到 Notes
 ```
 
 `.page_transition(...)` 支持 `Slide`（默认）、`SlideVertical` 和 `None`；`.transition_curve(...)` 配置曲线。垂直切换时索引增加向上、减少向下。动画中途切换从当前显示位置重新定向，位移限制在起点和终点之间；尺寸变化时立即结束过渡并重新布局。只有视口内页面参与布局与绘制，仅选中的页面参与命中测试。空列表显示空内容；越界索引按最后一页显示，不修改选中信号。
-
-`pages` 用于同级页面；需要 push/back、详情层级或分栏时使用 `navigation_stack`。
-
-## 导航
-
-`navigation_stack` 用 `Signal<Vec<Route>>` 描述根页面之上的路径；`.split_view(280., 720.)` 在容器宽度达到 720 像素时并排显示根页面与当前目标页面，窄屏自动折叠为栈。可用 `.split_view(280., 720.)` 调整侧栏宽度和断点。空路径显示完整的根页面。
-
-```rust
-use mue_core::prelude::*;
-use mue_components::{navigation_stack, text};
-
-let path = signal(Vec::<String>::new());
-let view = navigation_stack(
-    path,
-    || text("Library"),
-    |route: &String| text(route.clone()),
-).split_view(280., 720.);
-path.update(|routes| routes.push("Details".into())); // push
-path.update(|routes| { routes.pop(); });             // back
-path.set(vec!["Details".into(), "Notes".into()]);   // deep link
-path.set(Vec::new());                               // pop to root
-```
-
-根页面与目标页面通过闭包创建，可在其中创建局部 signal。路径不变的前缀保留页面和局部状态；移除或替换路径项会释放对应页面。相同值在不同深度有独立状态，同一深度的相同值视为同一页面。隐藏页面不参与布局、绘制或命中测试，切换单双栏不会重建页面。返回按钮、标题和其他导航控件由页面自行组合。
-
-运行 `cargo run -p navigation` 查看双栏示例，调整窗口宽度查看折叠；`cargo run -p navigation -- --stack` 使用普通导航栈。页面计数器展示 push / back 后的状态保留，Escape 返回上一层。
 
 ## 手势
 
@@ -452,7 +426,7 @@ MIT，见 [LICENSE](LICENSE)。
 
 | 分组 | 节点 |
 | --- | --- |
-| 布局 | `pages`、`navigation_stack`、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
+| 布局 | `pages`、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
 | 排版 | `blockquote`、`code`、`code_block`、`em`、`heading`、`link`、`link_overlay`、`list` / `list_item`、`text`、`document` / `markdown` |
 | 图形 | `circle`、`shape`、`image` |
 
@@ -526,11 +500,6 @@ let view = scroll_area()
 默认 Visible 保持原有溢出显示；Clip 在内容边界裁剪。省略号通过 cosmic-text 排版，未设置行限制时默认使用一行。
 这些样式也适用于 document、markdown、heading、code 等共享文本渲染的节点。
 行列间距、段落间距、字距与宽高比现已加入样式动画绑定。不同枚举值仍然立即切换。
-
-导航默认使用弹簧横向滑动；`.transition(NavigationTransition::SlideVertical)` 纵向切换，
-`NavigationTransition::None` 立即切换。`.transition_curve(Transition::spring(0.5, 0.2))`
-设置动画曲线。退出页面在过渡结束后释放，已保留页面的局部状态不变；过渡中的旧页面不接收输入。
-导航内部驱动过渡，示例不再逐帧维护独立的 offset。
 
 `cargo run -p color` 包含渐变、图片和移动半调线条 GPU 材质。
 图片来自 Picsum / Unsplash，作者与来源见 `examples/color/assets/README.md`，资源已保存在本地，运行无需联网。

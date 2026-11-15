@@ -17,7 +17,6 @@ members = [
     "examples/color",
     "examples/document",
     "examples/animation",
-    "examples/navigation",
     "examples/nodes",
     "examples/portal",
     "examples/pass-probe",
@@ -26,6 +25,7 @@ members = [
     "examples/input-router",
     "examples/input-timing",
     "examples/scenes",
+    "examples/scene-flow",
     "examples/playground",
     "examples/tokens",
 ]

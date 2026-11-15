@@ -245,41 +245,39 @@ fn pages_defer_children_and_retain_them_across_selection_changes() {
 }
 
 #[test]
-fn delayed_navigation_inherits_context_and_retains_common_screens() {
+fn pages_inherit_context_and_retain_page_state_until_disposal() {
     let owner = OwnedScope::new();
     owner.run(|| {
-        let path = signal(Vec::<u8>::new());
+        let selected = signal(0usize);
         let foreground = signal(Brush::Solid(Color::WHITE));
-        let mounted = Rc::new(RefCell::new(Vec::<(u8, Prop<Brush>)>::new()));
+        let mounted = Rc::new(RefCell::new(Vec::<(u8, Prop<Brush>, Signal<usize>)>::new()));
         let node = provide_foreground(foreground, {
             let mounted = mounted.clone();
             move || {
                 provide(17u32);
-                navigation_stack(
-                    path,
-                    || stack(),
-                    move |&value| {
+                pages(
+                    selected,
+                    [1u8, 2].map(move |value| {
                         let mounted = mounted.clone();
                         test_node(move |_| {
                             assert_eq!(inject::<u32>(), Some(17));
-                            mounted
-                                .borrow_mut()
-                                .push((value, inherited_foreground().unwrap()));
+                            mounted.borrow_mut().push((
+                                value,
+                                inherited_foreground().unwrap(),
+                                signal(0usize),
+                            ));
                         })
-                    },
+                    }),
                 )
-                .navigation_transition(NavigationTransition::None)
+                .page_transition(PagesTransition::None)
             }
         })
         .into_node();
-        assert!(mounted.borrow().is_empty());
-        path.set(vec![1]);
-        path.set(vec![1, 2]);
         assert_eq!(
             mounted
                 .borrow()
                 .iter()
-                .map(|(value, _)| *value)
+                .map(|(value, _, _)| *value)
                 .collect::<Vec<_>>(),
             [1, 2]
         );
@@ -287,18 +285,29 @@ fn delayed_navigation_inherits_context_and_retains_common_screens() {
             mounted
                 .borrow()
                 .iter()
-                .all(|(_, color)| color.get_clone() == Brush::Solid(Color::WHITE))
+                .all(|(_, color, _)| color.get_clone() == Brush::Solid(Color::WHITE))
         );
+        let first_state = mounted.borrow()[0].2;
+        let second_state = mounted.borrow()[1].2;
+        first_state.set(7);
+        selected.set(1);
+        second_state.set(11);
+        selected.set(usize::MAX);
+        assert_eq!(selected.get(), usize::MAX);
+        selected.set(0);
+        assert_eq!(mounted.borrow().len(), 2);
+        assert_eq!((first_state.get(), second_state.get()), (7, 11));
         foreground.set(Brush::Solid(Color::BLACK));
         assert!(
             mounted
                 .borrow()
                 .iter()
-                .all(|(_, color)| color.get_clone() == Brush::Solid(Color::BLACK))
+                .all(|(_, color, _)| color.get_clone() == Brush::Solid(Color::BLACK))
         );
-        path.set(vec![1]);
-        assert_eq!(mounted.borrow().len(), 2);
         drop(node);
-        assert!(!path.is_disposed());
+        assert!(first_state.is_disposed());
+        assert!(second_state.is_disposed());
+        assert!(!selected.is_disposed());
+        assert!(!foreground.is_disposed());
     });
 }
