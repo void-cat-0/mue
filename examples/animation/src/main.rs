@@ -1,4 +1,4 @@
-//! Implicit style animation and explicit state transactions.
+//! Reactive style animation with selectable transition curves.
 //! Run with `cargo run -p animation`.
 use mue_components::*;
 #[path = "../../shared/responsive.rs"]
@@ -91,6 +91,10 @@ async fn run() {
                             aspect-ratio: {expanded.select(Some(2.), Some(1.))};
                             border-radius: {responsive::ui(expanded.select(24., 90.))};
                             background: {expanded.select(Brush::Solid(PLUM), Brush::Solid(BLUE))};
+                            transition: {spring.select(
+                                Transition::spring(0.8, 0.35),
+                                Transition::ease_in_out(0.65),
+                            )};
                             align-items: center;
                             justify-content: center;
                             })
