@@ -103,19 +103,24 @@ pub enum LoadOutcome {
 /// A cancelled monitor can finish late but can never become accepted.
 #[derive(Debug)]
 pub struct LoadMonitor {
+    #[cfg(test)]
     generation_id: u64,
     source_bytes: usize,
     completed_bytes: AtomicUsize,
     cancelled: AtomicBool,
+    #[cfg(test)]
     finished: AtomicBool,
+    #[cfg(test)]
     accepted: AtomicBool,
 }
 
 impl LoadMonitor {
+    #[cfg(test)]
     pub fn generation_id(&self) -> u64 {
         self.generation_id
     }
 
+    #[cfg(test)]
     pub fn is_finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
     }
@@ -124,6 +129,7 @@ impl LoadMonitor {
         self.cancelled.load(Ordering::Acquire)
     }
 
+    #[cfg(test)]
     pub fn is_accepted(&self) -> bool {
         self.accepted.load(Ordering::Acquire)
     }
@@ -171,11 +177,14 @@ impl Request {
         self.pending_cancel = None;
         let generation_id = next_generation();
         let monitor = Arc::new(LoadMonitor {
+            #[cfg(test)]
             generation_id,
             source_bytes: source.len(),
             completed_bytes: AtomicUsize::new(0),
             cancelled: AtomicBool::new(false),
+            #[cfg(test)]
             finished: AtomicBool::new(false),
+            #[cfg(test)]
             accepted: AtomicBool::new(false),
         });
         let worker_monitor = monitor.clone();
@@ -188,6 +197,7 @@ impl Request {
             if let Some(gate) = &gate {
                 gate.wait_after_decode(&mut decoded);
             }
+            #[cfg(test)]
             worker_monitor.finished.store(true, Ordering::Release);
             #[cfg(test)]
             if let Some(gate) = gate {
@@ -218,6 +228,7 @@ impl Request {
 
     /// Observe CPU completion without consuming a Task or handing off resources.
     /// Foreground task ticks are still required before update can yield Ready.
+    #[cfg(test)]
     pub fn is_finished(&self) -> bool {
         self.monitor
             .as_ref()
@@ -247,6 +258,7 @@ impl Request {
             // here: resource identity is validated at the actual handoff boundary.
             return None;
         }
+        #[cfg(test)]
         if matches!(&outcome, LoadOutcome::Ready(_)) {
             monitor.accepted.store(true, Ordering::Release);
         }

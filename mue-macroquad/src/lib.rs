@@ -15,6 +15,7 @@ pub mod paint;
 pub mod render;
 pub mod runtime;
 pub mod scene;
+pub mod scene_transition;
 pub mod shader;
 pub mod shadow;
 pub mod style;
@@ -27,7 +28,11 @@ pub use clip::Sector;
 pub use material::{UiMaterial, UniformValue, with_material};
 pub use render::RenderStateGuard;
 pub use scene::{
-    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneResult, SceneRoot,
+    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRequest, SceneResult,
+    SceneRoot,
+};
+pub use scene_transition::{
+    ScenePictures, SceneTransition, TransitionFrame, TransitionPhase, TransitionTiming,
 };
 pub use shader::SharedTexture;
 pub use shadow::Shadow;

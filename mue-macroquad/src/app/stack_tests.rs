@@ -12,7 +12,8 @@ use crate::{
 };
 use miniquad::TouchPhase;
 use mue_core::{
-    scope::OwnedScope,
+    effect::{on_cleanup, watch_effect},
+    scope::{OwnedScope, scope_future},
     signal::{Access, Signal, signal},
     task::{self, Task},
 };
@@ -190,6 +191,9 @@ fn app(scene: impl Scene + 'static) -> App {
         state: AppState::Active,
         host_paused: false,
         command: None,
+        active_transition: None,
+        default_transition: None,
+        pictures: PictureCache::headless(),
         displayed: Vec::new(),
         pointer_manager: PointerManager::headless(),
     }
@@ -215,6 +219,7 @@ fn request_exit(app: &mut App) {
     SceneContext {
         frame: frame(0., 42.),
         command: &mut app.command,
+        transition: None,
     }
     .exit();
 }
@@ -1385,13 +1390,21 @@ fn pause_errors_abort_push_pop_replace_reset_exit_before_mutation_and_never_retr
         .unwrap();
         let result_drops = Rc::new(Cell::new(0));
         match command {
-            "push" => app.push_scene(Probe::new("selected", log.clone())),
-            "pop" => app.pop_scene_with_result(Answer {
-                value: "aborted".into(),
-                dropped: result_drops.clone(),
-            }),
-            "replace" => app.replace_scene(Probe::new("selected", log.clone())),
-            "reset" => app.reset_scene(Probe::new("selected", log.clone())),
+            "push" => {
+                app.push_scene(Probe::new("selected", log.clone()));
+            }
+            "pop" => {
+                app.pop_scene_with_result(Answer {
+                    value: "aborted".into(),
+                    dropped: result_drops.clone(),
+                });
+            }
+            "replace" => {
+                app.replace_scene(Probe::new("selected", log.clone()));
+            }
+            "reset" => {
+                app.reset_scene(Probe::new("selected", log.clone()));
+            }
             "exit" => request_exit(&mut app),
             "host-pause" => {}
             _ => unreachable!(),
@@ -1560,8 +1573,12 @@ fn boundary_enter_result_resume_errors_stop_all_scenes_until_replace_reset_or_ex
             assert_eq!(count(&log, "forbidden-push", "drop"), 1);
             let pauses = count(&log, "lower", "pause") + count(&log, "upper", "pause");
             match recovery {
-                "replace" => app.replace_scene(Probe::new("recovered", log.clone())),
-                "reset" => app.reset_scene(Probe::new("recovered", log.clone())),
+                "replace" => {
+                    app.replace_scene(Probe::new("recovered", log.clone()));
+                }
+                "reset" => {
+                    app.reset_scene(Probe::new("recovered", log.clone()));
+                }
                 "exit" => request_exit(&mut app),
                 _ => unreachable!(),
             }
@@ -1796,6 +1813,261 @@ fn signal_node() -> (Node, Signal<u32>) {
         }
     });
     (node, local.get().unwrap())
+}
+
+#[test]
+fn application_owned_global_survives_scene_pop_replace_and_exit_cleanup() {
+    for removal in ["pop", "replace", "exit"] {
+        // The application-level owner is outside every Scene and outlives App.
+        let global_owner = OwnedScope::new();
+        let global = global_owner.run(|| signal(17_u32));
+        let log = Log::default();
+        let local_handle = Rc::new(Cell::new(None::<Signal<u32>>));
+        let cleaned = Rc::new(RefCell::new(Vec::new()));
+        let node = Node::leaf(Style::new().width(80.).height(80.), {
+            let local_handle = local_handle.clone();
+            let cleaned = cleaned.clone();
+            move |style| {
+                use_layout(style);
+                let local = signal(7_u32);
+                local_handle.set(Some(local));
+                // Register teardown only: a global change must not rerun cleanup.
+                watch_effect(move || {
+                    let cleaned = cleaned.clone();
+                    on_cleanup(move || {
+                        assert!(!global.is_disposed());
+                        assert!(!local.is_disposed());
+                        cleaned
+                            .borrow_mut()
+                            .push((global.get_untracked(), local.get_untracked()));
+                    });
+                });
+            }
+        });
+        let node_ref = *node;
+        let local = local_handle.get().unwrap();
+        let mut app = app(Probe::new("root", log.clone()));
+        run(&mut app).unwrap();
+        app.push_scene(Probe::new("settings", log.clone()).with_node(node));
+        run(&mut app).unwrap();
+        global.set(23);
+        assert!(
+            cleaned.borrow().is_empty(),
+            "cleanup belongs to Scene teardown"
+        );
+
+        match removal {
+            "pop" => {
+                app.pop_scene();
+            }
+            "replace" => {
+                app.replace_scene(Probe::new("replacement", log.clone()));
+            }
+            "exit" => request_exit(&mut app),
+            _ => unreachable!(),
+        }
+        run(&mut app).unwrap();
+        assert_eq!(*cleaned.borrow(), vec![(23, 7)], "{removal}");
+        assert_eq!(count(&log, "settings", "drop"), 1);
+        assert!(!alive(node_ref));
+        assert!(local.is_disposed());
+        assert_eq!(local.try_get(), None);
+        assert_eq!(global.try_get(), Some(23), "{removal} cannot own global");
+
+        drop(app);
+        assert_eq!(global.try_get(), Some(23));
+        drop(global_owner);
+        assert!(global.is_disposed());
+        assert_eq!(global.try_get(), None);
+        assert_eq!(*cleaned.borrow(), vec![(23, 7)]);
+    }
+}
+
+#[test]
+fn covered_scene_resumes_same_instance_with_updated_application_owned_global() {
+    let global_owner = OwnedScope::new();
+    let global = global_owner.run(|| signal(17_u32));
+    let log = Log::default();
+    let (node, local) = signal_node();
+    let node_ref = *node;
+    local.set(9);
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let resumed = Rc::new(RefCell::new(Vec::new()));
+    let mut lower = Probe::new("retained", log.clone());
+    let stats = lower.stats.clone();
+    lower.update = Some(Box::new({
+        let reads = reads.clone();
+        move |_| {
+            reads.borrow_mut().push((global.get(), local.get()));
+            Ok(())
+        }
+    }));
+    lower.resume = Some(Box::new({
+        let resumed = resumed.clone();
+        move |_| {
+            resumed.borrow_mut().push((global.get(), local.get()));
+            Ok(())
+        }
+    }));
+    let mut app = app(lower.with_node(node));
+    run(&mut app).unwrap();
+    app.push_scene(Probe::new("settings", log.clone()));
+    run(&mut app).unwrap();
+    global.set(29);
+    run(&mut app).unwrap();
+    assert_eq!(*stats.instance_updates.borrow(), vec![1]);
+    assert_eq!(*reads.borrow(), vec![(17, 9)]);
+    assert!(resumed.borrow().is_empty());
+    assert_eq!(local.try_get(), Some(9));
+
+    app.pop_scene();
+    run(&mut app).unwrap();
+    assert_eq!(*resumed.borrow(), vec![(29, 9)]);
+    assert!(app.displayed[0].node == node_ref);
+    assert_eq!(count(&log, "retained", "enter"), 1);
+    assert_eq!(count(&log, "retained", "resume"), 1);
+    run(&mut app).unwrap();
+    assert_eq!(*stats.instance_updates.borrow(), vec![1, 2]);
+    assert_eq!(*reads.borrow(), vec![(17, 9), (29, 9)]);
+
+    drop(app);
+    assert!(local.is_disposed());
+    assert_eq!(global.try_get(), Some(29));
+    drop(global_owner);
+    assert!(global.is_disposed());
+}
+
+#[test]
+fn app_drop_releases_global_readers_before_external_owner_after_task_cleanup() {
+    struct ReadOnDrop {
+        name: &'static str,
+        global: Signal<u32>,
+        reads: Rc<RefCell<Vec<(&'static str, u32)>>>,
+    }
+    impl Drop for ReadOnDrop {
+        fn drop(&mut self) {
+            assert!(
+                !self.global.is_disposed(),
+                "{} still needs global",
+                self.name
+            );
+            self.reads
+                .borrow_mut()
+                .push((self.name, self.global.get_untracked()));
+        }
+    }
+
+    // Signal handles are non-owning; this external guard must outlive all readers.
+    let global_owner = OwnedScope::new();
+    let global = global_owner.run(|| signal(17_u32));
+    let log = Log::default();
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let task_reads = Rc::new(RefCell::new(Vec::new()));
+    let task_local_handle = Rc::new(Cell::new(None::<Signal<u32>>));
+    let (node, scene_local) = signal_node();
+    let mut root = Probe::new("root", log.clone()).with_node(node);
+    root.task = Some(task::spawn(scope_future({
+        let drops = drops.clone();
+        let task_reads = task_reads.clone();
+        let task_local_handle = task_local_handle.clone();
+        async move {
+            let local = signal(41_u32);
+            task_local_handle.set(Some(local));
+            watch_effect(move || {
+                let drops = drops.clone();
+                on_cleanup(move || {
+                    assert_eq!(local.try_get(), Some(41));
+                    drops.borrow_mut().push(("task", global.get_untracked()));
+                });
+            });
+            std::future::poll_fn(move |cx| {
+                task_reads.borrow_mut().push(global.get_untracked());
+                cx.waker().wake_by_ref();
+                Poll::<()>::Pending
+            })
+            .await;
+        }
+    })));
+    let mut app = app(root);
+    run(&mut app).unwrap();
+    task::tick(32);
+    let task_local = task_local_handle.get().unwrap();
+    assert_eq!(*task_reads.borrow(), vec![17]);
+    app.set_default_scene_transition({
+        let factory = ReadOnDrop {
+            name: "factory",
+            global,
+            reads: drops.clone(),
+        };
+        let drops = drops.clone();
+        move || {
+            let _owned = &factory;
+            assert_eq!(global.get_untracked(), 17);
+            let visual = ReadOnDrop {
+                name: "visual",
+                global,
+                reads: drops.clone(),
+            };
+            SceneTransition::overlay(
+                TransitionTiming::AroundSwitch {
+                    exit: transition::Transition::linear(1.),
+                    enter: transition::Transition::linear(1.),
+                },
+                move |_| {
+                    let _owned = &visual;
+                    assert_eq!(global.get_untracked(), 17);
+                    Ok(())
+                },
+            )
+        }
+    });
+    let (pending_node, pending_local) = signal_node();
+    let mut destination = Probe::new("pending", log.clone()).with_node(pending_node);
+    destination.drop_hook = Some(Box::new({
+        let drops = drops.clone();
+        move || {
+            drops
+                .borrow_mut()
+                .push(("destination", global.get_untracked()))
+        }
+    }));
+    app.push_scene(destination);
+    run(&mut app).unwrap();
+    assert!(app.is_transitioning());
+    assert!(app.active_transition.as_ref().unwrap().pending.is_some());
+    assert_eq!(count(&log, "pending", "enter"), 0);
+    assert!(drops.borrow().is_empty());
+
+    drop(app);
+    // Task Drop requests cancellation. Drain on the foreground before disposing
+    // global; do not rely on every cancellation path running cleanup immediately.
+    task::tick(32);
+    assert_eq!(drops.borrow().len(), 4);
+    for name in ["factory", "visual", "destination", "task"] {
+        assert_eq!(
+            drops
+                .borrow()
+                .iter()
+                .filter(|entry| **entry == (name, 17))
+                .count(),
+            1,
+            "{name} releases while the external global owner is alive"
+        );
+    }
+    assert_eq!(count(&log, "root", "drop"), 1);
+    assert_eq!(count(&log, "pending", "drop"), 1);
+    assert!(scene_local.is_disposed());
+    assert!(pending_local.is_disposed());
+    assert!(task_local.is_disposed());
+    task::tick(32);
+    assert_eq!(
+        *task_reads.borrow(),
+        vec![17],
+        "cancelled task never polls again"
+    );
+    assert_eq!(global.try_get(), Some(17));
+    drop(global_owner);
+    assert!(global.is_disposed());
 }
 
 fn dependent_scene(
@@ -2104,15 +2376,23 @@ fn permanent_top_removal_discards_its_pause_child_before_owner_but_keeps_global_
             run(&mut app).unwrap();
             log.borrow_mut().clear();
             match operation {
-                "pop" => app.pop_scene(),
-                "replace" => app.replace_scene(Probe::new("replacement", log.clone())),
-                "reset" => app.reset_scene(Probe::new("replacement", log.clone())),
+                "pop" => {
+                    app.pop_scene();
+                }
+                "replace" => {
+                    app.replace_scene(Probe::new("replacement", log.clone()));
+                }
+                "reset" => {
+                    app.reset_scene(Probe::new("replacement", log.clone()));
+                }
                 _ => unreachable!(),
             }
             if suspended {
                 app.run_checked_paused_frame(frame(0., 100.), |app| match global_request {
                     "none" => {}
-                    "host" => app.push_scene(Probe::new("global-child", log.clone())),
+                    "host" => {
+                        app.push_scene(Probe::new("global-child", log.clone()));
+                    }
                     "task" => {
                         let mut request = task::spawn({
                             let log = log.clone();

@@ -379,6 +379,8 @@ pub fn create_reaction(mut f: impl FnMut() + 'static) -> Reaction {
             location,
         )
         .register(rt);
+        // Reactions are effects too: retain their cleanup in the creating scope.
+        Effect::new(effect_id);
         Reaction::new(effect_id)
     })
 }

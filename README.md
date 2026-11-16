@@ -16,6 +16,7 @@
 - **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
 - **样式过渡**：节点 `.transition(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
 - **Scene 调度**：Scene 拥有 Node 和 gameplay 资源、组织交错绘制；App 保留场景栈，只调度栈顶的输入、多根布局与每帧更新。支持 push/pop、结果回传、覆盖/宿主暂停恢复、栈顶替换和全栈退出，见 [Scenes](docs/scenes.md)。
+- **Scene 过渡**：切换请求可链式配置内置 crossfade、自定义画面合成或无需截图的 overlay；统一驱动切换前后时间轴、终点呈现与打断清理，见 [Scene transitions](docs/scene-transitions.md)。
 - **独立输入契约**：Node 按已显示内容整批预命中并维持 UI capture；当前 Scene 收到完整原始输入，包括 UI 命中及跨 Scene 持续 Move/Up，不做 UI/gameplay 按压归属过滤。
 
 ## 工作区结构
@@ -39,8 +40,10 @@
 | `examples/nodes` | 布局、排版、动态列表、嵌套滚动与链接卡片。 |
 | `examples/color` | 纯色、渐变、图片与移动半调线条 shader。 |
 | `examples/playground` | 多页节点与属性练习、分页、独立动画开关。 |
-| [scenes](examples/scenes/README.md) | Scene 拥有 gameplay、HUD 与模态 UI，验证多根交错绘制、push/pop 结果、原状态返回和退出。 |
-| [scene-flow](examples/scene-flow/README.md) | 详情、可取消/失败加载、CPU→GPU 移交、显式启动、结束/重试/返回，以及宿主局部淡入淡出。 |
+| [scenes](examples/scenes/README.md) | 常规游戏/结果场景组织、HUD 与暂停 UI、多根交错绘制、push/pop 结果与状态返回。 |
+| [scene-flow](examples/scene-flow/README.md) | 详情、可取消/失败加载、CPU→GPU 移交、显式启动、结束/重试/返回，以及公共 Scene 淡入淡出。 |
+| [scene-transitions](examples/scene-transitions/README.md) | 可交互的内置 crossfade、自定义 slide 合成与两阶段覆盖动画，场景和效果分模块组织。 |
+| [song-transition](<examples/song-transition/README.md>) | 曲绘展开/缩回与保留列表状态；应用级资源/全局 signals、设置 Scene、明暗主题和减少动态效果。 |
 | [portal](docs/examples.md) | 外部 renderer 的纹理合成、局部暂停输入策略与 UI overlay。 |
 | [input-timing](examples/input-timing/README.md) | 1–2 FPS 的已显示几何与下一布局命中对照。 |
 
@@ -64,6 +67,8 @@ cargo run -p color
 cargo run -p playground
 cargo run -p scenes
 cargo run -p scene-flow
+cargo run -p scene-transitions
+cargo run -p song-transition
 cargo run -p portal
 ```
 

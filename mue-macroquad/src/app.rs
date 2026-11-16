@@ -4,6 +4,8 @@ mod input_tests;
 mod scene_tests;
 #[cfg(test)]
 mod stack_tests;
+#[cfg(test)]
+mod transition_tests;
 
 use crate::{
     event::pointer::PointerManager,
@@ -13,7 +15,11 @@ use crate::{
     runtime::{Runtime, TimeoutKey, get_time},
     scene::{
         NodeScene, Scene, SceneCommand, SceneContext, SceneEvent, SceneFrame, SceneRender,
-        SceneResult, SceneRoot,
+        SceneRequest, SceneRequestData, SceneResult, SceneRoot, TransitionChoice,
+    },
+    scene_transition::{
+        PhaseClock, PictureCache, SceneTransition, TransitionFrame, TransitionPhase,
+        TransitionTiming,
     },
     transition,
 };
@@ -58,6 +64,29 @@ impl SceneEntry {
     }
 }
 
+struct ActiveTransition {
+    // Drop visual captures before pending destinations/results, then source owners.
+    effect: SceneTransition,
+    pending: Option<SceneCommand>,
+    clock: PhaseClock,
+    sample: TransitionFrame,
+    // AfterSwitch requested while suspended waits for one source drawing on resume.
+    awaiting_resume: bool,
+}
+impl ActiveTransition {
+    fn new(effect: SceneTransition, pending: Option<SceneCommand>, viewport: Rect) -> Self {
+        let mut clock = PhaseClock::new(effect.timing());
+        let sample = clock.frame(0., viewport);
+        Self {
+            effect,
+            pending,
+            clock,
+            sample,
+            awaiting_resume: false,
+        }
+    }
+}
+
 /// Retains a Scene stack, scheduling only its top for input, layout and drawing.
 /// Covered instances keep their resources, but receive no Scene or Node updates.
 /// Global work runs once per application frame, not once per retained Scene.
@@ -67,7 +96,10 @@ pub struct App {
     state: AppState,
     // Coverage is determined by stack position; host suspension is independent.
     host_paused: bool,
-    command: Option<SceneCommand>,
+    command: Option<SceneRequestData>,
+    active_transition: Option<ActiveTransition>,
+    default_transition: Option<Box<dyn FnMut() -> SceneTransition>>,
+    pictures: PictureCache,
     displayed: Vec<SceneRoot>,
     pointer_manager: PointerManager,
 }
@@ -76,6 +108,8 @@ impl Drop for App {
     fn drop(&mut self) {
         // A queued child can borrow retained parent handles without owning them.
         drop(self.command.take());
+        drop(self.default_transition.take());
+        self.cancel_transition();
         self.drop_scenes();
     }
 }
@@ -108,6 +142,9 @@ impl App {
             state: AppState::Active,
             host_paused: false,
             command: None,
+            active_transition: None,
+            default_transition: None,
+            pictures: PictureCache::new(),
             // Preserve explicit custom hit bounds before the first Node layout.
             displayed: vec![SceneRoot::new(root_ref, viewport)],
             pointer_manager: PointerManager::new(),
@@ -123,6 +160,9 @@ impl App {
             state: AppState::Active,
             host_paused: false,
             command: None,
+            active_transition: None,
+            default_transition: None,
+            pictures: PictureCache::new(),
             displayed: Vec::new(),
             pointer_manager: PointerManager::new(),
         }
@@ -134,28 +174,55 @@ impl App {
         !crate::event::pointer::hit_scene_roots(&self.displayed, pos).is_empty()
     }
 
+    /// Set a factory for fresh default effects. Called only at request selection.
+    /// Captures must own the resources they use; they cannot borrow Scene-local handles.
+    /// Existing/explicitly configured transitions are unaffected.
+    pub fn set_default_scene_transition(
+        &mut self,
+        factory: impl FnMut() -> SceneTransition + 'static,
+    ) {
+        self.default_transition = Some(Box::new(factory));
+    }
+
+    /// Restore the initial no-animation default, without cancelling a running effect.
+    pub fn clear_default_scene_transition(&mut self) {
+        self.default_transition = None;
+    }
+
+    /// Last successful visual sample (or initial state before the first drawing).
+    /// A completed entering endpoint remains observable until the next normal frame.
+    pub fn transition_state(&self) -> Option<TransitionFrame> {
+        self.active_transition
+            .as_ref()
+            .map(|transition| transition.sample)
+    }
+
+    pub fn is_transitioning(&self) -> bool {
+        self.active_transition.is_some()
+    }
+
     /// Queue a push at the safe boundary. Covered Scene state stays owned.
-    pub fn push_scene(&mut self, scene: impl Scene + 'static) {
-        self.command = Some(SceneCommand::Push(Box::new(scene)));
+    pub fn push_scene(&mut self, scene: impl Scene + 'static) -> SceneRequest<'_> {
+        SceneRequest::register(&mut self.command, SceneCommand::Push(Box::new(scene)))
     }
     /// Queue a pop. An empty final stack ends this App, not the host process.
-    pub fn pop_scene(&mut self) {
-        self.command = Some(SceneCommand::Pop(None));
+    pub fn pop_scene(&mut self) -> SceneRequest<'_> {
+        SceneRequest::register(&mut self.command, SceneCommand::Pop(None))
     }
     /// Queue a pop with a concrete business value (not an already boxed result).
-    pub fn pop_scene_with_result(&mut self, result: impl Any) {
-        self.command = Some(SceneCommand::Pop(Some(Box::new(result))));
+    pub fn pop_scene_with_result(&mut self, result: impl Any) -> SceneRequest<'_> {
+        SceneRequest::register(&mut self.command, SceneCommand::Pop(Some(Box::new(result))))
     }
     /// Replace only the top Scene. Old input completes before it enters;
-    /// on a faulted App, the next frame drains input and installs a new instance.
+    /// on a faulted App, recovery is instantaneous and cannot sample failed content.
     /// Covered Scenes are retained; use reset_scene to abandon the whole stack.
-    pub fn replace_scene(&mut self, scene: impl Scene + 'static) {
-        self.command = Some(SceneCommand::Replace(Box::new(scene)));
+    pub fn replace_scene(&mut self, scene: impl Scene + 'static) -> SceneRequest<'_> {
+        SceneRequest::register(&mut self.command, SceneCommand::Replace(Box::new(scene)))
     }
     /// Replace the whole stack, including any queued return values.
     /// This does not enter an intermediate exited state.
-    pub fn reset_scene(&mut self, scene: impl Scene + 'static) {
-        self.command = Some(SceneCommand::Reset(Box::new(scene)));
+    pub fn reset_scene(&mut self, scene: impl Scene + 'static) -> SceneRequest<'_> {
+        SceneRequest::register(&mut self.command, SceneCommand::Reset(Box::new(scene)))
     }
     /// Number of retained instances, including the active top (before commands).
     pub fn scene_count(&self) -> usize {
@@ -244,16 +311,16 @@ impl App {
             scene_frame.dt = 0.;
         }
         self.host_paused = false;
+        self.retire_transition();
         let mut switched = false;
         if self.state != AppState::Active {
             // Fault/exit recovery never replays the drained batch. Push/pop
             // cannot resume a failed instance; replacement/reset/exit are explicit.
-            self.check_stopped_command(self.command.as_ref())?;
+            self.check_stopped_command(self.command.as_ref().map(|request| &request.command))?;
             if self.command.is_none() {
                 return Ok(());
             }
-            self.install_command(scene_frame)?;
-            switched = true;
+            switched = self.install_command(scene_frame)?;
         } else {
             // Freeze Node targets before results, lifecycle or input callbacks
             // write signals. Node capture and Scene raw input are independent.
@@ -264,6 +331,10 @@ impl App {
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
                 frame: scene_frame,
+                transition: self
+                    .active_transition
+                    .as_ref()
+                    .map(|transition| transition.sample),
                 command: &mut self.command,
             };
             batched_result(|| entry.scene.event(SceneEvent::Input(&input), &mut ctx))
@@ -274,17 +345,29 @@ impl App {
         }
         globals(self, frame);
         batch(update);
-        if self.command.is_none() && !switched {
+        if self.command.is_none()
+            && !switched
+            && !self
+                .active_transition
+                .as_ref()
+                .is_some_and(|transition| transition.awaiting_resume)
+        {
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
                 frame: scene_frame,
+                transition: self
+                    .active_transition
+                    .as_ref()
+                    .map(|transition| transition.sample),
                 command: &mut self.command,
             };
             batched_result(|| entry.scene.update(&mut ctx)).context("Scene update")?;
         }
         if self.command.is_some() && !switched {
-            self.install_command(scene_frame)?;
-            switched = true;
+            switched = self.install_command(scene_frame)?;
+        }
+        if !switched && self.command.is_none() {
+            switched = self.advance_switch_boundary(scene_frame)?;
         }
         if self.state == AppState::Exited {
             return Ok(());
@@ -297,34 +380,100 @@ impl App {
         self.render_scene(scene_frame)
     }
 
-    fn render_scene(&mut self, frame: SceneFrame) -> Result<()> {
+    fn prepare_scene(&mut self, frame: SceneFrame, update_nodes: bool) -> Result<Vec<SceneRoot>> {
         let mut roots = self.collect_roots(frame)?;
         Self::prepare_roots(&roots)?;
-        // Capture all roots before callbacks, so cross-root writes cannot cause
-        // newly mounted nodes to update early or repeat an update.
-        let nodes = Self::validate_roots(&roots)?;
-        batch(|| {
-            Runtime::with(|rt| {
-                for node in nodes {
-                    rt.invoke_hook(node.id, |hooks| &mut hooks.update, &frame.dt);
-                }
-            })
-        });
-        roots = self.collect_roots(frame)?;
-        Self::prepare_roots(&roots)?;
+        if update_nodes {
+            // Snapshot the forest before hooks. Capture-only rendering never ticks it.
+            let nodes = Self::validate_roots(&roots)?;
+            batch(|| {
+                Runtime::with(|rt| {
+                    for node in nodes {
+                        rt.invoke_hook(node.id, |hooks| &mut hooks.update, &frame.dt);
+                    }
+                })
+            });
+            roots = self.collect_roots(frame)?;
+            Self::prepare_roots(&roots)?;
+        }
+        Ok(roots)
+    }
+
+    fn draw_scene(
+        &mut self,
+        frame: SceneFrame,
+        roots: &[SceneRoot],
+        transition: Option<TransitionFrame>,
+        transition_source: bool,
+    ) -> Result<Vec<SceneRoot>> {
         let mut render = SceneRender {
             frame,
-            prepared: &roots,
+            prepared: roots,
             drawn: Vec::new(),
+            transition,
+            transition_source,
         };
-        self.scenes
-            .last_mut()
-            .unwrap()
-            .scene
-            .render(&mut render)
-            .context("Scene render")?;
-        self.displayed = render.drawn;
+        let result = self.scenes.last_mut().unwrap().scene.render(&mut render);
+        if result.is_err() {
+            self.pictures.cleanup_scene_error();
+        }
+        result.context("Scene render")?;
+        Ok(render.drawn)
+    }
+
+    fn render_scene(&mut self, frame: SceneFrame) -> Result<()> {
+        let roots = self.prepare_scene(frame, true)?;
+        let sample = self
+            .active_transition
+            .as_mut()
+            .map(|transition| transition.clock.frame(frame.dt, frame.viewport));
+        let composite = self
+            .active_transition
+            .as_ref()
+            .is_some_and(|transition| transition.effect.is_composite());
+        let drawn = if composite {
+            self.pictures.begin_live(frame.viewport)?;
+            let drawn = self.draw_scene(frame, &roots, sample, false);
+            if drawn.is_ok() {
+                self.pictures.finish_live();
+            } else {
+                self.pictures.finish();
+            }
+            drawn?
+        } else {
+            self.draw_scene(frame, &roots, sample, false)?
+        };
+        if let Some(sample) = sample {
+            let active = self.active_transition.as_mut().unwrap();
+            if composite {
+                self.pictures
+                    .compose(sample, &mut active.effect)
+                    .context("Scene transition composite")?;
+            } else {
+                self.pictures
+                    .draw_overlay(sample, &mut active.effect)
+                    .context("Scene transition overlay")?;
+            }
+            // A terminal sample is acknowledged only after all drawing/flushes succeed.
+            active.clock.did_present();
+            active.sample = sample;
+        }
+        self.displayed = drawn;
         Ok(())
+    }
+
+    fn capture_source(&mut self, mut frame: SceneFrame) -> Result<()> {
+        frame.dt = 0.;
+        let roots = self.prepare_scene(frame, false)?;
+        self.pictures.begin_source(frame.viewport)?;
+        let drawn = self.draw_scene(frame, &roots, None, true);
+        if drawn.is_ok() {
+            self.pictures.finish_source();
+        } else {
+            self.pictures.finish();
+        }
+        // Current retained picture, not last-screen pixels. No input eligibility or updates.
+        drawn.map(|_| ())
     }
 
     fn activate(&mut self, frame: SceneFrame) -> Result<()> {
@@ -335,6 +484,10 @@ impl App {
         let mut ctx = SceneContext {
             frame,
             command: &mut self.command,
+            transition: self
+                .active_transition
+                .as_ref()
+                .map(|transition| transition.sample),
         };
         // Pop return values belong to the retained receiver, even if that receiver
         // was covered again before the host resumed. Consume each exactly once.
@@ -358,7 +511,7 @@ impl App {
         Ok(())
     }
 
-    fn pause_top(&mut self, frame: SceneFrame) -> Result<Option<SceneCommand>> {
+    fn pause_top(&mut self, frame: SceneFrame) -> Result<Option<SceneRequestData>> {
         if self.state != AppState::Active {
             return Ok(None);
         }
@@ -374,6 +527,10 @@ impl App {
             let mut ctx = SceneContext {
                 frame,
                 command: &mut command,
+                transition: self
+                    .active_transition
+                    .as_ref()
+                    .map(|transition| transition.sample),
             };
             batched_result(|| entry.scene.event(SceneEvent::Pause, &mut ctx))
                 .context("Scene pause")?;
@@ -394,11 +551,158 @@ impl App {
         Ok(())
     }
 
-    fn install_command(&mut self, frame: SceneFrame) -> Result<()> {
-        let Some(command) = self.command.take() else {
-            return Ok(());
+    fn cancel_transition(&mut self) {
+        drop(self.active_transition.take());
+        self.pictures.invalidate();
+    }
+
+    fn retire_transition(&mut self) {
+        if self
+            .active_transition
+            .as_ref()
+            .is_some_and(|transition| transition.clock.is_finished())
+        {
+            self.cancel_transition();
+        }
+    }
+
+    fn command_exits(&self, command: &SceneCommand) -> bool {
+        matches!(command, SceneCommand::Exit)
+            || matches!(command, SceneCommand::Pop(_)) && self.scenes.len() <= 1
+    }
+
+    fn install_command(&mut self, frame: SceneFrame) -> Result<bool> {
+        let Some(request) = self.command.take() else {
+            return Ok(false);
         };
-        self.commit_command(command, frame)
+        self.select_request(request, frame)
+    }
+
+    fn select_request(&mut self, mut request: SceneRequestData, frame: SceneFrame) -> Result<bool> {
+        // Keep the visual and destination aggregated across fallible capture work:
+        // error unwinding must drop the visual before any handles it may reference.
+        let reuse_picture = self
+            .active_transition
+            .as_ref()
+            .is_some_and(|active| active.effect.is_composite())
+            && (self.pictures.freeze_presented(frame.viewport)?
+                || !self.pictures.needs_source(frame.viewport)?);
+        drop(self.active_transition.take());
+        if !reuse_picture {
+            self.pictures.invalidate();
+        }
+        let entered_source = self.state == AppState::Active
+            && self
+                .scenes
+                .last()
+                .is_some_and(|entry| entry.state != SceneState::New);
+        if !entered_source {
+            // Recovery/never-entered sources have no valid outgoing picture. Commit
+            // instantly, even while suspended, without manufacturing Enter/Pause.
+            drop(mem::replace(
+                &mut request.transition,
+                TransitionChoice::Instant,
+            ));
+            self.pictures.invalidate();
+            self.commit_command(request.command, frame)?;
+            return Ok(true);
+        }
+        if matches!(request.transition, TransitionChoice::Default) {
+            request.transition = self
+                .default_transition
+                .as_mut()
+                .map_or(TransitionChoice::Instant, |factory| {
+                    TransitionChoice::Custom(factory())
+                });
+        }
+        let TransitionChoice::Custom(effect) = &request.transition else {
+            self.pictures.invalidate();
+            self.commit_command(request.command, frame)?;
+            return Ok(true);
+        };
+        let timing = effect.timing();
+        if matches!(timing, TransitionTiming::AfterSwitch(_))
+            && self.command_exits(&request.command)
+        {
+            // No entering Scene exists. An AroundSwitch exit can still animate this.
+            drop(mem::replace(
+                &mut request.transition,
+                TransitionChoice::Instant,
+            ));
+            self.pictures.invalidate();
+            self.commit_command(request.command, frame)?;
+            return Ok(true);
+        }
+        if matches!(timing, TransitionTiming::AfterSwitch(_))
+            && !self.host_paused
+            && effect.is_composite()
+            && !reuse_picture
+            && self.pictures.needs_source(frame.viewport)?
+        {
+            self.capture_source(frame)?;
+        }
+        let SceneRequestData {
+            transition: TransitionChoice::Custom(effect),
+            command,
+        } = request
+        else {
+            unreachable!("request effect was resolved above");
+        };
+        let wait = matches!(timing, TransitionTiming::AroundSwitch { .. }) || self.host_paused;
+        let mut active = ActiveTransition::new(effect, Some(command), frame.viewport);
+        active.awaiting_resume =
+            self.host_paused && matches!(timing, TransitionTiming::AfterSwitch(_));
+        self.active_transition = Some(active);
+        if wait {
+            return Ok(false);
+        }
+        let command = self
+            .active_transition
+            .as_mut()
+            .unwrap()
+            .pending
+            .take()
+            .unwrap();
+        self.commit_command(command, frame)?;
+        Ok(true)
+    }
+
+    fn advance_switch_boundary(&mut self, frame: SceneFrame) -> Result<bool> {
+        let Some(active) = self.active_transition.as_ref() else {
+            return Ok(false);
+        };
+        if self.host_paused || !(active.awaiting_resume || active.clock.ready_to_switch()) {
+            return Ok(false);
+        }
+        if active.awaiting_resume
+            && active.effect.is_composite()
+            && self.pictures.needs_source(frame.viewport)?
+        {
+            let can_draw_source = self
+                .scenes
+                .last()
+                .is_some_and(|entry| entry.state != SceneState::New);
+            if can_draw_source {
+                self.capture_source(frame)?;
+            }
+        }
+        let active = self.active_transition.as_mut().unwrap();
+        let command = active
+            .pending
+            .take()
+            .expect("outgoing transition owns its request");
+        active.awaiting_resume = false;
+        if self.command_exits(&command) {
+            self.cancel_transition();
+        } else {
+            let active = self.active_transition.as_mut().unwrap();
+            if active.clock.phase() == TransitionPhase::BeforeSwitch {
+                active.clock.after_switch()?;
+            }
+            active.sample = active.clock.frame(0., frame.viewport);
+        }
+        self.commit_command(command, frame)?;
+        Ok(true)
     }
 
     fn commit_command(&mut self, command: SceneCommand, mut frame: SceneFrame) -> Result<()> {
@@ -408,7 +712,15 @@ impl App {
         self.pointer_manager.cancel_input();
         self.displayed.clear();
         frame.dt = 0.;
-        let pause_request = self.pause_top(frame)?;
+        let pause_request = match self.pause_top(frame) {
+            Ok(request) => request,
+            Err(error) => {
+                // The selected destination is still local here. Drop its visual first.
+                self.cancel_transition();
+                drop(command);
+                return Err(error);
+            }
+        };
         if matches!(command, SceneCommand::Push(_)) {
             if let Some(request) = pause_request {
                 self.command = Some(request);
@@ -537,6 +849,7 @@ impl App {
     fn fault(&mut self) {
         self.state = AppState::Faulted;
         self.command = None;
+        self.cancel_transition();
         self.displayed.clear();
         self.pointer_manager.cancel_input();
     }
@@ -571,9 +884,12 @@ impl App {
         self.host_paused = true;
         // Fix this frame's command before pause can queue another one. Lifecycle
         // requests during this boundary must wait, even without normal rendering.
-        let selected = self.command.take();
+        let mut selected = self.command.take();
         let paused = self.pause_scene(frame).map(|request| {
-            if matches!(selected.as_ref(), None | Some(SceneCommand::Push(_))) {
+            if matches!(
+                selected.as_ref().map(|request| &request.command),
+                None | Some(SceneCommand::Push(_))
+            ) {
                 if let Some(request) = request {
                     self.command = Some(request);
                 }
@@ -583,16 +899,19 @@ impl App {
             }
         });
         if paused.is_err() {
+            // A selected child/visual can borrow source handles. Drop before globals
+            // can recover/reset and release that source after a failed pause.
+            drop(selected.take());
             self.fault();
         }
         // Non-GPU work still ticks exactly once, including a failed pause frame.
         globals(self);
         let result = paused.and_then(|()| {
-            self.check_stopped_command(selected.as_ref())?;
-            if let Some(command) = selected {
-                // Leave pause/task requests owned by self.command. They wait for
-                // the next frame, or are dropped before the stack if this is exit.
-                self.commit_command(command, frame)?;
+            self.check_stopped_command(selected.as_ref().map(|request| &request.command))?;
+            if let Some(request) = selected {
+                // Animated requests wait for rendering; instantaneous commands retain
+                // the original suspended commit/results-deferred contract.
+                self.select_request(request, frame)?;
             }
             Ok(())
         });
@@ -602,7 +921,7 @@ impl App {
         result
     }
 
-    fn pause_scene(&mut self, frame: SceneFrame) -> Result<Option<SceneCommand>> {
+    fn pause_scene(&mut self, frame: SceneFrame) -> Result<Option<SceneRequestData>> {
         self.host_paused = true;
         // Keep the last display's hit geometry when the top is unchanged. Fresh
         // input on the first resumed frame must still reach that displayed UI.

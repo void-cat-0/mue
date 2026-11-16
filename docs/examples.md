@@ -8,7 +8,9 @@ The workspace examples cover the public UI API and local host integration patter
 - `animation`: reactive style transitions;
 - `document` and `atlas`: typography and glyph atlas behavior;
 - [`scenes`](../examples/scenes/README.md): retained Scene stack, push/pop business results, preserved gameplay/UI state, independent host/game pause, multiple Node roots and interleaved drawing;
-- [`scene-flow`](../examples/scene-flow/README.md): cancellable/fallible CPU loading, normal-frame GPU handoff, explicit start, completion/retry/return, and GPU-only Scene-picture crossfade;
+- [`scene-flow`](../examples/scene-flow/README.md): cancellable/fallible CPU loading, normal-frame GPU handoff, explicit start, completion/retry/return, and public GPU-only Scene-picture crossfade;
+- [`scene-transitions`](../examples/scene-transitions/README.md): ordinary interactive use of the public [Scene transition API](scene-transitions.md), built-in fade, custom slide composite and two-phase overlay cover;
+- [`song-transition`](<../examples/song-transition/README.md>): song-card artwork expansion/return, retained selection/scroll, and an application-owned settings Scene; explicit read-only signals, reusable artwork ownership and Dark/Light/reduced-motion preferences without a framework global container;
 - `portal`: a concrete external renderer, texture composition, frame-start chart input, and a modal pause UI; its input and coordinate helpers are local to the example;
 - [`input-timing`](../examples/input-timing/README.md): a 1–2 FPS visual comparison of pointer hit-testing against the last displayed Node tree versus the next layout; run with `cargo run -p input-timing --offline -- --fps 1`;
 - `nodes`, `basics`, `color`, `gestures`, `pages`, and `tab`: layout, input, graphics, and same-level page selection.

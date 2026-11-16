@@ -66,6 +66,9 @@ fn app(scene: impl Scene + 'static) -> App {
         state: AppState::Active,
         host_paused: false,
         command: None,
+        active_transition: None,
+        default_transition: None,
+        pictures: PictureCache::headless(),
         displayed: Vec::new(),
         pointer_manager: PointerManager::headless(),
     }
@@ -745,6 +748,65 @@ fn loading_ui_hold_replaces_after_old_batch_and_game_receives_next_move_up_witho
     assert_eq!(game_taps.get(), 1);
     assert_eq!(count(&log, "game", "enter"), 1);
     assert_eq!(globals.get(), 4);
+}
+
+#[test]
+fn mouse_leave_cancels_node_capture_without_filtering_scene_raw_motion_or_up() {
+    let log = Log::default();
+    let raw = RawInput::default();
+    let taps = Rc::new(Cell::new(0));
+    let root = full_leaf(
+        Style::new()
+            .on_pointer_event(record_pointer(log.clone(), "node"))
+            .on_tap({
+                let taps = taps.clone();
+                move |_| taps.set(taps.get() + 1)
+            }),
+    );
+    let roots = vec![SceneRoot::new(*root, Rect::new(20., 30., 60., 60.))];
+    let mut scene = Probe::new("scene", log.clone(), vec![root], roots);
+    scene.input = Some(record_input(raw.clone()));
+    let mut app = app(scene);
+    let globals = Cell::new(0);
+    run(&mut app, empty(), &globals).unwrap();
+
+    let down = InputBatch::recorded(|events| {
+        events.mouse_button_down_event(MouseButton::Left, 30.25, 40.5);
+    });
+    let mut expected = down.events().to_vec();
+    run(&mut app, down, &globals).unwrap();
+    assert_eq!(count(&log, "node", "down"), 1);
+
+    let outside = InputBatch::recorded(|events| {
+        events.mouse_leave_event();
+        events.mouse_motion_event(-8.25, -3.5);
+        events.touch_event(TouchPhase::Moved, 703, 33.25, 43.5, 91.125);
+        events.mouse_button_up_event(MouseButton::Left, -6.25, -2.5);
+        events.touch_event(TouchPhase::Ended, 703, 33.5, 43.75, 91.25);
+        events.mouse_wheel_event(0.5, -1.25);
+    });
+    expected.extend_from_slice(outside.events());
+    run(&mut app, outside, &globals).unwrap();
+    assert_raw_events(&raw.borrow(), &expected);
+    assert_eq!(count(&log, "node", "cancel"), 1);
+    assert_eq!(count(&log, "node", "up"), 0);
+    assert_eq!(
+        taps.get(),
+        0,
+        "an outside release cannot complete a canceled tap"
+    );
+
+    let reentered = InputBatch::recorded(|events| {
+        events.mouse_enter_event(MouseButton::Unknown, 31.25, 41.5);
+        events.mouse_button_down_event(MouseButton::Left, 31.5, 41.75);
+        events.mouse_button_up_event(MouseButton::Left, 31.75, 42.);
+    });
+    expected.extend_from_slice(reentered.events());
+    run(&mut app, reentered, &globals).unwrap();
+    assert_raw_events(&raw.borrow(), &expected);
+    assert_eq!(count(&log, "node", "down"), 2);
+    assert_eq!(count(&log, "node", "up"), 1);
+    assert_eq!(taps.get(), 1, "re-entry permits a fresh physical press");
 }
 
 #[test]
@@ -1595,6 +1657,8 @@ fn draw_rejects_unsubmitted_duplicate_and_disposed_roots_without_drawing_them() 
         frame: frame(),
         prepared: &prepared,
         drawn: Vec::new(),
+        transition: None,
+        transition_source: false,
     };
     assert!(render.draw(*unsubmitted).is_err());
     assert_eq!(rendered.get(), 0);

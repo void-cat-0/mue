@@ -1,7 +1,11 @@
 use indexmap::IndexSet;
 use mue_core::{batch, signal::Signal};
 
-use crate::{math::Vector, node::NodeRef, runtime::Runtime};
+use crate::{
+    math::{Rect, Vector},
+    node::NodeRef,
+    runtime::Runtime,
+};
 
 use super::hit_test::hit_test;
 
@@ -10,6 +14,8 @@ use super::hit_test::hit_test;
 pub(crate) struct HoverState {
     position: Option<Vector>,
     focused: bool,
+    outside: bool,
+    window_bounds: Option<Rect>,
     path: IndexSet<NodeRef>,
 }
 
@@ -18,29 +24,67 @@ impl Default for HoverState {
         Self {
             position: None,
             focused: true,
+            outside: false,
+            window_bounds: None,
             path: IndexSet::new(),
         }
     }
 }
 
 impl HoverState {
-    pub(crate) fn observe_mouse(&mut self, position: Vector) {
-        self.position = (self.focused && position.is_finite()).then_some(position);
+    pub(crate) fn set_window_bounds(&mut self, bounds: Option<Rect>) {
+        self.window_bounds = bounds.filter(|bounds| {
+            bounds.min().is_finite() && bounds.max().is_finite() && bounds.w > 0. && bounds.h > 0.
+        });
+        // A resize changes hover geometry, not the physical contact lifecycle.
+        // Only a fresh mouse event or native leave may cancel mouse capture.
+    }
+
+    fn inside_window(&self, position: Vector) -> bool {
+        self.window_bounds.is_none_or(|bounds| {
+            position.x >= bounds.x
+                && position.x < bounds.right()
+                && position.y >= bounds.y
+                && position.y < bounds.bottom()
+        })
+    }
+
+    pub(crate) fn observe_mouse(&mut self, position: Vector) -> bool {
+        // Captured native events may continue outside the window after leave.
+        // They remain raw Scene input, but cannot establish a UI mouse route.
+        let valid = self.focused
+            && position.is_finite()
+            && self.inside_window(position)
+            && (!self.outside || self.window_bounds.is_some());
+        self.position = valid.then_some(position);
+        if valid {
+            // A fresh in-window position also confirms re-entry when capture
+            // prevents the platform from reporting a separate native enter.
+            self.outside = false;
+        }
+        valid
+    }
+
+    pub(crate) fn enter_mouse(&mut self, position: Vector) -> bool {
+        self.outside = false;
+        self.observe_mouse(position)
     }
 
     pub(crate) fn leave(&mut self) {
         self.position = None;
+        self.outside = true;
     }
 
     pub(crate) fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
         // A restored window needs a new enter/move/button position confirmation.
-        self.leave();
+        self.position = None;
+        self.outside = false;
     }
 
     pub(crate) fn rehit(&mut self, root: NodeRef) -> IndexSet<NodeRef> {
         let next = self
-            .position
+            .position()
             .map_or_else(IndexSet::new, |pos| hit_test(root, pos));
         self.update_path(next.clone());
         next
@@ -48,6 +92,7 @@ impl HoverState {
 
     pub(crate) fn position(&self) -> Option<Vector> {
         self.position
+            .filter(|position| self.inside_window(*position))
     }
 
     pub(crate) fn update_path(&mut self, next: IndexSet<NodeRef>) {
@@ -170,7 +215,39 @@ mod tests {
         assert!(!hover.rehit(node.0).is_empty());
         hover.leave();
         assert!(hover.rehit(node.0).is_empty());
-        hover.observe_mouse(vec2(f32::NAN, 5.));
+        assert!(!hover.observe_mouse(vec2(5., 5.)));
         assert!(hover.rehit(node.0).is_empty());
+        assert!(!hover.enter_mouse(vec2(f32::NAN, 5.)));
+        assert!(hover.rehit(node.0).is_empty());
+        assert!(hover.enter_mouse(vec2(10., 5.)));
+        assert!(!hover.rehit(node.0).is_empty());
+    }
+
+    #[test]
+    fn window_bounds_reject_outside_positions_and_confirm_fresh_reentry() {
+        let mut hover = HoverState::default();
+        hover.set_window_bounds(Some(Rect::new(0., 0., 100., 60.)));
+        assert!(hover.observe_mouse(vec2(0., 0.)));
+        assert!(hover.observe_mouse(vec2(99., 59.)));
+        hover.leave();
+        for position in [
+            vec2(-1., 5.),
+            vec2(5., -1.),
+            vec2(100., 5.),
+            vec2(5., 60.),
+            vec2(f32::NAN, 5.),
+        ] {
+            assert!(!hover.observe_mouse(position));
+            assert!(hover.position().is_none());
+        }
+        // Capture may suppress enter; a new geometry-confirmed motion is enough.
+        assert!(hover.observe_mouse(vec2(25., 5.)));
+        assert_eq!(hover.position(), Some(vec2(25., 5.)));
+        hover.set_focused(false);
+        assert!(!hover.enter_mouse(vec2(30., 5.)));
+        hover.set_focused(true);
+        assert!(hover.position().is_none());
+        assert!(!hover.observe_mouse(vec2(101., 5.)));
+        assert!(hover.observe_mouse(vec2(35., 5.)));
     }
 }

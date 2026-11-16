@@ -3,6 +3,7 @@ use crate::{
     input::InputBatch,
     math::{Rect, Vector},
     node::{Node, NodeRef},
+    scene_transition::{SceneTransition, TransitionFrame},
 };
 use anyhow::{Result, ensure};
 use std::any::Any;
@@ -95,36 +96,96 @@ pub(crate) enum SceneCommand {
     Exit,
 }
 
+pub(crate) enum TransitionChoice {
+    Default,
+    Instant,
+    Custom(SceneTransition),
+}
+
+pub(crate) struct SceneRequestData {
+    // A visual closure may borrow handles from a queued destination. Drop it first.
+    pub(crate) transition: TransitionChoice,
+    pub(crate) command: SceneCommand,
+}
+impl SceneRequestData {
+    pub(crate) fn new(command: SceneCommand) -> Self {
+        Self {
+            transition: TransitionChoice::Default,
+            command,
+        }
+    }
+}
+
+/// Configure an already registered, deferred Scene request.
+///
+/// Ignoring this value still leaves the request queued; Drop never commits it.
+/// A later request replaces the earlier request and its transition together.
+/// Without an override, App resolves its default factory at the safe boundary.
+pub struct SceneRequest<'a> {
+    data: &'a mut SceneRequestData,
+}
+impl<'a> SceneRequest<'a> {
+    pub(crate) fn register(slot: &'a mut Option<SceneRequestData>, command: SceneCommand) -> Self {
+        *slot = Some(SceneRequestData::new(command));
+        Self {
+            data: slot.as_mut().unwrap(),
+        }
+    }
+
+    /// Override the App default for this request only.
+    pub fn transition(self, transition: SceneTransition) -> Self {
+        self.data.transition = TransitionChoice::Custom(transition);
+        self
+    }
+
+    /// Bypass both the App default and any previously configured effect.
+    pub fn without_transition(self) -> Self {
+        self.data.transition = TransitionChoice::Instant;
+        self
+    }
+}
+
 /// Frame data and a deferred request applied after input and update callbacks.
 pub struct SceneContext<'a> {
     pub frame: SceneFrame,
-    pub(crate) command: &'a mut Option<SceneCommand>,
+    pub(crate) command: &'a mut Option<SceneRequestData>,
+    pub(crate) transition: Option<TransitionFrame>,
 }
 impl SceneContext<'_> {
+    /// Last successfully presented transition state; never a prediction of input geometry.
+    /// A switching lifecycle callback sees the new phase at its initial progress.
+    pub fn transition(&self) -> Option<TransitionFrame> {
+        self.transition
+    }
+
+    pub fn is_transitioning(&self) -> bool {
+        self.transition.is_some()
+    }
+
     /// Cover the current Scene without dropping it. Only the new top is scheduled.
     /// The current Scene pauses before the new Scene enters at the safe boundary.
-    pub fn push(&mut self, scene: impl Scene + 'static) {
-        *self.command = Some(SceneCommand::Push(Box::new(scene)));
+    pub fn push(&mut self, scene: impl Scene + 'static) -> SceneRequest<'_> {
+        SceneRequest::register(self.command, SceneCommand::Push(Box::new(scene)))
     }
     /// Pop the active top at the next safe boundary. Removing the last Scene
     /// ends the App, not the host process. Requests target the top at commit time.
-    pub fn pop(&mut self) {
-        *self.command = Some(SceneCommand::Pop(None));
+    pub fn pop(&mut self) -> SceneRequest<'_> {
+        SceneRequest::register(self.command, SceneCommand::Pop(None))
     }
     /// Pop and deliver an owned business result to the newly exposed Scene before
     /// it resumes. A result without a receiving Scene is dropped normally.
     /// Pass the concrete business value, not an already boxed SceneResult.
-    pub fn pop_with_result(&mut self, result: impl Any) {
-        *self.command = Some(SceneCommand::Pop(Some(Box::new(result))));
+    pub fn pop_with_result(&mut self, result: impl Any) -> SceneRequest<'_> {
+        SceneRequest::register(self.command, SceneCommand::Pop(Some(Box::new(result))))
     }
     /// Replace only the top Scene, preserving any covered Scenes below it.
     /// A later request in the same frame replaces the earlier request.
-    pub fn replace(&mut self, scene: impl Scene + 'static) {
-        *self.command = Some(SceneCommand::Replace(Box::new(scene)));
+    pub fn replace(&mut self, scene: impl Scene + 'static) -> SceneRequest<'_> {
+        SceneRequest::register(self.command, SceneCommand::Replace(Box::new(scene)))
     }
     /// End the whole App and release its stack. The host owns loop termination.
-    pub fn exit(&mut self) {
-        *self.command = Some(SceneCommand::Exit);
+    pub fn exit(&mut self) -> SceneRequest<'_> {
+        SceneRequest::register(self.command, SceneCommand::Exit)
     }
 }
 
@@ -171,8 +232,21 @@ pub struct SceneRender<'a> {
     pub frame: SceneFrame,
     pub(crate) prepared: &'a [SceneRoot],
     pub(crate) drawn: Vec<SceneRoot>,
+    pub(crate) transition: Option<TransitionFrame>,
+    pub(crate) transition_source: bool,
 }
 impl SceneRender<'_> {
+    /// Transition sample used for this drawing, before presentation is acknowledged.
+    pub fn transition(&self) -> Option<TransitionFrame> {
+        self.transition
+    }
+
+    /// This drawing captures the outgoing picture, not a new displayed frame.
+    /// It never advances Scene or Node updates or changes input eligibility.
+    pub fn is_transition_source(&self) -> bool {
+        self.transition_source
+    }
+
     pub fn draw(&mut self, node: NodeRef) -> Result<()> {
         let root = self
             .prepared

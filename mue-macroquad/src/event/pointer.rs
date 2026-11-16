@@ -19,7 +19,7 @@ use crate::{
     },
     gesture::GestureId,
     input::{InputBatch, InputEvent, InputSubscriber},
-    math::Vector,
+    math::{Rect, Vector},
     node::NodeRef,
     runtime::Runtime,
     scene::{RootInput, SceneRoot},
@@ -35,6 +35,15 @@ fn screen_scale() -> f32 {
     } else {
         1.
     }
+}
+
+fn screen_bounds() -> Rect {
+    Rect::new(
+        0.,
+        0.,
+        macroquad::window::screen_width(),
+        macroquad::window::screen_height(),
+    )
 }
 
 fn input_time() -> f32 {
@@ -275,10 +284,13 @@ impl InputPlan {
             let position = match *event {
                 InputEvent::MouseMotion { x, y }
                 | InputEvent::MouseDown { x, y, .. }
-                | InputEvent::MouseUp { x, y, .. }
-                | InputEvent::MouseEnter { x, y, .. } => {
+                | InputEvent::MouseUp { x, y, .. } => {
                     let pos = vec2(x / dpi, y / dpi);
                     mouse.observe_mouse(pos);
+                    mouse.position()
+                }
+                InputEvent::MouseEnter { x, y, .. } => {
+                    mouse.enter_mouse(vec2(x / dpi, y / dpi));
                     mouse.position()
                 }
                 InputEvent::Touch {
@@ -528,11 +540,13 @@ impl PointerManager {
         // Native touch tracks already drive taps, drags and gestures. Otherwise
         // Macroquad also emits a mouse stream for every finger.
         macroquad::input::simulate_mouse_with_touch(false);
+        let mut hover = HoverState::default();
+        hover.set_window_bounds(Some(screen_bounds()));
         Self {
             root_node: NodeRef::null(),
             subscriber: Some(InputSubscriber::new()),
             tracks: HashMap::new(),
-            hover: HoverState::default(),
+            hover,
             dpi_scale: screen_scale(),
             planned_path: None,
         }
@@ -591,13 +605,12 @@ impl PointerManager {
     }
 
     pub(crate) fn process_input(&mut self, root_node: NodeRef, input: &InputBatch) {
-        self.dpi_scale = screen_scale();
+        self.update_window_metrics();
         self.root_node = root_node;
-        let hover = if input.is_interrupted() {
-            HoverState::default()
-        } else {
-            self.hover.clone()
-        };
+        let mut hover = self.hover.clone();
+        if input.is_interrupted() {
+            hover.set_focused(true);
+        }
         let plan = InputPlan::new(root_node, input, &hover, self.dpi_scale);
         // Cancellation callbacks may mutate UI too, so plan before invoking them.
         self.handle_interruption(input);
@@ -607,18 +620,23 @@ impl PointerManager {
     /// Freeze Node targets before lifecycle, cancellation or input callbacks.
     /// Scene receives the original InputBatch independently of this plan.
     pub(crate) fn plan_roots(&mut self, roots: &[SceneRoot], input: &InputBatch) -> InputPlan {
-        // Headless managers deliberately retain their supplied scale.
-        if self.subscriber.is_some() {
-            self.dpi_scale = screen_scale();
+        self.update_window_metrics();
+        let mut hover = self.hover.clone();
+        if input.is_interrupted() {
+            hover.set_focused(true);
         }
-        let hover = if input.is_interrupted() {
-            HoverState::default()
-        } else {
-            self.hover.clone()
-        };
         InputPlan::with_hit_test(input, &hover, self.dpi_scale, |pos| {
             hit_roots(roots, pos, true)
         })
+    }
+
+    fn update_window_metrics(&mut self) {
+        // Headless managers retain their pure test parameters and never read a
+        // graphics context. Production event coordinates and bounds are logical.
+        if self.subscriber.is_some() {
+            self.dpi_scale = screen_scale();
+            self.hover.set_window_bounds(Some(screen_bounds()));
+        }
     }
 
     /// Dispatch precomputed Node routes without modifying the raw Scene batch.
@@ -736,7 +754,7 @@ impl PointerManager {
     }
 
     fn invalidate_mouse(&mut self) {
-        self.hover.leave();
+        // The caller has already cleared/updated the mouse boundary state.
         self.refresh_hover(false);
         // Capture never keeps a pointer alive after leaving the window.
         if let Some(track) = self.tracks.get(&PointerId::MOUSE) {
@@ -887,7 +905,10 @@ impl EventHandler for PointerManager {
 
     fn mouse_motion_event(&mut self, x: f32, y: f32) {
         let pos = self.logical_position(x, y);
-        self.hover.observe_mouse(pos);
+        if !self.hover.observe_mouse(pos) {
+            self.invalidate_mouse();
+            return;
+        }
         self.on_pointer_move(PointerId::MOUSE, PointerType::Mouse, pos);
         self.refresh_hover(true);
     }
@@ -895,7 +916,10 @@ impl EventHandler for PointerManager {
     fn mouse_button_down_event(&mut self, button: MouseButton, x: f32, y: f32) {
         let button_state = ButtonState::from_mouse_button(button);
         let pos = self.logical_position(x, y);
-        self.hover.observe_mouse(pos);
+        if !self.hover.observe_mouse(pos) {
+            self.invalidate_mouse();
+            return;
+        }
         self.on_pointer_button_down(PointerId::MOUSE, PointerType::Mouse, button_state, pos);
         self.refresh_hover(true);
     }
@@ -903,7 +927,10 @@ impl EventHandler for PointerManager {
     fn mouse_button_up_event(&mut self, button: MouseButton, x: f32, y: f32) {
         let button_state = ButtonState::from_mouse_button(button);
         let pos = self.logical_position(x, y);
-        self.hover.observe_mouse(pos);
+        if !self.hover.observe_mouse(pos) {
+            self.invalidate_mouse();
+            return;
+        }
         let unmatched_capture = self.tracks.get(&PointerId::MOUSE).is_some_and(|track| {
             !track.event.is_hover && !track.event.button_state.contains(button_state)
         });
@@ -918,12 +945,19 @@ impl EventHandler for PointerManager {
     }
 
     fn mouse_leave_event(&mut self) {
+        self.hover.leave();
         self.invalidate_mouse();
     }
 
     fn mouse_enter_event(&mut self, _button: MouseButton, x: f32, y: f32) {
         // The platform supplies a fresh position; entering is not a button press.
-        self.mouse_motion_event(x, y);
+        let pos = self.logical_position(x, y);
+        if !self.hover.enter_mouse(pos) {
+            self.invalidate_mouse();
+            return;
+        }
+        self.on_pointer_move(PointerId::MOUSE, PointerType::Mouse, pos);
+        self.refresh_hover(true);
     }
 
     fn window_minimized_event(&mut self) {
@@ -958,6 +992,8 @@ impl EventHandler for PointerManager {
 
 #[cfg(test)]
 mod batch_tests;
+#[cfg(test)]
+mod boundary_tests;
 #[cfg(test)]
 mod scene_tests;
 
