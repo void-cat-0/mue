@@ -4,7 +4,7 @@ use crate::{layout::use_layout, paint::use_background, style::Style};
 /// A flex container. The default direction is a row.
 #[mue_macros::node]
 pub fn flexbox(ctx: NodeContext) -> Node {
-    ctx.finish(Style::new(), move |style| {
+    ctx.finish_without_defaults(move |style| {
         use_container(style);
     })
 }

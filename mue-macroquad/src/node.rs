@@ -355,7 +355,7 @@ impl Node {
     }
     /// Create a leaf node without styles.
     pub fn empty() -> Self {
-        Self::leaf(Style::new(), |_| {})
+        NodeContext::new().finish_without_defaults(|_| {})
     }
 
     pub fn retain_owned_scope(&self, scope: OwnedScope) {
@@ -366,10 +366,10 @@ impl Node {
     pub fn leaf(style: Style, body: impl FnOnce(&mut Style)) -> Self {
         let mut context = NodeContext::new();
         context.push_style(style);
-        context.finish(Style::new(), body)
+        context.finish_without_defaults(body)
     }
 
-    fn finish_parts(owner: OwnedScope, mut style: Style, body: impl FnOnce(&mut Style)) -> Node {
+    fn finish_parts(owner: OwnedScope, style: &mut Style, body: impl FnOnce(&mut Style)) -> Node {
         // A panic inside `body` unwinds out of the application: the runtime does not
         // attempt to recover, so the node stays on the CONTEXT stack and is not disposed.
         let scope = owner.scope();
@@ -378,8 +378,8 @@ impl Node {
             let mut node = NodeInner::new(scope, children);
             node.owned_scopes.push(owner);
             CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
-            crate::transition::bind_style(&mut style);
-            crate::paint::bind_node_style(&mut style);
+            crate::transition::bind_style(style);
+            crate::paint::bind_node_style(style);
             let font_size = style.declared_font_size();
             let matrix = style.take_matrix_transform();
             let transforms = style.take_transform_list();
@@ -403,7 +403,7 @@ impl Node {
                 let children = plan.into_children();
                 NodeInner::with_mut(|node| node.children = children);
             }
-            body(&mut style);
+            body(style);
             let clip_radius = style.take_clip_radius();
             let clip_radius = crate::style::units::resolve_length(clip_radius, "clip-radius");
             if !matches!(clip_radius, Prop::Static(value) if value <= 0.) {
@@ -417,7 +417,7 @@ impl Node {
                 let after_children = std::mem::take(&mut node.hooks.after_children);
                 node.hooks = style.build_hooks();
                 node.hooks.after_children = after_children;
-                append_hooks(node, &mut style);
+                append_hooks(node, style);
             });
             // Acquire arena access before removing the node from its stack.
             let id = Runtime::with(|rt| {

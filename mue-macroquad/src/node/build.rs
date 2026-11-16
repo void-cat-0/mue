@@ -56,16 +56,22 @@ impl NodeContext {
         self.owner.scope()
     }
     #[doc(hidden)]
-    pub fn push_style(&mut self, style: Style) {
-        self.style.provide_defaults(style);
+    pub fn push_style(&mut self, mut style: Style) {
+        self.style.provide_defaults_mut(&mut style);
     }
 
     /// Complete this node: merge defaults, bind the parent's state, materialize
     /// declared children, then run `body` with the resulting style. The callback
     /// runs synchronously and is never retained by the node.
-    pub fn finish(self, defaults: Style, body: impl FnOnce(&mut Style)) -> Node {
+    pub fn finish(self, mut defaults: Style, body: impl FnOnce(&mut Style)) -> Node {
         let Self { owner, mut style } = self;
-        style.provide_defaults(defaults);
-        Node::finish_parts(owner, style, body)
+        style.provide_defaults_mut(&mut defaults);
+        // Conflicting defaults are discarded before binding or constructing children.
+        drop(defaults);
+        Node::finish_parts(owner, &mut style, body)
+    }
+
+    pub(crate) fn finish_without_defaults(mut self, body: impl FnOnce(&mut Style)) -> Node {
+        Node::finish_parts(self.owner, &mut self.style, body)
     }
 }

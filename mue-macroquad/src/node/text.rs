@@ -457,7 +457,7 @@ fn build_retained_text(
 /// Display a plain reactive string with the renderer's text node.
 #[mue_macros::node]
 pub fn text(ctx: NodeContext, text: Rc<str>) -> Node {
-    ctx.finish(Style::new(), move |style| {
+    ctx.finish_without_defaults(move |style| {
         let spans = text.map(|value| vec![Span::new(value.to_string())]);
         use_spans(style, spans);
     })

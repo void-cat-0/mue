@@ -7,7 +7,6 @@ use crate::{
     node::{Node, NodeContext},
     paint::use_paint,
     shader::SharedTexture,
-    style::Style,
 };
 
 /// The normalized UV rect used to draw a render-target texture.
@@ -39,7 +38,7 @@ fn portal_uv(flip_y: bool) -> Rect {
 /// ratio.
 #[mue_macros::node]
 pub fn portal(ctx: NodeContext, texture: SharedTexture, #[default(true)] flip_y: bool) -> Node {
-    ctx.finish(Style::new(), move |style| {
+    ctx.finish_without_defaults(move |style| {
         let rect = use_layout(style).rect;
         let paint = use_paint(style);
         let shapes = paint.build(move |p| {

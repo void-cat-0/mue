@@ -9,7 +9,6 @@ use crate::{
         Shapes, current_clip_logical, current_transform, rect_visible, retained_enabled,
         transform_rect, use_paint,
     },
-    style::Style,
 };
 use macroquad::retained::{self, RetainedMesh, RetainedVertex};
 
@@ -42,7 +41,7 @@ fn vertex_bounds(vertices: &[RetainedVertex]) -> Option<Rect> {
 #[mue_macros::node]
 pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
     let retained_static = matches!(&shapes, mue_core::prop::Prop::Static(_));
-    ctx.finish(Style::new(), move |style| {
+    ctx.finish_without_defaults(move |style| {
         let rect = use_layout(style).rect;
         let paint = use_paint(style);
         let cache = Rc::new(RefCell::new(RetainedShapeCache::default()));

@@ -22,12 +22,16 @@ impl Declarations {
     pub fn expand(self) -> Result<TokenStream> {
         let host = crate::paths::host()?;
         let style = Ident::new("__style", Span::mixed_site());
+        let storage = Ident::new("__style_storage", Span::mixed_site());
         let statements = self.0;
         Ok(quote!({
             use #host::style::{Styleable as _, StyleableExt as _};
-            let mut #style = #host::style::Style::new();
-            #(#style = #statements;)*
-            #style
+            let mut #storage = #host::style::Style::new();
+            {
+                let mut #style = &mut #storage;
+                #(#style = #statements;)*
+            }
+            #storage
         }))
     }
 }

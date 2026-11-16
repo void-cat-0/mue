@@ -171,8 +171,10 @@ macro_rules! define_style {
 
                 /// Apply a style, replacing properties explicitly set by it.
                 fn style(mut self, mut style: Style) -> Self {
-                    style.provide_defaults(mem::take(self.style_mut()));
-                    *self.style_mut() = style;
+                    style.provide_defaults_mut(self.style_mut());
+                    let target = self.style_mut();
+                    target.clear();
+                    mem::swap(target, &mut style);
                     self
                 }
                 $(define_style!(@setter $(#[$property_doc])* $name, $ty);)*
@@ -228,6 +230,7 @@ macro_rules! define_style {
                 }
             }
             impl Styleable for Style { fn style_mut(&mut self) -> &mut Style { self } }
+            impl Styleable for &mut Style { fn style_mut(&mut self) -> &mut Style { &mut **self } }
 
             impl Style {
                 pub(crate) fn bind_explicit_transitions(&mut self, transition: Prop<crate::transition::Transition>) {
@@ -251,6 +254,10 @@ macro_rules! define_style {
                 }
                 /// Fill missing properties and prepend the default hooks.
                 pub fn provide_defaults(&mut self, mut default: Self) {
+                    self.provide_defaults_mut(&mut default);
+                }
+                /// Merge a borrowed input without moving its complete storage through the call chain.
+                pub(crate) fn provide_defaults_mut(&mut self, default: &mut Self) {
                     define_style!(@defaults self, default, $($name),*);
                     $(define_style!(@rect_defaults self, default, $rect_name);)*
                     $(
@@ -259,6 +266,22 @@ macro_rules! define_style {
                     )*
                     if self.children.is_none() { self.children = default.children.take(); }
                     self.append_hover_owners(mem::take(&mut default.hover_owners));
+                    // Release rejected inputs only after the complete merge, in the same
+                    // field order as dropping an owned Style. In particular, a rejected
+                    // child plan must be gone before installing the resulting style.
+                    default.clear();
+                }
+                fn clear(&mut self) {
+                    $(let _ = self.$name.take();)*
+                    $(
+                        let _ = self.[<$rect_name _left>].take();
+                        let _ = self.[<$rect_name _right>].take();
+                        let _ = self.[<$rect_name _top>].take();
+                        let _ = self.[<$rect_name _bottom>].take();
+                    )*
+                    $(let _ = mem::take(&mut self.$hook_name);)*
+                    drop(self.children.take());
+                    drop(mem::take(&mut self.hover_owners));
                 }
                 $(define_style!(@accessor $name, $ty, $($default)?);)*
                 $(
