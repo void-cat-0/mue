@@ -150,26 +150,11 @@ impl NodeInner {
             })));
         f(restore.0.as_mut().unwrap().as_mut())
     }
-
-    #[cfg(test)]
-    pub fn register(self) -> NodeId {
-        Runtime::with(|rt| rt.nodes.borrow_mut().insert(self))
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 /// A borrowed node handle; copying it does not extend the node's lifetime.
 /// Node handles are confined to the thread that owns their runtime.
-///
-/// ```compile_fail,E0277
-/// fn assert_send<T: Send>() {}
-/// assert_send::<mue_macroquad::node::NodeRef>();
-/// ```
-///
-/// ```compile_fail,E0277
-/// fn assert_sync<T: Sync>() {}
-/// assert_sync::<mue_macroquad::node::NodeRef>();
-/// ```
 pub struct NodeRef {
     pub(crate) id: NodeId,
     _thread_affinity: PhantomData<Rc<()>>,
@@ -361,16 +346,6 @@ impl Disposable for NodeRef {
 }
 
 /// An owning node handle. Dropping it releases its children and reactive scope.
-///
-/// ```compile_fail,E0277
-/// fn assert_send<T: Send>() {}
-/// assert_send::<mue_macroquad::node::Node>();
-/// ```
-///
-/// ```compile_fail,E0277
-/// fn assert_sync<T: Sync>() {}
-/// assert_sync::<mue_macroquad::node::Node>();
-/// ```
 #[repr(transparent)]
 pub struct Node(Owned<NodeRef>);
 

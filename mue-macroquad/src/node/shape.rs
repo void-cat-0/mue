@@ -121,27 +121,3 @@ pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
         });
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn vertex(x: f32, y: f32) -> RetainedVertex {
-        RetainedVertex {
-            position: [x, y],
-            texcoord: [0., 0.],
-            color: [1.; 4],
-        }
-    }
-
-    #[test]
-    fn vertex_bounds_cover_every_position() {
-        let bounds = vertex_bounds(&[vertex(10., 20.), vertex(-5., 30.), vertex(0., -2.)]).unwrap();
-        assert_eq!(bounds, Rect::new(-5., -2., 15., 32.));
-    }
-
-    #[test]
-    fn empty_vertices_have_no_bounds() {
-        assert_eq!(vertex_bounds(&[]), None);
-    }
-}

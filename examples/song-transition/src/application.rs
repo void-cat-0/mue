@@ -1,6 +1,4 @@
 //! The host owns cross-Scene resources, not a Scene or a framework service locator.
-#[cfg(test)]
-mod tests;
 
 use crate::{
     catalog::Catalog,

@@ -6,7 +6,7 @@ use std::{
     marker::PhantomData,
     mem,
     panic::Location,
-    pin::Pin,
+    pin::{Pin, pin},
     rc::Rc,
     sync::{
         Arc, Condvar, Mutex,
@@ -601,13 +601,13 @@ impl<T> Future for Task<T> {
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        if let TaskState::Spawned(task) = &mut self.state {
-            if let Some(task) = task.take() {
-                // async-task closes its own allocation; no lookup in the dropping thread's TLS.
-                drop(task);
-                if let Some(token) = &self.token {
-                    token.clean_cancelled();
-                }
+        if let TaskState::Spawned(task) = &mut self.state
+            && let Some(task) = task.take()
+        {
+            // async-task closes its own allocation; no lookup in the dropping thread's TLS.
+            drop(task);
+            if let Some(token) = &self.token {
+                token.clean_cancelled();
             }
         }
     }
@@ -736,12 +736,12 @@ impl<T> Future for FallibleTask<T> {
 
 impl<T> Drop for FallibleTask<T> {
     fn drop(&mut self) {
-        if let FallibleTaskState::Spawned(task) = &mut self.state {
-            if let Some(task) = task.take() {
-                drop(task);
-                if let Some(token) = &self.token {
-                    token.clean_cancelled();
-                }
+        if let FallibleTaskState::Spawned(task) = &mut self.state
+            && let Some(task) = task.take()
+        {
+            drop(task);
+            if let Some(token) = &self.token {
+                token.clean_cancelled();
             }
         }
     }
@@ -947,7 +947,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
     );
     let (waker, notify) = block_waker();
     let _restore = install_block_wake(notify);
-    let mut future = Box::pin(future);
+    let mut future = pin!(future);
     let mut cx = Context::from_waker(&waker);
     loop {
         if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
@@ -979,7 +979,7 @@ pub fn block_with_timeout<F: Future>(duration: Duration, future: F) -> Option<F:
     let (waker, notify) = block_waker();
     let _restore = install_block_wake(notify);
     let deadline = Instant::now() + duration;
-    let mut future = Box::pin(future);
+    let mut future = pin!(future);
     let mut cx = Context::from_waker(&waker);
     loop {
         if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
@@ -1133,7 +1133,7 @@ impl<T> Future for JoinNext<'_, T> {
         while index < this.set.tasks.len() {
             match Pin::new(&mut this.set.tasks[index]).poll(cx) {
                 Poll::Ready(value) => {
-                    let _ = this.set.tasks.swap_remove(index);
+                    drop(this.set.tasks.swap_remove(index));
                     return Poll::Ready(Some(value));
                 }
                 Poll::Pending => index += 1,

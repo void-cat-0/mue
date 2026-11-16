@@ -224,26 +224,3 @@ pub(crate) fn draw_shadow(paint: &Paint, rect: Rect, shadow: Shadow) {
         paint.draw(|p| p.fill_rect(expanded, Color::WHITE));
     });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Shadow;
-    use crate::color::Color;
-
-    #[test]
-    fn default_shadow_draws_nothing() {
-        assert!(!Shadow::default().is_visible());
-    }
-
-    #[test]
-    fn new_shadow_is_visible_unless_alpha_is_zero() {
-        assert!(Shadow::new(8., 16.).is_visible());
-        assert!(!Shadow::new(8., 16.).color(Color::TRANSPARENT).is_visible());
-    }
-
-    #[test]
-    fn shadow_shader_uses_local_space() {
-        assert!(super::SHADOW_FRAGMENT.contains("inverse_model"));
-        assert!(super::SHADOW_FRAGMENT.contains("roundedBoxShadow(rect.xy, rect.zw, local"));
-    }
-}

@@ -16,7 +16,7 @@ An interactive **offline consumer** of the public Scene APIs: retained details â
 - [PlayFlow](<src/scene/play_flow/mod.rs>): one Scene with local Loading, Failure, Ready, Running and Results states; it owns the request, session and texture.
 - [Views](<src/ui.rs>): declarative Node trees and result text. Each button captures only its Scene's `Rc<Cell<Action>>`; its signals belong to the Scene's `OwnedScope`, kept alive through Node cleanup.
 - [Keyboard collectors](<src/input.rs>): each Scene owns its own edge-triggered collector. Raw keyboard handling is independent of automatic Node UI dispatch; no global input/action state is shared between Scenes.
-- [Resource source](<src/assets.rs>) and [CPU/session model](<src/flow.rs>): the offline asset and UI-independent loading/attempt logic. [Model tests](<src/flow/tests.rs>) stay at their existing path.
+- [Resource source](<src/assets.rs>) and [CPU/session model](<src/flow.rs>): the offline asset and UI-independent loading/attempt logic.
 
 ## Ownership and normal behavior
 
@@ -64,12 +64,8 @@ Escape remains available during a crossfade, including to cancel loading. Its re
 - **Running:** Pause/resume (P), Stop attempt to show Results, or Escape to exit and return immediately.
 - **Results:** Retry with the same resources (R), or return to original details.
 
-## Model tests
+## Integration limits
 
-```bash
-cargo test -p scene-flow --offline
-```
-
-The existing 16 [model tests](<src/flow/tests.rs>) cover real CPU decoding, source validation, failure/retry, caller-owned tasks, cancellation/replacement after decode and late resource disposal, Ready/start, pause/resume, natural/explicit stop, resource reuse and independent returns. Test-only channel gates hold actual decoded data at the handoff boundary without production delays or sleep races. `LoadMonitor` remains in the model for progress/cancellation observation; it does not own the session or GPU texture.
+Use the interactive controls above to exercise loading failure/retry, cancellation, explicit start, pause/resume, stop and resource reuse. `LoadMonitor` provides progress/cancellation observation; it does not own the session or GPU texture.
 
 The existing bundled [font](<../playground/assets/fonts/NotoSans-Regular.ttf>) is initialized before Nodes, with its [license](<../playground/assets/fonts/OFL-NotoLatinGreekCyrillic.txt>); no download or system-font installation is required. Real source formats, audio/music-clock judgement and platform touch validation remain separate integration work.

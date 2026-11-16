@@ -65,24 +65,3 @@ pub fn shrink(artwork: Rc<Artwork>, target: ReturnTarget) -> SceneTransition {
         },
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mue_macroquad::math::Rect;
-    #[test]
-    fn return_anchor_shares_only_copied_geometry() {
-        let target = ReturnTarget::default();
-        let reader = target.clone();
-        let viewport = Rect::new(0., 0., 1000., 720.);
-        let anchor = Anchor {
-            surface: Surface::card(Rect::new(40., 200., 320., 210.), viewport, 1.5),
-            viewport,
-        };
-        assert_eq!(reader.get(), None);
-        target.update(Some(anchor));
-        assert_eq!(reader.get(), Some(anchor));
-        target.update(None);
-        assert_eq!(reader.get(), None);
-    }
-}

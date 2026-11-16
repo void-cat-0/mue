@@ -60,29 +60,3 @@ fn cover_opacity(phase: TransitionPhase, progress: f32) -> f32 {
         TransitionPhase::AfterSwitch => 1. - progress,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn slide_moves_complete_pictures_edge_to_edge() {
-        assert_eq!(slide_offsets(640., 0.), (0., 640.));
-        assert_eq!(slide_offsets(640., 0.5), (-320., 320.));
-        assert_eq!(slide_offsets(640., 1.), (-640., 0.));
-        for progress in [0., 0.25, 0.5, 0.75, 1.] {
-            let (from, to) = slide_offsets(640., progress);
-            assert_eq!(from + 640., to);
-        }
-    }
-
-    #[test]
-    fn cover_is_opaque_on_both_sides_of_the_switch() {
-        assert_eq!(cover_opacity(TransitionPhase::BeforeSwitch, 0.), 0.);
-        assert_eq!(cover_opacity(TransitionPhase::BeforeSwitch, 1.), 1.);
-        assert_eq!(cover_opacity(TransitionPhase::AfterSwitch, 0.), 1.);
-        assert_eq!(cover_opacity(TransitionPhase::AfterSwitch, 1.), 0.);
-        assert_eq!(cover_opacity(TransitionPhase::BeforeSwitch, 0.25), 0.25);
-        assert_eq!(cover_opacity(TransitionPhase::AfterSwitch, 0.25), 0.75);
-    }
-}

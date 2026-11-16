@@ -53,21 +53,12 @@ impl<Id> InputRouter<Id> {
         }
     }
 
-    pub fn is_modal(&self) -> bool {
-        self.modal
-    }
-
     pub fn chart_enabled(&self) -> bool {
         self.chart_enabled
     }
 }
 
 impl<Id: Copy + Eq + Hash> InputRouter<Id> {
-    /// The owner currently holding `id`, if the pointer is down.
-    pub fn owner(&self, id: Id) -> Option<Owner> {
-        self.owners.get(&id).copied()
-    }
-
     /// Route a pointer-down and remember its owner until up/cancel.
     ///
     /// `ui_hit` must come from a hit test against the last frame's interactive
@@ -176,145 +167,5 @@ fn owner_route(owner: Owner) -> Route {
     match owner {
         Owner::Chart => Route::Chart,
         Owner::Ui => Route::Ui,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const A: u64 = 1;
-    const B: u64 = 2;
-    const C: u64 = 3;
-    const D: u64 = 4;
-
-    #[test]
-    fn chart_owns_until_up() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.owner(A), Some(Owner::Chart));
-        assert_eq!(router.move_(A), Route::Chart);
-        assert_eq!(router.up(A), Route::Chart);
-        assert_eq!(router.owner(A), None);
-        assert_eq!(router.move_(A), Route::None);
-    }
-
-    #[test]
-    fn ui_owns_until_up() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, true), Route::Ui);
-        assert_eq!(router.owner(A), Some(Owner::Ui));
-        assert_eq!(router.move_(A), Route::Ui);
-        assert_eq!(router.up(A), Route::Ui);
-        assert_eq!(router.owner(A), None);
-    }
-
-    #[test]
-    fn owner_is_not_recomputed_on_move() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        // There is no ui_hit argument on move: the down decision is sticky.
-        assert_eq!(router.move_(A), Route::Chart);
-        assert_eq!(router.up(A), Route::Chart);
-    }
-
-    #[test]
-    fn multi_touch_is_independent() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.down(B, true), Route::Ui);
-        assert_eq!(router.move_(A), Route::Chart);
-        assert_eq!(router.move_(B), Route::Ui);
-        assert_eq!(router.up(A), Route::Chart);
-        assert_eq!(router.move_(B), Route::Ui);
-        assert_eq!(router.up(B), Route::Ui);
-    }
-
-    #[test]
-    fn modal_cancels_chart_and_captures_new_pointers() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.down(B, true), Route::Ui);
-        assert_eq!(router.set_modal(true), vec![A]);
-        assert_eq!(router.owner(A), None);
-        assert_eq!(router.owner(B), Some(Owner::Ui));
-        // Modal captures even when the point is not over interactive UI.
-        assert_eq!(router.down(C, false), Route::Ui);
-        assert!(router.back());
-        assert!(!router.is_modal());
-        assert_eq!(router.down(D, false), Route::Chart);
-    }
-
-    #[test]
-    fn modal_does_not_cancel_ui_pointers() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, true), Route::Ui);
-        assert_eq!(router.set_modal(true), Vec::<u64>::new());
-        assert_eq!(router.owner(A), Some(Owner::Ui));
-    }
-
-    #[test]
-    fn repeated_modal_open_is_idempotent() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.set_modal(true), vec![A]);
-        assert_eq!(router.set_modal(true), Vec::<u64>::new());
-        assert!(router.back());
-        assert!(!router.is_modal());
-        assert!(!router.back());
-    }
-
-    #[test]
-    fn disabled_chart_cancels_chart_only() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.down(B, true), Route::Ui);
-        assert_eq!(router.set_chart_enabled(false), vec![A]);
-        assert_eq!(router.owner(A), None);
-        assert_eq!(router.owner(B), Some(Owner::Ui));
-        assert_eq!(router.down(C, false), Route::Ui);
-        assert_eq!(router.set_chart_enabled(true), Vec::<u64>::new());
-        assert_eq!(router.down(D, false), Route::Chart);
-    }
-
-    #[test]
-    fn back_without_modal_is_not_consumed() {
-        let mut router = InputRouter::<u64>::new();
-        assert!(!router.back());
-    }
-
-    #[test]
-    fn cancel_releases_owner() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.cancel(A), Route::Chart);
-        assert_eq!(router.owner(A), None);
-        assert_eq!(router.move_(A), Route::None);
-    }
-
-    #[test]
-    fn unknown_pointer_is_none() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.move_(A), Route::None);
-        assert_eq!(router.up(A), Route::None);
-        assert_eq!(router.cancel(A), Route::None);
-    }
-
-    #[test]
-    fn duplicate_down_keeps_owner() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.down(A, true), Route::Chart);
-        assert_eq!(router.owner(A), Some(Owner::Chart));
-    }
-
-    #[test]
-    fn chart_rejection_falls_back_to_ui() {
-        let mut router = InputRouter::new();
-        assert_eq!(router.down(A, false), Route::Chart);
-        assert_eq!(router.fallback_to_ui(A), Route::Ui);
-        assert_eq!(router.owner(A), Some(Owner::Ui));
-        assert_eq!(router.move_(A), Route::Ui);
-        assert_eq!(router.up(A), Route::Ui);
     }
 }

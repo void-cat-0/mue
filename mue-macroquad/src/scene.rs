@@ -1,7 +1,7 @@
 //! Scenes own application content; App owns frame scheduling.
 use crate::{
     input::InputBatch,
-    math::{Rect, Vector},
+    math::Rect,
     node::{Node, NodeRef},
     scene_transition::{SceneTransition, TransitionFrame},
 };
@@ -50,11 +50,6 @@ pub struct SceneFrame {
     pub dt: f32,
     pub time: f64,
     pub viewport: Rect,
-}
-impl SceneFrame {
-    pub fn size(&self) -> Vector {
-        self.viewport.size()
-    }
 }
 
 /// An owned return value from a popped Scene. The receiving Scene defines its
@@ -107,14 +102,6 @@ pub(crate) struct SceneRequestData {
     pub(crate) transition: TransitionChoice,
     pub(crate) command: SceneCommand,
 }
-impl SceneRequestData {
-    pub(crate) fn new(command: SceneCommand) -> Self {
-        Self {
-            transition: TransitionChoice::Default,
-            command,
-        }
-    }
-}
 
 /// Configure an already registered, deferred Scene request.
 ///
@@ -126,7 +113,10 @@ pub struct SceneRequest<'a> {
 }
 impl<'a> SceneRequest<'a> {
     pub(crate) fn register(slot: &'a mut Option<SceneRequestData>, command: SceneCommand) -> Self {
-        *slot = Some(SceneRequestData::new(command));
+        *slot = Some(SceneRequestData {
+            transition: TransitionChoice::Default,
+            command,
+        });
         Self {
             data: slot.as_mut().unwrap(),
         }

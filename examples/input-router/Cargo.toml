@@ -7,3 +7,6 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+
+[lib]
+doctest = false

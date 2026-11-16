@@ -94,8 +94,8 @@ impl Presentation {
             let position = self.position.get_untracked();
             let first = position.floor() as usize;
             let last = (position.ceil() as usize).min(self.pages.len() - 1);
-            for index in first..=last {
-                visible.push(*self.pages[index]);
+            for i in self.pages.iter().take(last + 1).skip(first) {
+                visible.push(**i);
             }
         }
         let interactive = self.selected.and_then(|index| {

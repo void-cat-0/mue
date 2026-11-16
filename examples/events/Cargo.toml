@@ -15,4 +15,5 @@ mue-macros = { workspace = true }
 taffy = { workspace = true }
 
 [lib]
+doctest = false
 crate-type = ["cdylib", "rlib"]

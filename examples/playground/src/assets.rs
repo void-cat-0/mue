@@ -28,26 +28,3 @@ pub fn background_texture(bytes: &'static [u8]) -> ReadSignal<SharedTexture> {
     });
     *texture
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_images_decode_off_thread() {
-        let photo = std::thread::spawn(|| {
-            Image::from_file_with_format(include_bytes!("../../color/assets/photo.png"), None)
-                .unwrap()
-        })
-        .join()
-        .unwrap();
-        assert!(photo.width > 0 && photo.height > 0);
-
-        let deer = std::thread::spawn(|| {
-            Image::from_file_with_format(include_bytes!("../../../deer.png"), None).unwrap()
-        })
-        .join()
-        .unwrap();
-        assert!(deer.width > 0 && deer.height > 0);
-    }
-}

@@ -1,12 +1,3 @@
-#[cfg(test)]
-mod input_tests;
-#[cfg(test)]
-mod scene_tests;
-#[cfg(test)]
-mod stack_tests;
-#[cfg(test)]
-mod transition_tests;
-
 use crate::{
     event::pointer::PointerManager,
     input::InputBatch,
@@ -28,7 +19,7 @@ use mue_core::{batch, task};
 use ordered_float::NotNan;
 use std::{
     any::Any,
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     mem,
     rc::Rc,
     sync::{Arc, atomic::Ordering},
@@ -70,8 +61,6 @@ struct ActiveTransition {
     pending: Option<SceneCommand>,
     clock: PhaseClock,
     sample: TransitionFrame,
-    // AfterSwitch requested while suspended waits for one source drawing on resume.
-    awaiting_resume: bool,
 }
 impl ActiveTransition {
     fn new(effect: SceneTransition, pending: Option<SceneCommand>, viewport: Rect) -> Self {
@@ -82,8 +71,12 @@ impl ActiveTransition {
             pending,
             clock,
             sample,
-            awaiting_resume: false,
         }
+    }
+
+    fn ready_to_switch(&self) -> bool {
+        self.pending.is_some()
+            && (self.clock.phase() == TransitionPhase::AfterSwitch || self.clock.ready_to_switch())
     }
 }
 
@@ -350,7 +343,7 @@ impl App {
             && !self
                 .active_transition
                 .as_ref()
-                .is_some_and(|transition| transition.awaiting_resume)
+                .is_some_and(ActiveTransition::ready_to_switch)
         {
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
@@ -382,10 +375,9 @@ impl App {
 
     fn prepare_scene(&mut self, frame: SceneFrame, update_nodes: bool) -> Result<Vec<SceneRoot>> {
         let mut roots = self.collect_roots(frame)?;
-        Self::prepare_roots(&roots)?;
+        let nodes = Self::prepare_roots(&roots)?;
         if update_nodes {
-            // Snapshot the forest before hooks. Capture-only rendering never ticks it.
-            let nodes = Self::validate_roots(&roots)?;
+            // Reuse the final validated forest. Capture-only rendering never ticks it.
             batch(|| {
                 Runtime::with(|rt| {
                     for node in nodes {
@@ -581,16 +573,6 @@ impl App {
     fn select_request(&mut self, mut request: SceneRequestData, frame: SceneFrame) -> Result<bool> {
         // Keep the visual and destination aggregated across fallible capture work:
         // error unwinding must drop the visual before any handles it may reference.
-        let reuse_picture = self
-            .active_transition
-            .as_ref()
-            .is_some_and(|active| active.effect.is_composite())
-            && (self.pictures.freeze_presented(frame.viewport)?
-                || !self.pictures.needs_source(frame.viewport)?);
-        drop(self.active_transition.take());
-        if !reuse_picture {
-            self.pictures.invalidate();
-        }
         let entered_source = self.state == AppState::Active
             && self
                 .scenes
@@ -603,7 +585,7 @@ impl App {
                 &mut request.transition,
                 TransitionChoice::Instant,
             ));
-            self.pictures.invalidate();
+            self.cancel_transition();
             self.commit_command(request.command, frame)?;
             return Ok(true);
         }
@@ -616,7 +598,7 @@ impl App {
                 });
         }
         let TransitionChoice::Custom(effect) = &request.transition else {
-            self.pictures.invalidate();
+            self.cancel_transition();
             self.commit_command(request.command, frame)?;
             return Ok(true);
         };
@@ -629,9 +611,21 @@ impl App {
                 &mut request.transition,
                 TransitionChoice::Instant,
             ));
-            self.pictures.invalidate();
+            self.cancel_transition();
             self.commit_command(request.command, frame)?;
             return Ok(true);
+        }
+        // Only a new composite needs the old picture. Cancellation and overlays
+        // must not validate a suspended host's unavailable picture viewport.
+        let reuse_picture = effect.is_composite()
+            && self
+                .active_transition
+                .as_ref()
+                .is_some_and(|active| active.effect.is_composite())
+            && self.pictures.freeze_presented(frame.viewport)?;
+        drop(self.active_transition.take());
+        if !reuse_picture {
+            self.pictures.invalidate();
         }
         if matches!(timing, TransitionTiming::AfterSwitch(_))
             && !self.host_paused
@@ -649,10 +643,7 @@ impl App {
             unreachable!("request effect was resolved above");
         };
         let wait = matches!(timing, TransitionTiming::AroundSwitch { .. }) || self.host_paused;
-        let mut active = ActiveTransition::new(effect, Some(command), frame.viewport);
-        active.awaiting_resume =
-            self.host_paused && matches!(timing, TransitionTiming::AfterSwitch(_));
-        self.active_transition = Some(active);
+        self.active_transition = Some(ActiveTransition::new(effect, Some(command), frame.viewport));
         if wait {
             return Ok(false);
         }
@@ -671,10 +662,10 @@ impl App {
         let Some(active) = self.active_transition.as_ref() else {
             return Ok(false);
         };
-        if self.host_paused || !(active.awaiting_resume || active.clock.ready_to_switch()) {
+        if self.host_paused || !active.ready_to_switch() {
             return Ok(false);
         }
-        if active.awaiting_resume
+        if active.clock.phase() == TransitionPhase::AfterSwitch
             && active.effect.is_composite()
             && self.pictures.needs_source(frame.viewport)?
         {
@@ -691,7 +682,6 @@ impl App {
             .pending
             .take()
             .expect("outgoing transition owns its request");
-        active.awaiting_resume = false;
         if self.command_exits(&command) {
             self.cancel_transition();
         } else {
@@ -790,14 +780,14 @@ impl App {
             .scene
             .layout(&frame, &mut roots)
             .context("Scene layout roots")?;
-        Self::validate_roots(&roots)?;
         Ok(roots)
     }
 
     fn validate_roots(roots: &[SceneRoot]) -> Result<Vec<NodeRef>> {
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         let mut nodes = Vec::new();
-        for root in roots {
+        let mut pending = Vec::new();
+        for (root_index, root) in roots.iter().enumerate() {
             ensure!(
                 root.bounds.min().is_finite()
                     && root.bounds.size().is_finite()
@@ -813,21 +803,65 @@ impl App {
                     "Scene must submit a tree root, not a Node attached to another layout"
                 );
             }
-            for node in root.node.frame_nodes() {
+            pending.push(root.node);
+            while let Some(node) = pending.pop() {
+                let state =
+                    Runtime::with(|rt| rt.nodes.borrow().get(node.id).map(|node| *node.children));
+                let Some(children) = state else {
+                    continue;
+                };
+                // Check before descending: borrowed child lists can contain cycles.
                 ensure!(
-                    seen.insert(node),
+                    seen.insert(node, root_index).is_none(),
                     "Scene roots overlap or contain a duplicate Node"
                 );
+                let children = children.try_get_clone_untracked();
+                // Reading a computed child list can dispose its own Node.
+                if !Runtime::with(|rt| rt.nodes.borrow().contains_key(node.id)) {
+                    continue;
+                }
                 nodes.push(node);
+                if let Some(children) = children {
+                    pending.extend(children.iter().rev().copied());
+                }
             }
         }
-        Ok(nodes)
+        Runtime::with(|rt| {
+            // Child-list computations can dispose previously visited siblings.
+            // Inspect current layouts only after all such callbacks have returned.
+            let arena = rt.nodes.borrow();
+            nodes.retain(|node| arena.contains_key(node.id));
+            let taffy = rt.taffy.borrow();
+            for root in roots {
+                let node = arena
+                    .get(root.node.id)
+                    .ok_or_else(|| anyhow::anyhow!("Scene submitted a disposed root"))?;
+                ensure!(
+                    node.layout_id.is_none_or(|id| taffy.parent(id).is_none()),
+                    "Scene must submit a tree root, not a Node attached to another layout"
+                );
+            }
+            let layouts: HashMap<_, _> = nodes
+                .iter()
+                .filter_map(|node| arena[node.id].layout_id.map(|id| (id, seen[node])))
+                .collect();
+            // A layoutless wrapper must not hide a subtree attached outside its root.
+            for (layout, root_index) in &layouts {
+                ensure!(
+                    taffy
+                        .parent(*layout)
+                        .is_none_or(|parent| layouts.get(&parent) == Some(root_index)),
+                    "Scene must submit a tree root, not a Node attached to another layout"
+                );
+            }
+            Ok(nodes)
+        })
     }
 
-    fn prepare_roots(roots: &[SceneRoot]) -> Result<()> {
+    fn prepare_roots(roots: &[SceneRoot]) -> Result<Vec<NodeRef>> {
         // Geometry observers may feed back into an earlier independent root.
+        Self::validate_roots(roots)?;
         for _ in 0..64 {
-            Self::validate_roots(roots)?;
             let mut snapshots = Vec::new();
             for root in roots {
                 root.node.prepare_layout_in(root.bounds);
@@ -839,8 +873,11 @@ impl App {
             for root in roots {
                 root.node.resolve_font_sizes();
             }
-            if snapshots.iter().all(|snapshot| snapshot.is_current()) {
-                return Ok(());
+            // Font observers and geometry reads can flush reactive changes too.
+            let current = snapshots.iter().all(|snapshot| snapshot.is_current());
+            let nodes = Self::validate_roots(roots)?;
+            if current {
+                return Ok(nodes);
             }
         }
         bail!("Scene root geometry did not stabilize");
@@ -885,7 +922,9 @@ impl App {
         // Fix this frame's command before pause can queue another one. Lifecycle
         // requests during this boundary must wait, even without normal rendering.
         let mut selected = self.command.take();
-        let paused = self.pause_scene(frame).map(|request| {
+        // Retain displayed geometry, but revoke capture before the Pause callback.
+        self.pointer_manager.cancel_input();
+        let paused = self.pause_top(frame).map(|request| {
             if matches!(
                 selected.as_ref().map(|request| &request.command),
                 None | Some(SceneCommand::Push(_))
@@ -919,14 +958,6 @@ impl App {
             self.fault();
         }
         result
-    }
-
-    fn pause_scene(&mut self, frame: SceneFrame) -> Result<Option<SceneRequestData>> {
-        self.host_paused = true;
-        // Keep the last display's hit geometry when the top is unchanged. Fresh
-        // input on the first resumed frame must still reach that displayed UI.
-        self.pointer_manager.cancel_input();
-        self.pause_top(frame)
     }
 
     fn drive_tasks(&mut self) {

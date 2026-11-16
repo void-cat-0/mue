@@ -1,13 +1,10 @@
-//! Probe immediate materials on mue geometry.
+//! A windowed example of immediate materials on mue geometry.
 //!
-//! Verifies:
-//! - UiMaterial's fixed vertex shader sees global positions through mue's Model matrix;
-//! - UiMaterial clips, Style::shadow, Style::clip_radius, and Style::clip_sector apply to mue's `Shapes` draws;
-//! - two clips with different uniforms do not bleed;
-//! - restoring the default material lets later draws through.
+//! Shows custom clipping with transformed geometry, independent material
+//! uniforms, shadows, rounded and sector clips, and default-material drawing.
 //!
-//! Run with `cargo run -p material-probe --offline`; exits 0 when all checks pass.
-//! Writes `/tmp/material-probe.png` for visual inspection.
+//! Run with `cargo run -p material-probe --offline` and inspect the window.
+//! Press Escape or close the window to quit.
 
 use macroquad::prelude::*;
 use mue_components::prelude::*;
@@ -310,201 +307,18 @@ fn ui() -> impl Component {
         ))
 }
 
-fn pixel(image: &macroquad::texture::Image, x: f32, y: f32) -> Color {
-    // Render-target readback is bottom-up; sample in top-left target coordinates.
-    let y = image.height as u32 - 1 - y as u32;
-    image.get_pixel(x as u32, y)
-}
-
-fn is_texture(color: Color) -> bool {
-    color.r > 0.2 && color.b > 0.2
-}
-
-fn is_background(color: Color) -> bool {
-    (color.r - BG.r).abs() < 0.03 && (color.g - BG.g).abs() < 0.03 && (color.b - BG.b).abs() < 0.03
-}
-
-fn is_green(color: Color) -> bool {
-    color.g > 0.5 && color.g > color.r * 2. && color.g > color.b * 2.
-}
-
-fn is_yellow(color: Color) -> bool {
-    color.r > 0.8 && color.g > 0.6 && color.b < 0.3
-}
-
-fn is_purple(color: Color) -> bool {
-    color.b > 0.8 && color.r > 0.3 && color.g < 0.5
-}
-
-fn is_pink(color: Color) -> bool {
-    color.r > 0.8 && color.b > 0.5 && color.g < 0.5
-}
-
-fn sum(color: Color) -> f32 {
-    color.r + color.g + color.b
-}
-
-#[macroquad::main("material probe")]
+#[macroquad::main("material demo")]
 async fn main() {
     request_new_screen_size(WIDTH as f32, HEIGHT as f32);
-
-    let target = render_target(WIDTH, HEIGHT);
-    target.texture.set_filter(FilterMode::Linear);
-    let mut camera = Camera2D::from_display_rect(Rect::new(0., 0., WIDTH as f32, HEIGHT as f32));
-    camera.render_target = Some(target.clone());
-
     let mut app = App::new(ui());
-    if macroquad::retained::is_supported() {
-        assert!(
-            mue_macroquad::clip::retained_material_available(),
-            "retained clip material"
-        );
+
+    loop {
+        if is_key_pressed(KeyCode::Escape) {
+            break;
+        }
+
+        clear_background(BG.into());
+        app.frame();
+        next_frame().await;
     }
-
-    // Warm up layout and material pipelines.
-    set_camera(&camera);
-    clear_background(BG.into());
-    app.frame();
-    next_frame().await;
-
-    // Measured frame.
-    set_camera(&camera);
-    clear_background(BG.into());
-    app.frame();
-    next_frame().await;
-    set_default_camera();
-
-    let image = target.texture.get_texture_data();
-    image.export_png("/tmp/material-probe.png");
-
-    let center_a = pixel(&image, 160., 110.);
-    let corner_a = pixel(&image, 258., 52.);
-    let corner_a2 = pixel(&image, 62., 168.);
-    // Inside radius 24 but outside radius 12: catches a leaked clip uniform.
-    let radius_a = pixel(&image, 230., 80.);
-    // Inside the translated global rect but outside the untranslated local rect.
-    let global_pos = pixel(&image, 250., 110.);
-    let center_b = pixel(&image, 140., 260.);
-    let corner_b = pixel(&image, 239., 201.);
-    let corner_b2 = pixel(&image, 239., 319.);
-    // Outside radius 12 but inside radius 24: the opposite leak check.
-    let radius_b = pixel(&image, 236., 204.);
-    let center_c = pixel(&image, 400., 262.);
-    let corner_c = pixel(&image, 497., 203.);
-    let shadow = pixel(&image, 298., 100.);
-    let baseline = pixel(&image, 600., 300.);
-    let panel = pixel(&image, 400., 100.);
-    let restore = pixel(&image, 50., 50.);
-    let clip_style_center = pixel(&image, 560., 70.);
-    let clip_style_corner = pixel(&image, 522., 42.);
-    let clip_style_edge = pixel(&image, 560., 42.);
-    let sector_inside = pixel(&image, 582., 142.);
-    let sector_outside = pixel(&image, 598., 160.);
-    let rotated_center = pixel(&image, 560., 280.);
-    let rotated_corner = pixel(&image, 590., 250.);
-
-    let checks = [
-        ("clip A center is texture", is_texture(center_a)),
-        (
-            "clip A top-right corner is background",
-            is_background(corner_a),
-        ),
-        (
-            "clip A bottom-left corner is background",
-            is_background(corner_a2),
-        ),
-        ("clip A keeps radius 24", is_texture(radius_a)),
-        ("clip A uses global v_pos", is_texture(global_pos)),
-        ("clip B center is texture", is_texture(center_b)),
-        (
-            "clip B top-right corner is background",
-            is_background(corner_b),
-        ),
-        (
-            "clip B bottom-right corner is background",
-            is_background(corner_b2),
-        ),
-        ("clip B keeps radius 12", is_texture(radius_b)),
-        ("scaled clip center is texture", is_texture(center_c)),
-        ("scaled clip corner is background", is_background(corner_c)),
-        (
-            "shadow darkens the background",
-            sum(shadow) < sum(baseline) - 0.02,
-        ),
-        (
-            "panel is drawn over the shadow",
-            panel.b > 0.2 && panel.r < 0.3,
-        ),
-        ("default material is restored", is_green(restore)),
-        (
-            "Style::clip_radius center is child",
-            is_yellow(clip_style_center),
-        ),
-        (
-            "Style::clip_radius corner is background",
-            is_background(clip_style_corner),
-        ),
-        (
-            "Style::clip_radius edge is child",
-            is_yellow(clip_style_edge),
-        ),
-        (
-            "Style::clip_sector inside is child",
-            is_purple(sector_inside),
-        ),
-        (
-            "Style::clip_sector outside is background",
-            is_background(sector_outside),
-        ),
-        ("rotated clip center is child", is_pink(rotated_center)),
-        (
-            "rotated clip corner is background",
-            is_background(rotated_corner),
-        ),
-    ];
-
-    println!("material probe: target {WIDTH}x{HEIGHT}");
-    println!("  clip A center       {}", color_label(center_a));
-    println!("  clip A corner       {}", color_label(corner_a));
-    println!("  clip A corner 2     {}", color_label(corner_a2));
-    println!("  clip A radius probe {}", color_label(radius_a));
-    println!("  clip A global probe {}", color_label(global_pos));
-    println!("  clip B center       {}", color_label(center_b));
-    println!("  clip B corner       {}", color_label(corner_b));
-    println!("  clip B corner 2     {}", color_label(corner_b2));
-    println!("  clip B radius probe {}", color_label(radius_b));
-    println!("  clip C center       {}", color_label(center_c));
-    println!("  clip C corner       {}", color_label(corner_c));
-    println!(
-        "  shadow / baseline   {} / {}",
-        color_label(shadow),
-        color_label(baseline)
-    );
-    println!("  panel               {}", color_label(panel));
-    println!("  restore             {}", color_label(restore));
-    println!("  clip style center   {}", color_label(clip_style_center));
-    println!("  clip style corner   {}", color_label(clip_style_corner));
-    println!("  clip style edge     {}", color_label(clip_style_edge));
-    println!("  sector inside       {}", color_label(sector_inside));
-    println!("  sector outside      {}", color_label(sector_outside));
-    println!("  rotated center      {}", color_label(rotated_center));
-    println!("  rotated corner      {}", color_label(rotated_corner));
-
-    let mut pass = true;
-    for (name, ok) in checks {
-        println!("  [{}] {name}", if ok { "PASS" } else { "FAIL" });
-        pass &= ok;
-    }
-    println!("  image: /tmp/material-probe.png");
-    std::process::exit(if pass { 0 } else { 1 });
-}
-
-fn color_label(color: Color) -> String {
-    format!(
-        "({:.0},{:.0},{:.0},{:.2})",
-        color.r * 255.,
-        color.g * 255.,
-        color.b * 255.,
-        color.a
-    )
 }

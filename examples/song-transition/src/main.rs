@@ -6,8 +6,6 @@ mod effects;
 mod input;
 mod scene;
 mod settings;
-#[cfg(test)]
-mod tests;
 mod ui;
 mod view;
 

@@ -32,7 +32,7 @@ No external font, chart or image assets are required.
 - [effects.rs](<src/effects.rs>): fresh public `SceneTransition` values for
   fade, slide and cover. Draw callbacks have no shared Scene state.
 
-## Rendering limits and tests
+## Rendering limits
 
 Crossfade and slide require the OpenGL backend and the full, origin-zero logical
 window. Keep App's supplied capture/composition camera active, balance model
@@ -42,12 +42,5 @@ slide draws the borrowed render-target textures with `flip_y: true`. Cover uses
 endpoint before the stack changes. See the [transition tutorial](<../../docs/scene-transitions.md>)
 for timing, interruption and rendering restrictions.
 
-Module-local unit tests cover keyboard mapping, independent child state, slide
-geometry and cover opacity without constructing an App or GPU resources:
-
-```bash
-cargo test -p scene-transitions --offline
-```
-
-These pure behavior tests are not rendering, device-input, Metal or audio tests;
-use the normal application above for interactive rendering.
+Use the normal application above for interactive rendering. Device-input, Metal
+and audio integration are outside this example's scope.

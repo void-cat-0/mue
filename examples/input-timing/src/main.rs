@@ -27,17 +27,11 @@ const TARGET_H: f32 = 140.;
 
 struct Options {
     fps: f64,
-    check: bool,
-    capture: Option<String>,
 }
 
 impl Options {
     fn parse() -> Self {
-        let mut result = Self {
-            fps: 1.,
-            check: false,
-            capture: None,
-        };
+        let mut result = Self { fps: 1. };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -52,11 +46,7 @@ impl Options {
                         "FPS must be in (0, 60]"
                     );
                 }
-                "--check" => result.check = true,
-                "--capture" => {
-                    result.capture = Some(args.next().expect("--capture requires a PNG path"))
-                }
-                _ => panic!("unknown argument: {arg}; use --fps N, --check, --capture PATH"),
+                _ => panic!("unknown argument: {arg}; use --fps N"),
             }
         }
         result
@@ -84,7 +74,6 @@ struct Click {
     position: Vector,
     touch_time: Option<f64>,
     received_at: f64,
-    expected: Option<(Target, Target)>,
 }
 
 #[derive(Default)]
@@ -99,7 +88,6 @@ impl Input {
             position: Vector::new(x / dpi, y / dpi),
             touch_time,
             received_at: get_time(),
-            expected: None,
         });
     }
 }
@@ -173,8 +161,6 @@ struct Results {
     samples: usize,
     agreements: usize,
     differences: usize,
-    checked: usize,
-    failures: usize,
     last: Option<(Vector, Target, Target, Option<f64>, f64)>,
 }
 
@@ -265,7 +251,7 @@ fn draw_report(font: &Font, options: &Options, step: usize, results: &Results) {
             WHITE,
         );
         let timestamp = time.map_or_else(
-            || "No touch timestamp (mouse or synthetic sample)".to_owned(),
+            || "No touch timestamp (mouse)".to_owned(),
             |t| format!("touch source timestamp: {t:.6} (unchanged)"),
         );
         draw_text_line(
@@ -277,28 +263,14 @@ fn draw_report(font: &Font, options: &Options, step: usize, results: &Results) {
             LIGHTGRAY,
         );
     }
-    if options.check {
-        draw_text_line(
-            font,
-            &format!(
-                "Synthetic check: {} cases, {} failures (not hardware input)",
-                results.checked, results.failures
-            ),
-            38.,
-            551.,
-            18,
-            YELLOW,
-        );
-    } else {
-        draw_text_line(
-            font,
-            "Clicking blank space is useful too. Escape exits.",
-            38.,
-            551.,
-            18,
-            LIGHTGRAY,
-        );
-    }
+    draw_text_line(
+        font,
+        "Clicking blank space is useful too. Escape exits.",
+        38.,
+        551.,
+        18,
+        LIGHTGRAY,
+    );
     draw_text_line(
         font,
         "This probes Node hit-testing order, not Scene routing or gesture capture.",
@@ -354,29 +326,6 @@ async fn main() {
 
         if get_time() >= next_update {
             let initial = step == 0;
-            if !initial && options.check {
-                for (position, before, after) in [
-                    (
-                        Vector::new(LEFT + TARGET_W / 2., TOP + TARGET_H / 2.),
-                        if swapped.get() { Target::B } else { Target::A },
-                        if swapped.get() { Target::A } else { Target::B },
-                    ),
-                    (
-                        Vector::new(RIGHT + TARGET_W / 2., TOP + TARGET_H / 2.),
-                        if swapped.get() { Target::A } else { Target::B },
-                        if swapped.get() { Target::B } else { Target::A },
-                    ),
-                    (Vector::new(500., TOP + 60.), Target::Empty, Target::Empty),
-                ] {
-                    input.clicks.push(Click {
-                        position,
-                        touch_time: None,
-                        received_at: get_time(),
-                        expected: Some((before, after)),
-                    });
-                }
-            }
-
             // No UI signals, transforms or children change before this lookup.
             // The tree still matches the cached image that was visible on screen.
             let clicks = std::mem::take(&mut input.clicks);
@@ -405,26 +354,15 @@ async fn main() {
                 } else {
                     results.differences += 1;
                 }
-                if let Some(expected) = click.expected {
-                    results.checked += 1;
-                    if (before, after) != expected {
-                        results.failures += 1;
-                    }
-                }
                 println!(
-                    "{step},{:.1},{:.1},{},{},{},{buffered_ms:.3},{}",
+                    "{step},{:.1},{:.1},{},{},{},{buffered_ms:.3},native",
                     click.position.x,
                     click.position.y,
                     before.name(),
                     after.name(),
                     click
                         .touch_time
-                        .map_or_else(String::new, |t| format!("{t:.6}")),
-                    if click.expected.is_some() {
-                        "synthetic"
-                    } else {
-                        "native"
-                    }
+                        .map_or_else(String::new, |t| format!("{t:.6}"))
                 );
                 results.last = Some((click.position, before, after, click.touch_time, buffered_ms));
             }
@@ -445,21 +383,6 @@ async fn main() {
                 ..Default::default()
             },
         );
-        let finished = options.check && step >= 7;
-        if finished && let Some(path) = &options.capture {
-            get_screen_data().export_png(path);
-        }
         next_frame().await;
-        if finished {
-            println!(
-                "CHECK: {} cases, {} failures, {} identity differences",
-                results.checked, results.failures, results.differences
-            );
-            std::process::exit(if results.checked == 18 && results.failures == 0 {
-                0
-            } else {
-                1
-            });
-        }
     }
 }

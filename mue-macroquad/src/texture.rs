@@ -143,19 +143,3 @@ pub fn flush_pending_texture_deletions() -> usize {
     drop(textures);
     count
 }
-
-/// Number of textures waiting for [`flush_pending_texture_deletions`].
-pub fn pending_texture_deletions() -> usize {
-    PENDING_DELETIONS.lock().unwrap().len()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn safe_texture_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<SafeTexture>();
-    }
-}

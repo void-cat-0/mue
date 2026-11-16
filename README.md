@@ -395,10 +395,6 @@ cargo run -p map
 ```bash
 cargo check --workspace
 cargo clippy -p events -p gestures -p map --all-targets --no-deps
-# 需要图形环境；校验新字形在同帧提前 flush 时可见
-cargo run -p atlas -- --verify-upload
-# 内置 Noto，不依赖系统字体；限时压力测试并检查图集拒绝计数
-cargo run -p atlas -- --frames 120 --glyphs 4000 --max-size 28 --verify
 # 交互模式；可切换到超预算场景观察拒绝计数
 cargo run -p atlas
 ```

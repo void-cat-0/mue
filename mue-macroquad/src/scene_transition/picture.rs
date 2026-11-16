@@ -3,26 +3,31 @@
 use anyhow::{Context, Result, ensure};
 use macroquad::{
     material::{Material, MaterialParams, gl_use_default_material, gl_use_material, load_material},
-    miniquad::{Backend, ShaderSource, UniformDesc, UniformType},
+    miniquad::{
+        Backend, BlendFactor, BlendState, Equation, PipelineParams, ShaderSource, UniformDesc,
+        UniformType,
+    },
     prelude::{
         BLACK, Camera2D, DrawMode, DrawTextureParams, FilterMode, RenderTarget, Texture2D, WHITE,
-        clear_background, draw_texture_ex, render_target, set_camera, set_default_camera, vec2,
+        clear_background, draw_rectangle, draw_texture_ex, render_target, set_camera,
+        set_default_camera, vec2,
     },
     window::{get_internal_gl, screen_dpi_scale},
 };
 
 use crate::{math::Rect, render::RenderStateGuard};
 
-use super::{ScenePictures, SceneTransition, TransitionFrame};
+use super::{Draw, ScenePictures, SceneTransition, TransitionFrame};
 
 /// Source, live and last successfully presented composite are separate targets.
 /// All begin/finish boundaries require exclusive use of macroquad drawing.
 /// Capture callbacks keep the supplied target camera and a balanced model stack.
 pub(crate) struct PictureCache {
-    headless: bool,
     key: Option<PictureKey>,
     targets: Option<Targets>,
     copy_material: Option<Material>,
+    opaque_material: Option<Material>,
+    crossfade_material: Option<Material>,
     boundary: Option<DrawBoundary>,
     drawing: Option<Capture>,
     source_ready: bool,
@@ -67,10 +72,11 @@ impl PictureCache {
     /// No textures, shader compilation, window query, or GL state access.
     pub(crate) fn new() -> Self {
         Self {
-            headless: false,
             key: None,
             targets: None,
             copy_material: None,
+            opaque_material: None,
+            crossfade_material: None,
             boundary: None,
             drawing: None,
             source_ready: false,
@@ -79,64 +85,54 @@ impl PictureCache {
         }
     }
 
-    /// Scheduler tests may execute GPU-free overlay closures without macroquad.
-    /// Capture calls return no target; composition itself is an explicit error.
-    #[cfg(test)]
-    pub(crate) fn headless() -> Self {
-        let mut cache = Self::new();
-        cache.headless = true;
-        cache
-    }
-
     pub(crate) fn needs_source(&self, viewport: Rect) -> Result<bool> {
         Ok(self.key != Some(self.picture_key(viewport)?) || !self.source_ready)
     }
 
     /// App renders the departing Scene once in this pass, without a Scene/Node
-    /// update, before releasing its owner. The target clone is optional so the
-    /// same scheduling path can be exercised headlessly.
-    pub(crate) fn begin_source(&mut self, viewport: Rect) -> Result<Option<RenderTarget>> {
+    /// update, before releasing its owner.
+    pub(crate) fn begin_source(&mut self, viewport: Rect) -> Result<()> {
         self.ensure_idle()?;
         self.prepare_targets(viewport)?;
         self.source_ready = false;
         self.live_ready = false;
         self.presented_ready = false;
         self.drawing = Some(Capture::Source);
-        if self.headless {
-            return Ok(None);
-        }
-        let target = self.targets.as_ref().unwrap().from.clone();
-        self.boundary = Some(DrawBoundary::target(&target, viewport));
+        self.boundary = Some(DrawBoundary::target(
+            &self.targets.as_ref().unwrap().from,
+            viewport,
+        ));
         // A complete Scene picture always has an opaque base. The camera change
         // flushed pending work before this immediate clear.
         clear_background(BLACK);
-        Ok(Some(target))
+        Ok(())
     }
 
     pub(crate) fn finish_source(&mut self) {
         if self.drawing == Some(Capture::Source) {
+            self.make_opaque(self.key.unwrap().viewport);
             self.finish();
             self.source_ready = true;
         }
     }
 
     /// App draws the current Scene/UI once into the live target each frame.
-    pub(crate) fn begin_live(&mut self, viewport: Rect) -> Result<Option<RenderTarget>> {
+    pub(crate) fn begin_live(&mut self, viewport: Rect) -> Result<()> {
         self.ensure_idle()?;
         self.prepare_targets(viewport)?;
         self.live_ready = false;
         self.drawing = Some(Capture::Live);
-        if self.headless {
-            return Ok(None);
-        }
-        let target = self.targets.as_ref().unwrap().to.clone();
-        self.boundary = Some(DrawBoundary::target(&target, viewport));
+        self.boundary = Some(DrawBoundary::target(
+            &self.targets.as_ref().unwrap().to,
+            viewport,
+        ));
         clear_background(BLACK);
-        Ok(Some(target))
+        Ok(())
     }
 
     pub(crate) fn finish_live(&mut self) {
         if self.drawing == Some(Capture::Live) {
+            self.make_opaque(self.key.unwrap().viewport);
             self.finish();
             self.live_ready = true;
         }
@@ -154,10 +150,6 @@ impl PictureCache {
         ensure!(
             transition.is_composite(),
             "an overlay does not require picture composition"
-        );
-        ensure!(
-            !self.headless,
-            "Scene picture composition is unavailable in headless mode"
         );
         ensure!(
             self.live_ready,
@@ -184,7 +176,20 @@ impl PictureCache {
         };
         let boundary = DrawBoundary::target(&targets.presented, frame.viewport);
         clear_background(BLACK);
-        transition.draw_composite(frame, pictures)?;
+        match &mut transition.draw {
+            Draw::Crossfade => {
+                // A fresh request needs a fresh clock, not a fresh GPU pipeline.
+                if self.crossfade_material.is_none() {
+                    self.crossfade_material = Some(make_crossfade_material()?);
+                }
+                crossfade(self.crossfade_material.as_ref().unwrap(), frame, pictures);
+            }
+            Draw::Composite(draw) => draw(frame, pictures)?,
+            Draw::Overlay(_) => unreachable!("composite kind checked above"),
+        }
+        // Custom blending may reduce alpha even over the opaque base. Frozen
+        // composites must obey the same complete-picture contract as Scene draws.
+        self.make_opaque(frame.viewport);
         // This camera change submits all custom composition before sampling it.
         set_default_camera();
         reset_draw_state();
@@ -198,7 +203,6 @@ impl PictureCache {
     }
 
     /// Normal overlays use the default camera but allocate no picture resources.
-    /// Headless mode invokes only the closure and never queries window/GL state.
     pub(crate) fn draw_overlay(
         &mut self,
         frame: TransitionFrame,
@@ -209,9 +213,6 @@ impl PictureCache {
             !transition.is_composite(),
             "a composite requires Scene pictures"
         );
-        if self.headless {
-            return transition.draw_overlay(frame);
-        }
         let boundary = DrawBoundary::default_camera();
         let result = transition.draw_overlay(frame);
         drop(boundary); // Flush/restore on Ok and Err before App acknowledges.
@@ -223,12 +224,19 @@ impl PictureCache {
     /// An overlay is not captured, so no arbitrary overlay continuity is promised.
     pub(crate) fn freeze_presented(&mut self, viewport: Rect) -> Result<bool> {
         self.ensure_idle()?;
-        if self.key != Some(self.picture_key(viewport)?) {
+        // Reusing old pixels is optional; a temporarily unavailable surface only
+        // invalidates the cache. Actual capture still validates drawable sizes.
+        let Ok(key) = self.picture_key(viewport) else {
+            self.invalidate();
+            return Ok(false);
+        };
+        if self.key != Some(key) {
             self.invalidate();
             return Ok(false);
         }
         if !self.presented_ready {
-            return Ok(false);
+            // Repeated interruptions before a new drawing keep the same source.
+            return Ok(self.source_ready);
         }
         if let Some(targets) = self.targets.as_mut() {
             std::mem::swap(&mut targets.from, &mut targets.presented);
@@ -247,12 +255,22 @@ impl PictureCache {
     /// This restores the default camera, not an arbitrary caller raw pass or
     /// material snapshot. Captures still finish/abort their RenderStateGuard
     /// boundary separately. The strict no-raw-pass/balanced-model-stack contract
-    /// applies here too. Headless scheduler tests never touch macroquad.
+    /// applies here too.
     pub(crate) fn cleanup_scene_error(&mut self) {
-        if !self.headless {
-            set_default_camera();
-            unsafe { get_internal_gl() }.flush();
-        }
+        set_default_camera();
+        unsafe { get_internal_gl() }.flush();
+        // Do not leave a selected Scene-owned pipeline behind after its
+        // owner is dropped by explicit recovery. Old queued draws ran first.
+        reset_draw_state();
+    }
+
+    fn make_opaque(&self, viewport: Rect) {
+        // Preserve RGB. Default alpha blending also blends the alpha channel,
+        // so a BLACK clear alone cannot make these sampled pictures opaque.
+        unsafe { get_internal_gl() }.flush();
+        reset_draw_state();
+        gl_use_material(self.opaque_material.as_ref().unwrap());
+        draw_rectangle(viewport.x, viewport.y, viewport.w, viewport.h, WHITE);
     }
 
     /// Abort an unfinished capture and flush/restore its owned camera boundary.
@@ -282,12 +300,7 @@ impl PictureCache {
     }
 
     fn picture_key(&self, viewport: Rect) -> Result<PictureKey> {
-        // This branch is deliberately before any macroquad window call.
-        let dpi = if self.headless {
-            1.
-        } else {
-            screen_dpi_scale()
-        };
+        let dpi = screen_dpi_scale();
         Ok(PictureKey {
             viewport,
             pixels: target_pixels(viewport, dpi)?,
@@ -300,15 +313,16 @@ impl PictureCache {
             self.invalidate();
             self.key = Some(key);
         }
-        if !self.headless {
-            // Verify backend/compile before allocating any picture. Metal is an
-            // explicit error, not a GLSL shader panic on the vendor Metal path.
-            if self.copy_material.is_none() {
-                self.copy_material = Some(make_copy_material()?);
-            }
-            if self.targets.is_none() {
-                self.targets = Some(Targets::new(key.pixels));
-            }
+        // Verify backend/compile before allocating any picture. Metal is an
+        // explicit error, not a GLSL shader panic on the vendor Metal path.
+        if self.copy_material.is_none() {
+            self.copy_material = Some(make_copy_material()?);
+        }
+        if self.opaque_material.is_none() {
+            self.opaque_material = Some(make_opaque_material()?);
+        }
+        if self.targets.is_none() {
+            self.targets = Some(Targets::new(key.pixels));
         }
         Ok(())
     }
@@ -325,13 +339,13 @@ impl Drop for PictureCache {
 /// Camera/pass ownership is intentionally separate from RenderStateGuard.
 /// We own macroquad camera boundaries, never a caller's arbitrary raw pass.
 struct DrawBoundary {
-    state: Option<RenderStateGuard>,
+    _state: RenderStateGuard,
 }
 
 impl DrawBoundary {
     fn target(target: &RenderTarget, viewport: Rect) -> Self {
         let boundary = Self {
-            state: Some(RenderStateGuard::enter()),
+            _state: RenderStateGuard::enter(),
         };
         set_camera(&Camera2D {
             render_target: Some(target.clone()),
@@ -344,7 +358,7 @@ impl DrawBoundary {
 
     fn default_camera() -> Self {
         let boundary = Self {
-            state: Some(RenderStateGuard::enter()),
+            _state: RenderStateGuard::enter(),
         };
         set_default_camera();
         reset_draw_state();
@@ -355,7 +369,6 @@ impl DrawBoundary {
 impl Drop for DrawBoundary {
     fn drop(&mut self) {
         set_default_camera(); // Flushes immediate work and closes retained passes.
-        drop(self.state.take());
     }
 }
 
@@ -367,7 +380,7 @@ fn reset_draw_state() {
     gl.draw_mode(DrawMode::Triangles);
 }
 
-pub(super) fn target_pixels(viewport: Rect, dpi: f32) -> Result<(u32, u32)> {
+fn target_pixels(viewport: Rect, dpi: f32) -> Result<(u32, u32)> {
     ensure!(
         viewport.x == 0. && viewport.y == 0.,
         "Scene pictures require an origin-zero logical window viewport"
@@ -428,7 +441,27 @@ fn make_copy_material() -> Result<Material> {
     .context("compile Scene picture copy material")
 }
 
-pub(super) fn make_crossfade_material() -> Result<Material> {
+fn make_opaque_material() -> Result<Material> {
+    load_material(
+        ShaderSource::Glsl {
+            vertex: VERTEX,
+            fragment: "#version 100\nprecision mediump float;\nvoid main() { gl_FragColor = vec4(1.0); }",
+        },
+        MaterialParams {
+            pipeline_params: PipelineParams {
+                // Preserve RGB with blending, not a color-write mask: GL clears
+                // inherit the last applied mask even after restoring QuadGl state.
+                color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Zero, BlendFactor::One)),
+                alpha_blend: Some(BlendState::new(Equation::Add, BlendFactor::One, BlendFactor::Zero)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .context("compile Scene picture opaque material")
+}
+
+fn make_crossfade_material() -> Result<Material> {
     require_opengl()?;
     load_material(
         ShaderSource::Glsl {
@@ -444,7 +477,7 @@ pub(super) fn make_crossfade_material() -> Result<Material> {
     .context("compile Scene crossfade material")
 }
 
-pub(super) fn crossfade(material: &Material, frame: TransitionFrame, pictures: ScenePictures<'_>) {
+fn crossfade(material: &Material, frame: TransitionFrame, pictures: ScenePictures<'_>) {
     material.set_uniform("Progress", frame.progress);
     material.set_texture("From", pictures.from.clone());
     gl_use_material(material);

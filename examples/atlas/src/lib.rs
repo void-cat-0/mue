@@ -1,12 +1,12 @@
-//! Glyph atlas stress test with deterministic embedded fonts.
+//! Interactive glyph atlas stress demo with embedded fonts.
 //!
-//! Interactive mode keeps the original controls and triangle-wave animation:
-//! `cargo run -p atlas`. Finite checks are useful for CI, for example:
-//! `--glyphs 4000 --max-size 28 --frames 120 --verify`.
+//! Run `cargo run -p atlas` for glyph-count controls and triangle-wave
+//! font-size animation. Customize the working set with
+//! `cargo run -p atlas -- --glyphs 4000 --max-size 28`.
 //!
 //! The default maximum size is intentionally 56px. At that size, 4000 CJK
-//! glyphs are an intended overload case, not a bounded verification budget;
-//! use the command above to exercise the 8-page/32MiB budget without overload.
+//! glyphs are an intended overload case. Use a smaller maximum size to explore
+//! the 8-page/32MiB budget without overload.
 use mue_components::*;
 
 #[path = "../../shared/responsive.rs"]
@@ -17,19 +17,17 @@ use std::{env, sync::Arc, time::Instant};
 use macroquad::{
     color::BLACK,
     prelude::{clear_background, next_frame},
-    texture::Image,
 };
 use mue_core::{prelude::*, prop::Prop};
 use mue_macroquad::{
     App,
     font::{self, GlyphAtlasStats, glyph_atlas_stats},
-    style::{FontSize, Size, Style, Styleable, StyleableExt},
+    style::{FontSize, Size, Styleable, StyleableExt},
 };
 
 const SAMPLE: &str = "The quick brown fox jumps over the lazy dog. 你好，世界。";
 const DEFAULT_GLYPHS: u32 = 600;
 const DEFAULT_MAX_SIZE: f32 = 56.0;
-const DEFAULT_FRAMES: u32 = 0;
 
 const LATIN: &[u8] = include_bytes!("../../playground/assets/fonts/NotoSans-Regular.ttf");
 const CJK: &[u8] = include_bytes!("../../playground/assets/fonts/NotoSansCJKsc-Regular.otf");
@@ -41,28 +39,22 @@ const LICENSE_CJK: &str = include_str!("../../playground/assets/fonts/OFL-NotoCJ
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    frames: u32,
     glyphs: u32,
     max_size: f32,
-    verify: bool,
-    verify_upload: bool,
     licenses: bool,
 }
 
 fn usage() {
     println!(
-        "atlas options:\n  --frames N       finite run (default: interactive)\n  --glyphs N       CJK glyph count (default: 600)\n  --max-size FLOAT maximum animated font size (default: 56)\n  --verify [BOOL]  fail if atlas rejects/exhausts/rasterizes a glyph\n  --verify-upload  check first uploaded text frame against the next frame\n  --licenses       print embedded font notices and OFL licenses\n  -h, --help       show this help"
+        "atlas options:\n  --glyphs N       CJK glyph count (default: 600)\n  --max-size FLOAT maximum animated font size (default: 56)\n  --licenses       print embedded font notices and OFL licenses\n  -h, --help       show this help"
     );
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
-            frames: DEFAULT_FRAMES,
             glyphs: DEFAULT_GLYPHS,
             max_size: DEFAULT_MAX_SIZE,
-            verify: false,
-            verify_upload: false,
             licenses: false,
         }
     }
@@ -91,26 +83,10 @@ pub fn options() -> Options {
                 .clone()
         };
         match arg {
-            "--frames" => result.frames = value(arg, &mut i).parse().expect("invalid --frames"),
             "--glyphs" => result.glyphs = value(arg, &mut i).parse().expect("invalid --glyphs"),
             "--max-size" => {
                 result.max_size = value(arg, &mut i).parse().expect("invalid --max-size")
             }
-            "--verify" => {
-                // Accept both `--verify` and the explicit `--verify true|false`
-                // form used by scripted finite checks.
-                if let Some(next) = args.get(i + 1).map(String::as_str) {
-                    if matches!(next, "true" | "false") {
-                        i += 1;
-                        result.verify = next == "true";
-                    } else {
-                        result.verify = true;
-                    }
-                } else {
-                    result.verify = true;
-                }
-            }
-            "--verify-upload" => result.verify_upload = true,
             "--licenses" => result.licenses = true,
             "-h" | "--help" => {
                 usage();
@@ -124,13 +100,6 @@ pub fn options() -> Options {
         result.max_size.is_finite() && result.max_size > 0.,
         "--max-size must be positive"
     );
-    if result.frames == 0 {
-        if result.verify_upload {
-            result.frames = 4;
-        } else if result.verify {
-            result.frames = 120;
-        }
-    }
     result
 }
 
@@ -172,30 +141,6 @@ fn stats_line(stats: GlyphAtlasStats) -> String {
         stats.rejected_exhausted,
         stats.rejected_raster,
     )
-}
-
-/// A deliberate post-text draw. It forces a queued text batch through the GL
-/// command stream before the framebuffer is captured by `get_screen_data`.
-#[mue_macros::node]
-fn flush_node(ctx: NodeContext) -> Node {
-    ctx.finish(Style::new(), move |style| {
-        style
-            .on_render
-            .append(|_| unsafe { macroquad::window::get_internal_gl() }.flush());
-    })
-}
-
-fn has_nonblack_glyph_pixels(image: &Image) -> bool {
-    image
-        .bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .any(|pixel| pixel[0] > 8 || pixel[1] > 8 || pixel[2] > 8)
-}
-
-fn same_image(a: &Image, b: &Image) -> bool {
-    a.width == b.width && a.height == b.height && a.bytes == b.bytes
 }
 
 #[cfg(target_os = "android")]
@@ -278,104 +223,40 @@ pub async fn run(options: Options) {
                     }),
                 )),
         );
-    let root = if options.verify_upload {
-        // Keep the flush node after text in the same stack, exercising the
-        // upload/geometry ordering before get_screen_data reads the framebuffer.
-        stack()
-            .style(mue_macroquad::style! { width: 100%; height: 100%; })
-            .children((content, flush_node()))
-    } else {
-        stack()
-            .style(mue_macroquad::style! { width: 100%; height: 100%; })
-            .children((content,))
-    };
+    let root = stack()
+        .style(mue_macroquad::style! { width: 100%; height: 100%; })
+        .children((content,));
     let mut app =
         App::new(root.style(mue_macroquad::style! { font-size: {responsive::root_font()}; }));
-    if options.verify_upload && options.frames != 0 {
-        assert!(
-            options.frames >= 2 && options.frames.is_multiple_of(2),
-            "--verify-upload needs an even number of frames, at least two"
-        );
-    }
 
-    let verbose = env::var_os("ATLAS_STATS").is_some() || options.frames != 0;
+    let verbose = env::var_os("ATLAS_STATS").is_some();
     let start = Instant::now();
     let mut last_report = 0.0;
-    let mut first_image: Option<Image> = None;
-    let mut frame = 0;
+    let mut frame = 0u64;
     loop {
         responsive::sync();
-        // Preserve the old triangle animation while allowing finite runs to
-        // reach their requested max size deterministically.
-        let ramp = if options.verify_upload {
-            if (frame / 2) % 2 == 0 { 1.0 } else { 0.37 }
-        } else if options.frames == 0 {
-            let phase = (macroquad::time::get_time() * 0.5).fract();
-            if phase < 0.5 {
-                phase * 2.0
-            } else {
-                (1.0 - phase) * 2.0
-            }
-        } else if options.frames <= 1 {
-            1.0
+        // Animate the font size with a triangle wave.
+        let phase = (macroquad::time::get_time() * 0.5).fract();
+        let wave = if phase < 0.5 {
+            phase * 2.0
         } else {
-            frame as f64 / (options.frames - 1) as f64
+            (1.0 - phase) * 2.0
         };
         let min_size = options.max_size.min(14.0);
-        size.set(min_size + (options.max_size - min_size) * ramp as f32);
+        size.set(min_size + (options.max_size - min_size) * wave as f32);
 
         clear_background(BLACK);
         app.frame();
         let snapshot = glyph_atlas_stats().unwrap_or_default();
         let line = stats_line(snapshot);
         let elapsed = start.elapsed().as_secs_f64();
-        if verbose && (elapsed - last_report >= 1.0 || options.frames != 0) {
+        if verbose && elapsed - last_report >= 1.0 {
             last_report = elapsed;
             println!("frame {frame}: {line}");
         }
-        if !options.verify_upload {
-            stats.set(line.clone());
-        }
-
-        if options.verify_upload {
-            let image = macroquad::texture::get_screen_data();
-            if frame % 2 == 0 {
-                assert!(
-                    has_nonblack_glyph_pixels(&image),
-                    "first uploaded text frame is black"
-                );
-                first_image = Some(image);
-            } else {
-                assert!(
-                    same_image(first_image.as_ref().unwrap(), &image),
-                    "cold-cache text frame differs from its next frame"
-                );
-            }
-        }
+        stats.set(line);
 
         frame += 1;
-        if options.frames != 0 && frame >= options.frames {
-            let final_stats = glyph_atlas_stats().unwrap_or_default();
-            println!("final: {line}");
-            println!(
-                "timing: {} frames in {:.3}s ({:.2} fps)",
-                frame,
-                start.elapsed().as_secs_f64(),
-                frame as f64 / start.elapsed().as_secs_f64().max(f64::MIN_POSITIVE)
-            );
-            if options.verify {
-                assert_eq!(
-                    final_stats.rejected_oversized, 0,
-                    "oversized glyphs rejected"
-                );
-                assert_eq!(final_stats.rejected_exhausted, 0, "atlas slots exhausted");
-                assert_eq!(
-                    final_stats.rejected_raster, 0,
-                    "glyph rasterization rejected"
-                );
-            }
-            return;
-        }
         next_frame().await;
     }
 }

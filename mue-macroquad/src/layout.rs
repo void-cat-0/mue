@@ -83,30 +83,6 @@ pub fn use_layout(style: &mut Style) -> Layout {
     bind_layout(style.build_taffy())
 }
 
-#[cfg(test)]
-pub(crate) fn use_layout_reference(style: &mut Style) -> Layout {
-    bind_layout(style.build_taffy_reference())
-}
-
-#[cfg(test)]
-thread_local! {
-    static STYLE_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static STYLE_COMPUTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn style_writes() -> usize {
-    STYLE_WRITES.get()
-}
-#[cfg(test)]
-pub(crate) fn record_style_compute() {
-    STYLE_COMPUTES.set(STYLE_COMPUTES.get() + 1);
-}
-#[cfg(test)]
-pub(crate) fn style_computes() -> usize {
-    STYLE_COMPUTES.get()
-}
-
 fn bind_layout(style: ReadSignal<taffy::Style>) -> Layout {
     NodeInner::with_mut(|node| {
         if node.layout_id.is_some() {
@@ -119,8 +95,6 @@ fn bind_layout(style: ReadSignal<taffy::Style>) -> Layout {
         watch_effect(move || {
             Runtime::with_taffy_mut(|taffy| {
                 taffy.set_style(layout_id, style.get_clone()).unwrap();
-                #[cfg(test)]
-                STYLE_WRITES.set(STYLE_WRITES.get() + 1);
             });
         });
 

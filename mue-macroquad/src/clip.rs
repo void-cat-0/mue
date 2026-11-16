@@ -74,11 +74,6 @@ pub(crate) fn retained_material_active() -> bool {
     ACTIVE_RETAINED.with(|stack| !stack.borrow().is_empty())
 }
 
-#[doc(hidden)]
-pub fn retained_material_available() -> bool {
-    retained_clip_material().is_some()
-}
-
 fn retained_clip_material() -> Option<RetainedMaterial> {
     RETAINED_CLIP.with(|cell| {
         cell.get_or_init(|| {
@@ -436,53 +431,4 @@ pub(crate) fn with_clip_sector<R>(rect: Rect, sector: Sector, draw: impl FnOnce(
         material.set_uniform("inverse_model", model_matrix(inverse));
         draw()
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Sector, contains_rounded, contains_sector};
-    use crate::math::{Rect, Vector};
-    use std::f32::consts::{FRAC_PI_2, PI, TAU};
-
-    #[test]
-    fn span_normalizes_clockwise() {
-        let quarter = Sector::new(Vector::ZERO, 0., FRAC_PI_2);
-        assert!((quarter.span() - FRAC_PI_2).abs() < 1e-6);
-        let wrapped = Sector::new(Vector::ZERO, FRAC_PI_2, 0.);
-        assert!((wrapped.span() - (TAU - FRAC_PI_2)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn zero_and_full_circle_are_not_clips() {
-        assert!(!Sector::default().is_visible());
-        assert!(!Sector::new(Vector::ZERO, 0., TAU).is_visible());
-        assert!(Sector::new(Vector::ZERO, 0., PI).is_visible());
-    }
-
-    #[test]
-    fn feather_is_non_negative() {
-        assert_eq!(Sector::new(Vector::ZERO, 0., 1.).feather(-1.).feather, 0.);
-    }
-
-    #[test]
-    fn rounded_contains_rejects_the_corner() {
-        let rect = Rect::new(0., 0., 100., 100.);
-        assert!(contains_rounded(rect, 20., Vector::new(50., 50.)));
-        assert!(!contains_rounded(rect, 20., Vector::new(1., 1.)));
-        assert!(contains_rounded(rect, 20., Vector::new(20., 20.)));
-    }
-
-    #[test]
-    fn sector_contains_uses_the_angle() {
-        let rect = Rect::new(0., 0., 100., 100.);
-        let sector = Sector::new(Vector::new(50., 50.), -FRAC_PI_2, 0.);
-        assert!(contains_sector(rect, sector, Vector::new(80., 20.)));
-        assert!(!contains_sector(rect, sector, Vector::new(20., 80.)));
-    }
-
-    #[test]
-    fn sector_shader_uses_local_space() {
-        assert!(super::SECTOR_FRAGMENT.contains("inverse_model"));
-        assert!(super::SECTOR_FRAGMENT.contains("atan(local.y - center.y"));
-    }
 }

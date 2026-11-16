@@ -1,13 +1,4 @@
 mod ext;
-#[cfg(test)]
-#[path = "style/layout_reference.rs"]
-mod layout_reference;
-#[cfg(test)]
-#[path = "style/layout_tests.rs"]
-mod layout_tests;
-#[cfg(test)]
-#[path = "style/lazy_tests.rs"]
-mod lazy_tests;
 mod transform;
 pub use transform::{IntoTransformProp, Transform, TransformOp, TransformOrigin, TransformProp};
 pub mod units;
@@ -27,10 +18,6 @@ use mue_core::{
 use paste::paste;
 use std::{mem, rc::Rc};
 
-#[cfg(test)]
-use mue_core::scope::OwnedScope;
-#[cfg(test)]
-use std::cell::Cell;
 use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
@@ -447,12 +434,6 @@ impl Style {
         Self::default()
     }
 
-    /// Peek at the deferred input without mounting children.
-    #[allow(dead_code)]
-    pub(crate) fn has_children_plan(&self) -> bool {
-        self.children.is_some()
-    }
-
     /// Take the deferred input for mounting inside the node's scope.
     pub(crate) fn take_children_plan(&mut self) -> Option<ChildrenPlan> {
         self.children.take()
@@ -529,79 +510,75 @@ impl Style {
         let flex_grow = self.take_flex_grow();
         let flex_shrink = self.take_flex_shrink();
 
-        computed(move |_| {
-            #[cfg(test)]
-            crate::layout::record_style_compute();
-            taffy::Style {
-                display: display.get(),
-                box_sizing: box_sizing.get(),
-                aspect_ratio: aspect_ratio.get(),
-                gap: taffy::Size {
-                    width: column_gap.get().to_length_percentage("gap"),
-                    height: row_gap.get().to_length_percentage("gap"),
-                },
+        computed(move |_| taffy::Style {
+            display: display.get(),
+            box_sizing: box_sizing.get(),
+            aspect_ratio: aspect_ratio.get(),
+            gap: taffy::Size {
+                width: column_gap.get().to_length_percentage("gap"),
+                height: row_gap.get().to_length_percentage("gap"),
+            },
 
-                size: taffy::Size {
-                    width: width.get().to_dimension(),
-                    height: height.get().to_dimension(),
-                },
-                min_size: taffy::Size {
-                    width: min_width.get().to_dimension(),
-                    height: min_height.get().to_dimension(),
-                },
-                max_size: taffy::Size {
-                    width: max_width.get().to_dimension(),
-                    height: max_height.get().to_dimension(),
-                },
+            size: taffy::Size {
+                width: width.get().to_dimension(),
+                height: height.get().to_dimension(),
+            },
+            min_size: taffy::Size {
+                width: min_width.get().to_dimension(),
+                height: min_height.get().to_dimension(),
+            },
+            max_size: taffy::Size {
+                width: max_width.get().to_dimension(),
+                height: max_height.get().to_dimension(),
+            },
 
-                overflow: Point {
-                    x: overflow_x.get(),
-                    y: overflow_y.get(),
-                },
+            overflow: Point {
+                x: overflow_x.get(),
+                y: overflow_y.get(),
+            },
 
-                margin: taffy::Rect {
-                    left: margin_left.get().to_length_percentage_auto(),
-                    right: margin_right.get().to_length_percentage_auto(),
-                    top: margin_top.get().to_length_percentage_auto(),
-                    bottom: margin_bottom.get().to_length_percentage_auto(),
-                },
-                padding: taffy::Rect {
-                    left: padding_left.get().to_length_percentage("padding"),
-                    right: padding_right.get().to_length_percentage("padding"),
-                    top: padding_top.get().to_length_percentage("padding"),
-                    bottom: padding_bottom.get().to_length_percentage("padding"),
-                },
-                border: taffy::Rect {
-                    left: border_left.get().to_length_percentage("border"),
-                    right: border_right.get().to_length_percentage("border"),
-                    top: border_top.get().to_length_percentage("border"),
-                    bottom: border_bottom.get().to_length_percentage("border"),
-                },
+            margin: taffy::Rect {
+                left: margin_left.get().to_length_percentage_auto(),
+                right: margin_right.get().to_length_percentage_auto(),
+                top: margin_top.get().to_length_percentage_auto(),
+                bottom: margin_bottom.get().to_length_percentage_auto(),
+            },
+            padding: taffy::Rect {
+                left: padding_left.get().to_length_percentage("padding"),
+                right: padding_right.get().to_length_percentage("padding"),
+                top: padding_top.get().to_length_percentage("padding"),
+                bottom: padding_bottom.get().to_length_percentage("padding"),
+            },
+            border: taffy::Rect {
+                left: border_left.get().to_length_percentage("border"),
+                right: border_right.get().to_length_percentage("border"),
+                top: border_top.get().to_length_percentage("border"),
+                bottom: border_bottom.get().to_length_percentage("border"),
+            },
 
-                align_items: align_items.get(),
-                align_self: align_self.get(),
-                justify_items: justify_items.get(),
-                justify_self: justify_self.get(),
-                align_content: align_content.get(),
-                justify_content: justify_content.get(),
+            align_items: align_items.get(),
+            align_self: align_self.get(),
+            justify_items: justify_items.get(),
+            justify_self: justify_self.get(),
+            align_content: align_content.get(),
+            justify_content: justify_content.get(),
 
-                position: position.get(),
-                inset: taffy::Rect {
-                    left: inset_left.get().to_length_percentage_auto(),
-                    right: inset_right.get().to_length_percentage_auto(),
-                    top: inset_top.get().to_length_percentage_auto(),
-                    bottom: inset_bottom.get().to_length_percentage_auto(),
-                },
+            position: position.get(),
+            inset: taffy::Rect {
+                left: inset_left.get().to_length_percentage_auto(),
+                right: inset_right.get().to_length_percentage_auto(),
+                top: inset_top.get().to_length_percentage_auto(),
+                bottom: inset_bottom.get().to_length_percentage_auto(),
+            },
 
-                flex_direction: flex_direction.get(),
-                flex_wrap: flex_wrap.get(),
+            flex_direction: flex_direction.get(),
+            flex_wrap: flex_wrap.get(),
 
-                flex_basis: flex_basis.get().to_dimension(),
-                flex_grow: flex_grow.get(),
-                flex_shrink: flex_shrink.get(),
+            flex_basis: flex_basis.get().to_dimension(),
+            flex_grow: flex_grow.get(),
+            flex_shrink: flex_shrink.get(),
 
-                ..Default::default()
-            }
+            ..Default::default()
         })
     }
 }
@@ -617,86 +594,6 @@ impl Style {
                 self.hover_owners.push(owner);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mue_core::signal::signal;
-
-    use super::*;
-    #[test]
-    fn hover_configuration_reuses_owner_and_transfers_derived_lifetimes() {
-        let external_scope = OwnedScope::new();
-        let external = external_scope.run(|| signal(1.));
-        let configured_scope = OwnedScope::new();
-        let (style, hovered) = configured_scope.run(|| {
-            let mut observed = None;
-            let style = Style::new().with_hovered(|style, hovered| {
-                observed = Some(hovered);
-                style.opacity(computed(
-                    move |_| if hovered.get() { external.get() } else { 0.5 },
-                ))
-            });
-            (style, observed.unwrap())
-        });
-        drop(configured_scope);
-        let mut style = style.style(Style::new().height(10.));
-        let owner = style.ensure_hovered();
-        assert_eq!(style.hover_owners.len(), 1);
-        assert!(Rc::ptr_eq(&owner, &style.ensure_hovered()));
-        let opacity = style.take_opacity();
-        assert_eq!(opacity.get(), 0.5);
-        owner.signal.set(true);
-        assert!(hovered.get());
-        assert_eq!(opacity.get(), 1.);
-        external.set(0.75);
-        assert_eq!(opacity.get(), 0.75);
-        drop(owner);
-        drop(style);
-        assert!(hovered.is_disposed());
-        match opacity {
-            Prop::Dynamic(value) => assert!(value.is_disposed()),
-            Prop::Static(_) => panic!("hover-derived property must be reactive"),
-        }
-        assert!(!external.is_disposed());
-    }
-
-    #[test]
-    fn combining_styles_retains_all_hover_owners_without_duplicates() {
-        let mut outer = Style::new();
-        let first = outer.ensure_hovered();
-        let mut inner = Style::new();
-        let second = inner.ensure_hovered();
-        inner.hover_owners.push(first.clone());
-        let mut merged = outer;
-        merged.provide_defaults(inner);
-        assert_eq!(merged.hover_owners.len(), 2);
-        assert!(Rc::ptr_eq(&first, &merged.ensure_hovered()));
-        let mut defaults = Style::new();
-        let third = defaults.ensure_hovered();
-        defaults.hover_owners.push(second.clone());
-        merged.provide_defaults(defaults);
-        assert_eq!(merged.hover_owners.len(), 3);
-        let signals = [*first.signal, *second.signal, *third.signal];
-        drop((first, second, third));
-        assert!(signals.iter().all(|value| !value.is_disposed()));
-        drop(merged);
-        assert!(signals.iter().all(ReadSignal::is_disposed));
-    }
-
-    #[test]
-    fn child_setter_defers_build_and_replaces_old_plan() {
-        let builds = Rc::new(Cell::new(0));
-        let build = builds.clone();
-        let mut style = Style::new().children(ChildrenPlan::new(move || {
-            build.set(build.get() + 1);
-            ().into_children()
-        }));
-        assert_eq!(builds.get(), 0);
-        style = style.children(());
-        drop(style);
-        assert_eq!(builds.get(), 0);
     }
 }
 

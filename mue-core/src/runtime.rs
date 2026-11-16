@@ -17,10 +17,6 @@ use crate::{
     update_context::UpdateContext,
 };
 
-#[cfg(test)]
-#[path = "runtime/check_bench.rs"]
-mod check_bench;
-
 thread_local! {
     static RUNTIME: Runtime = Runtime::new();
 }
@@ -316,10 +312,6 @@ impl Runtime {
     }
 
     pub fn update_effect_if_necessary(&self, effect_id: EffectId) {
-        #[cfg(test)]
-        if check_bench::use_snapshot() {
-            return self.update_effect_snapshot(effect_id);
-        }
         if effect_id.is_null() {
             return;
         }

@@ -14,7 +14,7 @@ This is an interactive example of the Scene stack API, with no scripted or captu
 - [scene/game.rs](<src/scene/game.rs>): gameplay ownership, lifecycle notifications, input, stack commands, and custom drawing.
 - [scene/results.rs](<src/scene/results.rs>): the independent result Scene and its typed pop decisions.
 - [scene/mod.rs](<src/scene/mod.rs>): the Scene module boundary.
-- [model.rs](<src/model.rs>): pure timer/pause state and the business meaning of `Return` and `Retry`, with ordinary unit tests.
+- [model.rs](<src/model.rs>): pure timer/pause state and the business meaning of `Return` and `Retry`.
 - [input.rs](<src/input.rs>): a local miniquad `EventHandler` collector for the complete raw input batch.
 - [ui.rs](<src/ui.rs>): HUD, pause modal, and result Node construction. Callbacks only enqueue actions in a small `Rc<Cell<GameAction>>` or `Rc<Cell<ResultsAction>>` belonging to that Scene.
 
@@ -55,12 +55,8 @@ The host uses `App::with_scene(GameScene::new())` and calls `app.try_frame()?` w
 
 The UI uses the existing bundled Noto Sans Regular font, initialized before creating Nodes. Custom drawing uses macroquad's default font. No system font installation or runtime downloads are required. The font notice is [OFL-NotoLatinGreekCyrillic.txt](<../playground/assets/fonts/OFL-NotoLatinGreekCyrillic.txt>).
 
-## Business tests
+## Integration limits
 
-```sh
-cargo test -p scenes --offline
-```
-
-Ordinary `#[cfg(test)]` tests cover Return preserving elapsed time and both user pause states, Retry resetting the timer and clearing pause, and the user pause freezing time until Resume. They do not open a graphics window or validate native input, rendering, or Scene runtime scheduling. Use the interactive controls above to exercise those paths.
+Use the interactive controls above to exercise timer/pause behavior, Return preserving elapsed time and the user's pause choice, and Retry resetting the timer and clearing pause.
 
 Actual Phira loading, audio/chart playback, scoring, resource handoff, and Scene exit animations are intentionally not implemented. This is an ownership-preserving Scene round trip, not a complete Phira integration.

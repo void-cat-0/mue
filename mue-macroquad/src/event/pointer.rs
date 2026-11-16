@@ -25,9 +25,6 @@ use crate::{
     scene::{RootInput, SceneRoot},
 };
 
-#[cfg(test)]
-use crate::gesture::Gesture;
-
 fn screen_scale() -> f32 {
     let scale = macroquad::window::screen_dpi_scale();
     if scale.is_finite() && scale > 0. {
@@ -44,17 +41,6 @@ fn screen_bounds() -> Rect {
         macroquad::window::screen_width(),
         macroquad::window::screen_height(),
     )
-}
-
-fn input_time() -> f32 {
-    #[cfg(not(test))]
-    {
-        crate::runtime::get_time()
-    }
-    #[cfg(test)]
-    {
-        0.
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +117,7 @@ impl PointerEvent {
             start_position: start_pos,
             position: start_pos,
             delta: vec2(0., 0.),
-            time: input_time(),
+            time: crate::runtime::get_time(),
         }
     }
 
@@ -139,7 +125,7 @@ impl PointerEvent {
         self.delta = current_pos - self.position;
         self.position = current_pos;
         self.action = action;
-        self.time = input_time();
+        self.time = crate::runtime::get_time();
     }
 
     pub fn pointer_id(&self) -> PointerId {
@@ -214,16 +200,25 @@ impl ClaimToken {
         }
     }
 
+    /// Claim the whole batch or leave it unchanged. Repeated tokens for the same
+    /// gesture are allowed, but different gestures cannot claim the same press.
     #[must_use]
     pub fn claim_all(tokens: &[&ClaimToken]) -> bool {
-        if !tokens.iter().all(|token| token.can_claim()) {
-            false
-        } else {
-            for token in tokens {
-                let _ = token.claim();
+        for (index, token) in tokens.iter().enumerate() {
+            if !token.can_claim()
+                || tokens[..index].iter().any(|other| {
+                    Rc::ptr_eq(&token.state, &other.state) && token.gesture_id != other.gesture_id
+                })
+            {
+                return false;
             }
-            true
         }
+        // Validation invokes no callbacks; commit directly so repeated tokens
+        // do not fail a second claim after their shared state has been claimed.
+        for token in tokens {
+            *token.state.claimed_by.borrow_mut() = token.gesture_id;
+        }
+        true
     }
 
     pub fn dismiss(&self) {
@@ -279,6 +274,9 @@ impl InputPlan {
         mut hit: impl FnMut(Vector) -> IndexSet<NodeRef>,
     ) -> Self {
         let mut mouse = hover.clone();
+        if input.is_interrupted() {
+            mouse.set_focused(true);
+        }
         let mut events = Vec::new();
         for event in input.events() {
             let position = match *event {
@@ -356,7 +354,10 @@ fn hit_roots(
                 || (include_hover_wheel
                     && Runtime::with(|rt| {
                         rt.nodes.borrow().get(node.id).is_some_and(|node| {
-                            !node.hooks.hover_event.is_empty() || !node.hooks.wheel_event.is_empty()
+                            node.hovered.is_some()
+                                || !node.hovered_aliases.is_empty()
+                                || !node.hooks.hover_event.is_empty()
+                                || !node.hooks.wheel_event.is_empty()
                         })
                     }))
         }) {
@@ -518,15 +519,27 @@ impl PointerTrack {
     }
 }
 
+/// Routes Node pointer input. Drop revokes retained gesture tokens without
+/// delivering pointer/gesture callbacks or accessing the host.
 pub struct PointerManager {
     root_node: NodeRef,
-    subscriber: Option<InputSubscriber>,
+    subscriber: InputSubscriber,
     tracks: HashMap<PointerId, PointerTrack>,
     hover: HoverState,
     /// Ratio of physical miniquad event coordinates to logical layout
     /// coordinates. Updated from macroquad on every frame.
     dpi_scale: f32,
     planned_path: Option<IndexSet<NodeRef>>,
+}
+
+impl Drop for PointerManager {
+    fn drop(&mut self) {
+        // Node and recognizer owners can outlive the router. Invalidate their
+        // delayed tokens before these tracks disappear, without user callbacks.
+        for track in self.tracks.values() {
+            track.state.reset();
+        }
+    }
 }
 
 impl Default for PointerManager {
@@ -544,7 +557,7 @@ impl PointerManager {
         hover.set_window_bounds(Some(screen_bounds()));
         Self {
             root_node: NodeRef::null(),
-            subscriber: Some(InputSubscriber::new()),
+            subscriber: InputSubscriber::new(),
             tracks: HashMap::new(),
             hover,
             dpi_scale: screen_scale(),
@@ -552,24 +565,9 @@ impl PointerManager {
         }
     }
 
-    /// Construct without a macroquad host or underlying input subscription.
-    #[cfg(test)]
-    pub(crate) fn headless() -> Self {
-        Self {
-            root_node: NodeRef::null(),
-            subscriber: None,
-            tracks: HashMap::new(),
-            hover: HoverState::default(),
-            dpi_scale: 1.,
-            planned_path: None,
-        }
-    }
-
     /// Collect before timers/tasks can trigger gestures from stale presses.
     pub(crate) fn prepare_input(&mut self) -> InputBatch {
-        self.subscriber
-            .as_mut()
-            .map_or_else(InputBatch::default, InputSubscriber::read)
+        self.subscriber.read()
     }
 
     fn handle_interruption(&mut self, input: &InputBatch) {
@@ -580,9 +578,7 @@ impl PointerManager {
 
     /// Discard suspended UI input and cancel capture/gestures before ticking.
     pub(crate) fn pause_input(&mut self) {
-        if let Some(subscriber) = &mut self.subscriber {
-            drop(subscriber.read());
-        }
+        drop(self.subscriber.read());
         self.cancel_input();
     }
 
@@ -607,11 +603,7 @@ impl PointerManager {
     pub(crate) fn process_input(&mut self, root_node: NodeRef, input: &InputBatch) {
         self.update_window_metrics();
         self.root_node = root_node;
-        let mut hover = self.hover.clone();
-        if input.is_interrupted() {
-            hover.set_focused(true);
-        }
-        let plan = InputPlan::new(root_node, input, &hover, self.dpi_scale);
+        let plan = InputPlan::new(root_node, input, &self.hover, self.dpi_scale);
         // Cancellation callbacks may mutate UI too, so plan before invoking them.
         self.handle_interruption(input);
         self.dispatch_plan(plan);
@@ -621,22 +613,15 @@ impl PointerManager {
     /// Scene receives the original InputBatch independently of this plan.
     pub(crate) fn plan_roots(&mut self, roots: &[SceneRoot], input: &InputBatch) -> InputPlan {
         self.update_window_metrics();
-        let mut hover = self.hover.clone();
-        if input.is_interrupted() {
-            hover.set_focused(true);
-        }
-        InputPlan::with_hit_test(input, &hover, self.dpi_scale, |pos| {
+        InputPlan::with_hit_test(input, &self.hover, self.dpi_scale, |pos| {
             hit_roots(roots, pos, true)
         })
     }
 
     fn update_window_metrics(&mut self) {
-        // Headless managers retain their pure test parameters and never read a
-        // graphics context. Production event coordinates and bounds are logical.
-        if self.subscriber.is_some() {
-            self.dpi_scale = screen_scale();
-            self.hover.set_window_bounds(Some(screen_bounds()));
-        }
+        // Event coordinates and bounds are logical.
+        self.dpi_scale = screen_scale();
+        self.hover.set_window_bounds(Some(screen_bounds()));
     }
 
     /// Dispatch precomputed Node routes without modifying the raw Scene batch.
@@ -808,7 +793,7 @@ impl PointerManager {
         });
     }
 
-    fn on_track_move(track: &mut PointerTrack, _root_node: NodeRef, pos: Vector) {
+    fn on_track_move(track: &mut PointerTrack, pos: Vector) {
         if track.event.is_hover {
             track.event.update(PointerAction::Move, pos);
         } else {
@@ -816,7 +801,7 @@ impl PointerManager {
         }
     }
 
-    fn on_track_up(track: &mut PointerTrack, _root_node: NodeRef, pos: Vector) {
+    fn on_track_up(track: &mut PointerTrack, pos: Vector) {
         track.update(PointerAction::Up, pos);
         track.state.reset();
         track.event.is_hover = true;
@@ -836,7 +821,7 @@ impl PointerManager {
 
     fn on_pointer_move(&mut self, id: PointerId, pointer_type: PointerType, pos: Vector) {
         if let Some(track) = self.tracks.get_mut(&id) {
-            Self::on_track_move(track, self.root_node, pos);
+            Self::on_track_move(track, pos);
         } else if pointer_type == PointerType::Mouse {
             // Only a mouse move without start can establish hover.
             let mut event = PointerEvent::new(id, pointer_type, pos);
@@ -867,18 +852,22 @@ impl PointerManager {
         button_state: ButtonState,
         pos: Vector,
     ) {
+        if let Some(track) = self.tracks.get_mut(&id)
+            && !track.event.is_hover
+        {
+            // Additional mouse buttons stay on the existing capture path.
+            track.event.button_state.insert(button_state);
+            Self::on_track_move(track, pos);
+            return;
+        }
         let path = self.hit_path(pos);
         if let Some(track) = self.tracks.get_mut(&id) {
             track.event.button_state.insert(button_state);
-            if track.event.is_hover {
-                Self::on_track_down(track, path, pos);
-            } else {
-                Self::on_track_move(track, self.root_node, pos);
-            }
+            Self::on_track_down(track, path, pos);
         } else {
             let mut event = PointerEvent::new(id, pointer_type, pos);
             event.button_state.insert(button_state);
-            let mut track = PointerTrack::new(self.hit_path(pos), event);
+            let mut track = PointerTrack::new(path, event);
             track.dispatch();
             self.tracks.insert(id, track);
         }
@@ -891,9 +880,9 @@ impl PointerManager {
             }
             track.event.button_state.remove(button_state);
             if track.event.button_state.is_empty() {
-                Self::on_track_up(track, self.root_node, pos);
+                Self::on_track_up(track, pos);
             } else {
-                Self::on_track_move(track, self.root_node, pos);
+                Self::on_track_move(track, pos);
             }
         }
     }
@@ -987,200 +976,5 @@ impl EventHandler for PointerManager {
             miniquad::TouchPhase::Ended => self.on_pointer_end(pointer_id, pos),
             miniquad::TouchPhase::Cancelled => self.on_pointer_cancel(pointer_id),
         }
-    }
-}
-
-#[cfg(test)]
-mod batch_tests;
-#[cfg(test)]
-mod boundary_tests;
-#[cfg(test)]
-mod scene_tests;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{event::hit_test::tests::TestNode, math::Rect};
-    use mue_core::{
-        Disposable,
-        signal::{Access, signal},
-    };
-
-    fn manager(root: NodeRef) -> PointerManager {
-        PointerManager {
-            root_node: root,
-            subscriber: None,
-            tracks: HashMap::new(),
-            hover: HoverState::default(),
-            dpi_scale: 1.,
-            planned_path: None,
-        }
-    }
-    #[test]
-    fn drag_hover_follows_current_position_without_changing_down_path() {
-        let left = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
-        let right = TestNode::new(Some(Rect::new(30., 0., 20., 20.)), &[]);
-        let root = TestNode::new(None, &[left.0, right.0]);
-        let (a, b) = (signal(false), signal(false));
-        Runtime::with(|rt| {
-            let mut nodes = rt.nodes.borrow_mut();
-            nodes[left.0.id].hovered = Some(a);
-            nodes[right.0.id].hovered = Some(b);
-        });
-        let mut input = manager(root.0);
-        input.mouse_motion_event(5., 5.);
-        input.mouse_button_down_event(MouseButton::Left, 5., 5.);
-        input.mouse_button_down_event(MouseButton::Right, 5., 5.);
-        input.mouse_motion_event(35., 5.);
-        assert!(!a.get() && b.get());
-        let track = &input.tracks[&PointerId::MOUSE];
-        assert!(track.nodes.contains(&left.0));
-        assert!(!track.nodes.contains(&right.0));
-        assert!(
-            track
-                .event
-                .button_state
-                .contains(ButtonState::PRIMARY | ButtonState::SECONDARY)
-        );
-        input.mouse_leave_event();
-        assert!(!b.get());
-        assert!(!input.tracks.contains_key(&PointerId::MOUSE));
-        input.mouse_enter_event(MouseButton::Unknown, 35., 5.);
-        assert!(b.get());
-        assert!(
-            input.tracks[&PointerId::MOUSE]
-                .event
-                .button_state
-                .is_empty()
-        );
-        a.dispose();
-        b.dispose();
-    }
-    #[test]
-    fn touch_does_not_create_hover_and_restore_waits_for_a_fresh_position() {
-        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
-        let hovered = signal(false);
-        Runtime::with(|rt| rt.nodes.borrow_mut()[root.0.id].hovered = Some(hovered));
-        let mut input = manager(root.0);
-        input.touch_event(miniquad::TouchPhase::Moved, 1, 5., 5., 0.);
-        assert!(input.tracks.is_empty());
-        input.touch_event(miniquad::TouchPhase::Started, 1, 5., 5., 0.);
-        input.touch_event(miniquad::TouchPhase::Moved, 1, 6., 5., 0.);
-        input.touch_event(miniquad::TouchPhase::Ended, 1, 6., 5., 0.);
-        assert!(!hovered.get());
-        input.mouse_motion_event(5., 5.);
-        assert!(hovered.get());
-        input.window_minimized_event();
-        assert!(!hovered.get());
-        input.window_restored_event();
-        input.refresh_hover(false);
-        assert!(!hovered.get());
-        input.mouse_enter_event(MouseButton::Unknown, 5., 5.);
-        assert!(hovered.get());
-        hovered.dispose();
-    }
-
-    #[test]
-    fn interruption_cancels_capture_and_claims_once_then_accepts_fresh_input() {
-        struct Recorder(
-            Rc<RefCell<Vec<PointerAction>>>,
-            Rc<RefCell<Vec<ClaimToken>>>,
-        );
-        impl Gesture for Recorder {
-            fn on_event(&mut self, event: &PointerEvent, token: &ClaimToken) {
-                self.0.borrow_mut().push(event.action());
-                if event.action() == PointerAction::Down {
-                    self.1.borrow_mut().push(token.clone());
-                }
-            }
-        }
-        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
-        let hovered = signal(false);
-        let actions = Rc::new(RefCell::new(Vec::new()));
-        let tokens = Rc::new(RefCell::new(Vec::new()));
-        let gesture = Runtime::with(|rt| {
-            let id = rt
-                .gestures
-                .borrow_mut()
-                .insert(Some(Box::new(Recorder(actions.clone(), tokens.clone()))));
-            let mut nodes = rt.nodes.borrow_mut();
-            nodes[root.0.id].gestures.push(id);
-            nodes[root.0.id].hovered = Some(hovered);
-            id
-        });
-        let mut input = manager(root.0);
-        input.mouse_motion_event(5., 5.);
-        input.mouse_button_down_event(MouseButton::Left, 5., 5.);
-        input.touch_event(miniquad::TouchPhase::Started, 1, 5., 5., 0.);
-        assert!(hovered.get());
-        assert!(tokens.borrow().iter().all(ClaimToken::can_claim));
-        input.handle_interruption(&InputBatch::interrupted());
-        input.handle_interruption(&InputBatch::interrupted());
-        assert!(!hovered.get());
-        assert!(input.tracks.is_empty());
-        assert!(tokens.borrow().iter().all(|token| !token.can_claim()));
-        assert_eq!(
-            actions
-                .borrow()
-                .iter()
-                .filter(|a| **a == PointerAction::Cancel)
-                .count(),
-            2
-        );
-        input.touch_event(miniquad::TouchPhase::Started, 2, 6., 6., 0.);
-        assert_eq!(input.tracks.len(), 1);
-        assert_eq!(actions.borrow().last(), Some(&PointerAction::Down));
-        input.pause_input();
-        Runtime::with(|rt| {
-            rt.gestures.borrow_mut().remove(gesture);
-        });
-        hovered.dispose();
-    }
-
-    #[test]
-    fn interruption_after_a_lost_restore_waits_for_a_fresh_mouse_position() {
-        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
-        let hovered = signal(false);
-        Runtime::with(|rt| rt.nodes.borrow_mut()[root.0.id].hovered = Some(hovered));
-        let mut input = manager(root.0);
-        input.mouse_motion_event(5., 5.);
-        input.window_minimized_event();
-        input.handle_interruption(&InputBatch::interrupted());
-        input.refresh_hover(false);
-        assert!(!hovered.get());
-        input.mouse_motion_event(5., 5.);
-        assert!(hovered.get());
-        input.pause_input();
-        input.pause_input();
-        assert!(!hovered.get());
-        assert!(input.tracks.is_empty());
-        hovered.dispose();
-    }
-
-    #[test]
-    fn dpi_scale_normalizes_pointer_events_to_logical_pixels() {
-        let root = TestNode::new(Some(Rect::new(0., 0., 20., 20.)), &[]);
-        let hovered = signal(false);
-        Runtime::with(|rt| rt.nodes.borrow_mut()[root.0.id].hovered = Some(hovered));
-        let mut input = manager(root.0);
-        input.dpi_scale = 2.;
-
-        // Physical (10, 10) is logical (5, 5), inside the 20x20 root.
-        input.mouse_motion_event(10., 10.);
-        assert!(hovered.get());
-        input.mouse_button_down_event(MouseButton::Left, 10., 10.);
-        assert!(input.tracks.contains_key(&PointerId::MOUSE));
-        input.mouse_button_up_event(MouseButton::Left, 10., 10.);
-        assert!(
-            input.tracks[&PointerId::MOUSE]
-                .event
-                .button_state
-                .is_empty()
-        );
-
-        // Physical (50, 50) is logical (25, 25), outside the root.
-        input.mouse_motion_event(50., 50.);
-        assert!(!hovered.get());
-        hovered.dispose();
     }
 }

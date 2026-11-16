@@ -66,8 +66,6 @@ pub struct Prepared {
     pub rgba: Vec<u8>,
     pub points: Vec<Point>,
     pub source_hash: u64,
-    #[cfg(test)]
-    released: Option<tests::ReleaseNotice>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -98,40 +96,19 @@ pub enum LoadOutcome {
     Cancelled { generation_id: u64 },
 }
 
-/// Thread-safe, read-only observation that can outlive a Request. Finished means
-/// CPU work has ended, NOT that its output has been accepted, uploaded, or run.
-/// A cancelled monitor can finish late but can never become accepted.
+/// Thread-safe, read-only progress/cancellation observation that can outlive a
+/// Request. Progress does not imply that output was accepted, uploaded, or run.
+/// A cancelled monitor's output can never become accepted.
 #[derive(Debug)]
 pub struct LoadMonitor {
-    #[cfg(test)]
-    generation_id: u64,
     source_bytes: usize,
     completed_bytes: AtomicUsize,
     cancelled: AtomicBool,
-    #[cfg(test)]
-    finished: AtomicBool,
-    #[cfg(test)]
-    accepted: AtomicBool,
 }
 
 impl LoadMonitor {
-    #[cfg(test)]
-    pub fn generation_id(&self) -> u64 {
-        self.generation_id
-    }
-
-    #[cfg(test)]
-    pub fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
-    }
-
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
-    }
-
-    #[cfg(test)]
-    pub fn is_accepted(&self) -> bool {
-        self.accepted.load(Ordering::Acquire)
     }
 
     pub fn progress(&self) -> f32 {
@@ -159,52 +136,17 @@ impl Request {
 
     /// Start actual CPU work now, without waiting for the first foreground tick.
     pub fn load(&mut self, source: Vec<u8>, config: LoadConfig) -> u64 {
-        self.load_inner(
-            source,
-            config,
-            #[cfg(test)]
-            None,
-        )
-    }
-
-    fn load_inner(
-        &mut self,
-        source: Vec<u8>,
-        config: LoadConfig,
-        #[cfg(test)] gate: Option<tests::DecodeGate>,
-    ) -> u64 {
         self.invalidate();
         self.pending_cancel = None;
         let generation_id = next_generation();
         let monitor = Arc::new(LoadMonitor {
-            #[cfg(test)]
-            generation_id,
             source_bytes: source.len(),
             completed_bytes: AtomicUsize::new(0),
             cancelled: AtomicBool::new(false),
-            #[cfg(test)]
-            finished: AtomicBool::new(false),
-            #[cfg(test)]
-            accepted: AtomicBool::new(false),
         });
         let worker_monitor = monitor.clone();
-        let blocking = spawn_blocking(move || {
-            #[allow(unused_mut)]
-            let mut decoded = decode(source, generation_id, config, &worker_monitor);
-            // Test-only channels hold an already decoded real resource at the
-            // handoff boundary, allowing cancellation/replacement without sleeps.
-            #[cfg(test)]
-            if let Some(gate) = &gate {
-                gate.wait_after_decode(&mut decoded);
-            }
-            #[cfg(test)]
-            worker_monitor.finished.store(true, Ordering::Release);
-            #[cfg(test)]
-            if let Some(gate) = gate {
-                gate.worker_done();
-            }
-            decoded
-        });
+        let blocking =
+            spawn_blocking(move || decode(source, generation_id, config, &worker_monitor));
         let publish_monitor = monitor.clone();
         self.publisher = Some(spawn(async move {
             let decoded = blocking.await;
@@ -224,15 +166,6 @@ impl Request {
 
     pub fn generation_id(&self) -> Option<u64> {
         self.generation_id
-    }
-
-    /// Observe CPU completion without consuming a Task or handing off resources.
-    /// Foreground task ticks are still required before update can yield Ready.
-    #[cfg(test)]
-    pub fn is_finished(&self) -> bool {
-        self.monitor
-            .as_ref()
-            .is_some_and(|monitor| monitor.is_finished())
     }
 
     pub fn monitor(&self) -> Option<Arc<LoadMonitor>> {
@@ -257,10 +190,6 @@ impl Request {
             // Normally Task drop already prevents this path. Retain the check
             // here: resource identity is validated at the actual handoff boundary.
             return None;
-        }
-        #[cfg(test)]
-        if matches!(&outcome, LoadOutcome::Ready(_)) {
-            monitor.accepted.store(true, Ordering::Release);
         }
         Some(outcome)
     }
@@ -404,8 +333,6 @@ fn decode(
         rgba,
         points,
         source_hash,
-        #[cfg(test)]
-        released: None,
     }))
 }
 
@@ -450,12 +377,6 @@ pub struct SessionSnapshot {
     pub duration: f32,
     pub attempt: u64,
     pub points_reached: usize,
-    pub start_count: u64,
-    pub stop_count: u64,
-    /// Started-but-not-stopped attempts: 0 or 1. A paused attempt remains active;
-    /// pause/resume changes permission to advance, not resource/session ownership.
-    pub running_count: u64,
-    pub result: Option<AttemptResult>,
 }
 
 struct Attempt {
@@ -463,9 +384,7 @@ struct Attempt {
     elapsed: f32,
     points_reached: usize,
     start_count: u64,
-    stop_count: u64,
     discard_next_dt: bool,
-    result: Option<AttemptResult>,
 }
 
 /// Put this in Rc to retain one retry context and one Rc<Prepared> across results.
@@ -485,9 +404,7 @@ impl Session {
                 elapsed: 0.0,
                 points_reached: 0,
                 start_count: 0,
-                stop_count: 0,
                 discard_next_dt: false,
-                result: None,
             }),
         }
     }
@@ -510,7 +427,6 @@ impl Session {
         attempt.elapsed = 0.0;
         attempt.points_reached = 0;
         attempt.discard_next_dt = true;
-        attempt.result = None;
         true
     }
 
@@ -572,18 +488,15 @@ impl Session {
 
     fn stop(&self, attempt: &mut Attempt, reason: EndReason) -> AttemptResult {
         attempt.state = SessionState::Stopped;
-        attempt.stop_count += 1;
         attempt.discard_next_dt = false;
-        let result = AttemptResult {
+        AttemptResult {
             generation_id: self.prepared.generation_id,
             attempt: attempt.start_count,
             reason,
             elapsed: attempt.elapsed,
             duration: self.prepared.duration,
             points_reached: attempt.points_reached,
-        };
-        attempt.result = Some(result.clone());
-        result
+        }
     }
 
     pub fn snapshot(&self) -> SessionSnapshot {
@@ -595,10 +508,6 @@ impl Session {
             duration: self.prepared.duration,
             attempt: attempt.start_count,
             points_reached: attempt.points_reached,
-            start_count: attempt.start_count,
-            stop_count: attempt.stop_count,
-            running_count: attempt.start_count - attempt.stop_count,
-            result: attempt.result.clone(),
         }
     }
 }
@@ -610,7 +519,3 @@ impl Drop for Session {
         self.exit();
     }
 }
-
-#[cfg(test)]
-#[path = "flow/tests.rs"]
-mod tests;

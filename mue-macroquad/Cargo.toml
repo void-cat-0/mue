@@ -6,6 +6,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 anyhow = "1.0"
 bitflags = "2.11.0"

@@ -116,26 +116,9 @@ async fn run() {
                 )),
             ),
     );
-    let frames = std::env::args().find_map(|arg| {
-        arg.strip_prefix("--frames=")
-            .and_then(|value| value.parse::<usize>().ok())
-    });
-    let screenshot =
-        std::env::args().find_map(|arg| arg.strip_prefix("--screenshot=").map(str::to_owned));
-    for frame in 0usize.. {
+    loop {
         clear_background(Color::WHITE.into());
         app.frame();
-        if frames.is_some() && frame == 1 {
-            active.set(true);
-        }
-        if let Some(frames) = frames
-            && frame + 1 >= frames
-        {
-            if let Some(path) = &screenshot {
-                macroquad::texture::get_screen_data().export_png(path);
-            }
-            break;
-        }
         next_frame().await;
     }
 }

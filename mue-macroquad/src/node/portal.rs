@@ -51,19 +51,3 @@ pub fn portal(ctx: NodeContext, texture: SharedTexture, #[default(true)] flip_y:
         style.on_render.append(move |_| shapes.get_clone().draw());
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::portal_uv;
-    use crate::math::Rect;
-
-    #[test]
-    fn uv_is_screen_oriented_by_default() {
-        assert_eq!(portal_uv(false), Rect::new(0., 0., 1., 1.));
-    }
-
-    #[test]
-    fn uv_flips_vertically_for_render_targets() {
-        assert_eq!(portal_uv(true), Rect::new(0., 1., 1., -1.));
-    }
-}

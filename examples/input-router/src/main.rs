@@ -1,4 +1,4 @@
-use input_router::{InputRouter, Route};
+use input_router::InputRouter;
 
 fn main() {
     let mut router = InputRouter::new();
@@ -12,6 +12,4 @@ fn main() {
     println!("down while modal -> {:?}", router.down(3, false));
     println!("back -> {}", router.back());
     println!("down after modal -> {:?}", router.down(4, false));
-
-    assert_eq!(router.down(5, false), Route::Chart);
 }

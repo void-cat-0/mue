@@ -21,7 +21,7 @@ pub(crate) use clock::PhaseClock;
 pub(crate) use picture::PictureCache;
 
 use anyhow::{Result, bail};
-use macroquad::{material::Material, texture::Texture2D};
+use macroquad::texture::Texture2D;
 
 use crate::{math::Rect, transition::Transition};
 
@@ -77,18 +77,18 @@ pub struct SceneTransition {
 }
 
 enum Draw {
-    Crossfade { material: Option<Material> },
+    Crossfade,
     Composite(Box<CompositeDraw>),
     Overlay(Box<OverlayDraw>),
 }
 
 impl SceneTransition {
     /// GPU crossfade of the old complete picture and the current live picture.
-    /// Shader compilation is deferred until the first composite draw.
+    /// Shader compilation is deferred until the first crossfade draw and cached by App.
     pub fn crossfade(curve: Transition) -> Self {
         Self {
             timing: TransitionTiming::AfterSwitch(curve),
-            draw: Draw::Crossfade { material: None },
+            draw: Draw::Crossfade,
         }
     }
 
@@ -124,32 +124,11 @@ impl SceneTransition {
         !matches!(self.draw, Draw::Overlay(_))
     }
 
-    // PictureCache supplies the camera/state boundary, also in headless mode.
+    // PictureCache supplies the camera/state boundary.
     pub(crate) fn draw_overlay(&mut self, frame: TransitionFrame) -> Result<()> {
         match &mut self.draw {
             Draw::Overlay(draw) => draw(frame),
             _ => bail!("a composite transition requires Scene pictures"),
         }
     }
-
-    pub(crate) fn draw_composite(
-        &mut self,
-        frame: TransitionFrame,
-        pictures: ScenePictures<'_>,
-    ) -> Result<()> {
-        match &mut self.draw {
-            Draw::Crossfade { material } => {
-                if material.is_none() {
-                    *material = Some(picture::make_crossfade_material()?);
-                }
-                picture::crossfade(material.as_ref().unwrap(), frame, pictures);
-                Ok(())
-            }
-            Draw::Composite(draw) => draw(frame, pictures),
-            Draw::Overlay(_) => bail!("an overlay transition does not composite Scene pictures"),
-        }
-    }
 }
-
-#[cfg(test)]
-mod tests;

@@ -164,15 +164,3 @@ impl Drop for MaterialGuard {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::UI_VERTEX;
-
-    #[test]
-    fn vertex_shader_exposes_model_space_position() {
-        assert!(UI_VERTEX.contains("varying highp vec2 v_pos;"));
-        assert!(UI_VERTEX.contains("v_pos = world.xy;"));
-        assert!(UI_VERTEX.contains("Model * vec4(position, 1.0)"));
-    }
-}

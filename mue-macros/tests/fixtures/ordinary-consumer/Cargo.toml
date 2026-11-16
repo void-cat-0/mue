@@ -1,9 +1,0 @@
-[package]
-name = "ordinary-macro-consumer"
-version = "0.0.0"
-edition = "2024"
-
-[workspace]
-
-[dependencies]
-ui = { package = "mue-macroquad", path = "../ordinary-host" }

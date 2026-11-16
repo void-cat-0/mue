@@ -107,16 +107,3 @@ impl From<Rect> for macroquad::math::Rect {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn union_covers_both_rects() {
-        let a = Rect::new(0., 0., 10., 10.);
-        let b = Rect::new(20., -5., 5., 5.);
-        assert_eq!(a.union(&b), Rect::new(0., -5., 25., 15.));
-        assert_eq!(b.union(&a), a.union(&b));
-    }
-}

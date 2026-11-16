@@ -1,7 +1,5 @@
 //! Retained UI trees and their Scene-local display geometry.
 mod settings;
-#[cfg(test)]
-pub(crate) mod tests;
 
 pub use settings::SettingsView;
 

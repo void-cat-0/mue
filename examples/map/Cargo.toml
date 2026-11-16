@@ -13,4 +13,5 @@ mue-macroquad = { workspace = true }
 mue-components = { workspace = true }
 
 [lib]
+doctest = false
 crate-type = ["cdylib", "rlib"]

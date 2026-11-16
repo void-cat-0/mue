@@ -1,23 +1,15 @@
-//! Probe how a host raw miniquad render pass coexists with mue's frame.
+//! A manual example of a host miniquad render pass alongside mue.
 //!
-//! Each case runs one measured frame and reads back:
-//! - the host render target center (did the host pass survive?),
-//! - the default framebuffer center before macroquad flushes queued UI,
-//! - the default framebuffer center after `get_screen_data()` flushes UI,
-//! - the chart target center (did the channel render?).
+//! Use the Left and Right arrow keys to select a rendering sequence. The
+//! window shows the resulting UI and previews of the host and chart targets
+//! for direct visual inspection.
 //!
-//! Run with `DISPLAY=:0 cargo run -p pass-probe --offline`. The process exits
-//! with 0 when every case matches its expectation and 1 otherwise.
-//!
-//! The retained case requires macroquad's OpenGL retained backend. On other
-//! backends the probe reports `retained supported: false`; the retained case
-//! falls back to the immediate path and fails its expectation.
-
-use std::io::Write;
+//! Run with `DISPLAY=:0 cargo run -p pass-probe --offline`. Press Escape or
+//! close the window to quit. The retained sequence falls back to immediate
+//! rendering on backends without retained support.
 
 use macroquad::miniquad::PassAction;
 use macroquad::prelude::*;
-use macroquad::texture::get_screen_data;
 use macroquad::window::get_internal_gl;
 use mue_components::prelude::*;
 use mue_core::prelude::*;
@@ -86,58 +78,14 @@ impl Case {
     fn renders_chart_in_case(self) -> bool {
         matches!(self, Case::ChannelInPass | Case::ChannelBeforePass)
     }
-
-    fn expected(self) -> Expected {
-        match self {
-            Case::RawOnly | Case::AppInPassNoRetained | Case::ChannelBeforePass => Expected {
-                host: HOST_RED,
-                screen_raw: SCREEN_BLACK,
-                chart: CHART_YELLOW,
-            },
-            Case::AppInPassRetained
-            | Case::FlushInPass
-            | Case::ChannelInPass
-            | Case::SetDefaultCameraInPass => Expected {
-                host: HOST_GREEN,
-                screen_raw: HOST_RED,
-                chart: CHART_YELLOW,
-            },
-            Case::MacroquadStateTarget => Expected {
-                host: CHART_YELLOW,
-                screen_raw: SCREEN_BLACK,
-                chart: CHART_YELLOW,
-            },
-            Case::SetDefaultCameraInPassNoPending => Expected {
-                host: HOST_RED,
-                screen_raw: SCREEN_BLACK,
-                chart: CHART_YELLOW,
-            },
-        }
-    }
 }
 
-#[derive(Clone, Copy)]
-struct Expected {
-    host: Color,
-    screen_raw: Color,
-    chart: Color,
-}
-
-struct CaseResult {
-    case: Case,
-    host: Color,
-    screen_raw: Color,
-    screen: Color,
-    chart: Color,
-    pass: bool,
-}
-
-struct MockChannel {
+struct ChartChannel {
     target: RenderTarget,
     camera: Camera2D,
 }
 
-impl MockChannel {
+impl ChartChannel {
     fn new(target: RenderTarget) -> Self {
         let mut camera = Camera2D::from_display_rect(Rect::new(
             0.,
@@ -166,8 +114,8 @@ impl MockChannel {
     }
 }
 
-fn long_text() -> String {
-    let line = "retained text line: pass ownership probe 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz\n";
+fn retained_text() -> String {
+    let line = "retained text line: render pass example 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz\n";
     line.repeat(20)
 }
 
@@ -202,7 +150,7 @@ fn ui(texture: Signal<SharedTexture>, font: FamilyOwned, retained: Signal<bool>)
                     justify-content: flex-start;
                 })
                 .children((
-                    heading("pass ownership probe").style(mue_macroquad::style! {
+                    heading("render pass example").style(mue_macroquad::style! {
                         font-family: {font.clone()};
                         font-size: 28px;
                         color: {MueColor::from_rgba(255, 255, 255, 255)};
@@ -210,7 +158,7 @@ fn ui(texture: Signal<SharedTexture>, font: FamilyOwned, retained: Signal<bool>)
                     label("host raw pass vs mue App::frame"),
                     show_if(
                         retained,
-                        text(long_text()).style(mue_macroquad::style! {
+                        text(retained_text()).style(mue_macroquad::style! {
                             font-family: {font.clone()};
                             font-size: 9px;
                             color: {MueColor::from_rgba(230, 230, 230, 255)};
@@ -256,68 +204,14 @@ fn clear_target(target: &RenderTarget, color: Color) {
     gl.quad_context.end_render_pass();
 }
 
-fn read_target(target: &RenderTarget) -> Color {
-    let image = target.texture.get_texture_data();
-    image.get_pixel(image.width as u32 / 2, image.height as u32 / 2)
-}
-
-fn read_screen_raw(screen_probe: &RenderTarget) -> Color {
-    screen_probe.texture.grab_screen();
-    let image = screen_probe.texture.get_texture_data();
-    image.get_pixel(image.width as u32 / 2, image.height as u32 / 2)
-}
-
-fn read_screen_flushed() -> Color {
-    let image = get_screen_data();
-    image.get_pixel(image.width as u32 / 2, image.height as u32 / 2)
-}
-
-fn same(a: Color, b: Color) -> bool {
-    (a.r - b.r).abs() < 0.02 && (a.g - b.g).abs() < 0.02 && (a.b - b.b).abs() < 0.02
-}
-
-fn color_label(color: Color) -> String {
-    let name = if same(color, HOST_RED) {
-        "red"
-    } else if same(color, HOST_GREEN) {
-        "green"
-    } else if same(color, SCREEN_BLACK) {
-        "black"
-    } else if same(color, CHART_YELLOW) {
-        "chart"
-    } else if same(color, CHART_CYAN) {
-        "cyan"
-    } else if same(color, CHART_MAGENTA) {
-        "magenta"
-    } else {
-        "other"
-    };
-    format!(
-        "{name}({:.0},{:.0},{:.0})",
-        color.r * 255.,
-        color.g * 255.,
-        color.b * 255.
-    )
-}
-
-async fn run_case(
+fn render_case(
     case: Case,
     app: &mut App,
-    channel: &mut MockChannel,
+    channel: &mut ChartChannel,
     host_target: &RenderTarget,
     chart_target: &RenderTarget,
-    screen_probe: &RenderTarget,
-    retained: &Signal<bool>,
-) -> CaseResult {
-    retained.set(case.uses_retained());
-    if case.uses_retained() {
-        // Warm up layout and the retained mesh cache before the measured frame.
-        app.frame();
-        next_frame().await;
-    }
-
-    // Begin the measured frame from a known state.
-    unsafe { get_internal_gl() }.flush();
+) {
+    set_default_camera();
     clear_background(SCREEN_BLACK);
     clear_target(host_target, SCREEN_BLACK);
     clear_target(chart_target, SCREEN_BLACK);
@@ -386,63 +280,53 @@ async fn run_case(
             end_host_pass();
         }
     }
-
-    let screen_raw = read_screen_raw(screen_probe);
-    let screen = read_screen_flushed();
-    next_frame().await;
-    let host = read_target(host_target);
-    let chart = read_target(chart_target);
-
-    let expected = case.expected();
-    let pass = same(host, expected.host)
-        && same(screen_raw, expected.screen_raw)
-        && same(chart, expected.chart);
-
-    CaseResult {
-        case,
-        host,
-        screen_raw,
-        screen,
-        chart,
-        pass,
-    }
 }
 
-fn print_case(result: &CaseResult) {
-    let expected = result.case.expected();
-    println!("case: {}", result.case.name());
-    println!("  host target center: {}", color_label(result.host));
-    println!("  screen center (raw): {}", color_label(result.screen_raw));
-    println!(
-        "  screen center (after get_screen_data flush): {}",
-        color_label(result.screen)
+fn draw_target_previews(case: Case, host: &RenderTarget, chart: &RenderTarget) {
+    // Flush the sequence's queued UI before adding the manual inspection overlay.
+    set_default_camera();
+    draw_rectangle(0., 0., screen_width(), 70., Color::new(0., 0., 0., 0.85));
+    draw_text(format!("Sequence: {}", case.name()), 12., 22., 18., WHITE);
+    draw_text(
+        "Left / Right: change sequence    Escape: quit",
+        12.,
+        42.,
+        16.,
+        WHITE,
     );
-    println!("  chart target center: {}", color_label(result.chart));
-    println!(
-        "  expected: host={}, screen_raw={}, chart={}",
-        color_label(expected.host),
-        color_label(expected.screen_raw),
-        color_label(expected.chart)
+    draw_text(
+        format!("Retained backend: {}", macroquad::retained::is_supported()),
+        12.,
+        62.,
+        16.,
+        WHITE,
     );
-    println!("  verdict: {}", if result.pass { "PASS" } else { "FAIL" });
-    println!();
-}
 
-fn print_summary(results: &[CaseResult]) {
-    println!("summary");
-    println!(
-        "{:<38} {:<16} {:<16} {:<16} {:<16} {}",
-        "case", "host", "screen_raw", "screen", "chart", "verdict"
-    );
-    for result in results {
-        println!(
-            "{:<38} {:<16} {:<16} {:<16} {:<16} {}",
-            result.case.name(),
-            color_label(result.host),
-            color_label(result.screen_raw),
-            color_label(result.screen),
-            color_label(result.chart),
-            if result.pass { "PASS" } else { "FAIL" }
+    let width = (screen_width() * 0.24).clamp(1., 180.);
+    let height = width * HEIGHT as f32 / WIDTH as f32;
+    let y = screen_height() - height - 12.;
+    for (target, x, label) in [
+        (host, 12., "Host target"),
+        (chart, 24. + width, "Chart target"),
+    ] {
+        draw_rectangle(
+            x - 4.,
+            y - 24.,
+            width + 8.,
+            height + 28.,
+            Color::new(0., 0., 0., 0.85),
+        );
+        draw_text(label, x, y - 6., 16., WHITE);
+        draw_texture_ex(
+            &target.texture,
+            x,
+            y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(width, height)),
+                flip_y: true,
+                ..Default::default()
+            },
         );
     }
 }
@@ -456,50 +340,38 @@ async fn run() {
     chart_target.texture.set_filter(FilterMode::Nearest);
     let host_target = render_target(WIDTH, HEIGHT);
     host_target.texture.set_filter(FilterMode::Nearest);
-    let (screen_width, screen_height) = macroquad::miniquad::window::screen_size();
-    let screen_probe = render_target(screen_width as u32, screen_height as u32);
 
     let owner = OwnedScope::new();
     let texture = owner.run(|| signal(SharedTexture::from(chart_target.texture.clone())));
     let retained = owner.run(|| signal(false));
 
-    let mut channel = MockChannel::new(chart_target.clone());
+    let mut channel = ChartChannel::new(chart_target.clone());
     let mut app = App::new(ui(texture, font, retained));
+    let mut selected = 0;
 
-    println!("pass ownership probe");
-    println!(
-        "retained supported: {}",
-        macroquad::retained::is_supported()
-    );
-    println!("window: {WIDTH}x{HEIGHT}");
-    println!();
+    loop {
+        if is_key_pressed(KeyCode::Escape) {
+            break;
+        }
+        if is_key_pressed(KeyCode::Right) {
+            selected = (selected + 1) % Case::ALL.len();
+        }
+        if is_key_pressed(KeyCode::Left) {
+            selected = (selected + Case::ALL.len() - 1) % Case::ALL.len();
+        }
 
-    let mut results = Vec::new();
-    for case in Case::ALL {
-        let result = run_case(
-            case,
-            &mut app,
-            &mut channel,
-            &host_target,
-            &chart_target,
-            &screen_probe,
-            &retained,
-        )
-        .await;
-        print_case(&result);
-        results.push(result);
+        let case = Case::ALL[selected];
+        retained.set(case.uses_retained());
+        render_case(case, &mut app, &mut channel, &host_target, &chart_target);
+        draw_target_previews(case, &host_target, &chart_target);
+        next_frame().await;
     }
-
-    print_summary(&results);
-    let all_pass = results.iter().all(|result| result.pass);
-    let _ = std::io::stdout().flush();
-    std::process::exit(if all_pass { 0 } else { 1 });
 }
 
 fn main() {
     macroquad::Window::from_config(
         Conf {
-            window_title: "mue - pass ownership probe".into(),
+            window_title: "mue - render pass example".into(),
             window_width: WIDTH as i32,
             window_height: HEIGHT as i32,
             ..Default::default()

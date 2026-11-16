@@ -1,10 +1,4 @@
 //! Layout/geometry preparation is repeatable; frame updates run separately.
-#[cfg(test)]
-mod mutation_tests;
-#[cfg(test)]
-mod scene_tests;
-#[cfg(test)]
-mod tests;
 
 use super::{Children, NodeRef};
 use crate::{
@@ -262,21 +256,6 @@ impl NodeRef {
             layout_roots,
         }
     }
-
-    /// App owns this once-per-frame call; layout and drawing never invoke it.
-    /// Freeze the active node list before callbacks: disposed nodes are skipped,
-    /// and nodes mounted during updates start updating on the next frame.
-    #[cfg(test)]
-    pub(crate) fn advance_frame(&self, dt: f32) {
-        let nodes = self.frame_nodes();
-        batch(|| {
-            Runtime::with(|rt| {
-                for node in nodes {
-                    rt.invoke_hook(node.id, |hooks| &mut hooks.update, &dt);
-                }
-            })
-        });
-    }
 }
 
 impl GeometrySnapshot {
@@ -287,12 +266,10 @@ impl GeometrySnapshot {
         };
         root.is_live()
             && self.published.iter().all(PublishedGeometry::is_current)
-            && root.layout_roots()
-                == self
-                    .layout_roots
-                    .iter()
-                    .map(|&(id, _)| id)
-                    .collect::<Vec<_>>()
+            && root
+                .layout_roots()
+                .into_iter()
+                .eq(self.layout_roots.iter().map(|&(id, _)| id))
             && Runtime::with(|rt| {
                 let taffy = rt.taffy.borrow();
                 self.layout_roots

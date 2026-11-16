@@ -1,6 +1,6 @@
 # Input timing at a visibly low frame rate
 
-This experiment compares the identity hit by one click against two generations of the same real mue Node tree. Scene management remains unimplemented. App now preplans and dispatches its input before updates; this coordinate comparison remains separate from the App callback regression tests.
+This experiment compares the identity hit by one click against two generations of the same real mue Node tree. Scene management remains unimplemented. App now preplans and dispatches its input before updates; this coordinate comparison remains separate from App callback behavior.
 
 ```bash
 cargo run -p input-timing --offline -- --fps 1
@@ -21,16 +21,9 @@ The Scene layout/render split is not implemented. BEFORE uses `event::hit_test::
 
 This is a comparison of hit-testing order. It does not run two Scene implementations, change App pointer dispatch, test gesture ownership, or prove that a snapshot of rects alone supports arbitrary animated/scrolling UI. Target labels and reports use macroquad text; target rectangles and their hierarchy use actual mue Nodes.
 
-## Repeatable check
+## Input samples
 
-```bash
-cargo run -p input-timing --offline -- --fps 2 --check
-cargo run -p input-timing --offline -- --fps 2 --check --capture /tmp/input-timing.png
-```
-
-After displaying the initial frame, `--check` submits six sets of three **synthetic coordinates**: the left target center, right target center and blank middle. It expects 18 cases, 12 identity differences and zero failures, and exits with status 0 on success. These coordinates exercise actual Node hit-testing and layout changes, but are not physical touch events or a measurement of operating-system latency. Ordinary mouse/touch input remains enabled and is labelled separately as `native` (including OS-injected events). `--capture` saves the final displayed image in check mode.
-
-Standard output contains CSV samples: UI frame, logical coordinates, BEFORE identity, AFTER identity, unchanged touch source timestamp when available, time spent in this example's local input buffer, and `native`/`synthetic` source. The buffer duration starts when the example receives the event; it is **not** hardware-to-display latency. Mouse callbacks do not supply a source timestamp in the current miniquad interface.
+Standard output contains CSV samples: UI frame, logical coordinates, BEFORE identity, AFTER identity, unchanged touch source timestamp when available, time spent in this example's local input buffer, and the `native` source label (including OS-injected events). The buffer duration starts when the example receives the event; it is **not** hardware-to-display latency. Mouse callbacks do not supply a source timestamp in the current miniquad interface.
 
 ## Timestamp and design interpretation
 

@@ -21,7 +21,6 @@ members = [
     "examples/portal",
     "examples/pass-probe",
     "examples/material-probe",
-    "examples/texture-probe",
     "examples/input-router",
     "examples/input-timing",
     "examples/scenes",

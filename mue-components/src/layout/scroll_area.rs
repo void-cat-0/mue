@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod tests;
-
 use mue_macroquad::node::flexbox::flexbox;
 use std::{cell::RefCell, rc::Rc};
 

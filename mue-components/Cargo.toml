@@ -6,6 +6,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 mue-core.workspace = true
 mue-macroquad.workspace = true

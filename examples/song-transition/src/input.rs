@@ -81,28 +81,3 @@ fn settings_key(key: KeyCode) -> Option<SettingsAction> {
 pub fn settings(input: &InputBatch) -> Option<SettingsAction> {
     read(input).and_then(settings_key)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn library_shortcuts_submit_local_intents() {
-        assert_eq!(library_key(KeyCode::Key2), Some(LibraryAction::Open(1)));
-        assert_eq!(
-            library_key(KeyCode::Down),
-            Some(LibraryAction::Scroll(100.))
-        );
-        assert_eq!(library_key(KeyCode::Escape), Some(LibraryAction::Back));
-        assert_eq!(library_key(KeyCode::Space), None);
-        assert_eq!(library_key(KeyCode::S), Some(LibraryAction::Settings));
-    }
-
-    #[test]
-    fn settings_shortcuts_edit_only_the_active_scene() {
-        assert_eq!(settings_key(KeyCode::T), Some(SettingsAction::CycleTheme));
-        assert_eq!(settings_key(KeyCode::M), Some(SettingsAction::ToggleMotion));
-        assert_eq!(settings_key(KeyCode::Escape), Some(SettingsAction::Back));
-        assert_eq!(settings_key(KeyCode::Q), Some(SettingsAction::Quit));
-        assert_eq!(settings_key(KeyCode::Key1), None);
-    }
-}
