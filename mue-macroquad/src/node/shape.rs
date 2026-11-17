@@ -1,6 +1,6 @@
 use super::{Node, NodeContext};
 use mue_core::prelude::Access;
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use crate::{
     layout::use_layout,
@@ -17,7 +17,6 @@ const RETAINED_SHAPE_MIN_VERTICES: usize = 4_096;
 
 #[derive(Default)]
 struct RetainedShapeCache {
-    source: Option<Rc<Shapes>>,
     meshes: Vec<RetainedMesh>,
     /// Union of every batch's vertex positions, in shape-local space.
     bounds: Option<Rect>,
@@ -40,71 +39,53 @@ fn vertex_bounds(vertices: &[RetainedVertex]) -> Option<Rect> {
 /// Draw prebuilt shapes in local coordinates within a node's layout and lifetime.
 #[mue_macros::node]
 pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
-    let retained_static = matches!(&shapes, mue_core::prop::Prop::Static(_));
+    let retained_static = shapes
+        .as_static()
+        .is_some_and(|shapes| shapes.vertex_count() >= RETAINED_SHAPE_MIN_VERTICES);
     ctx.finish_without_defaults(move |style| {
         let rect = use_layout(style).rect;
         let paint = use_paint(style);
-        let cache = Rc::new(RefCell::new(RetainedShapeCache::default()));
+        // The static property owns the source textures for the mesh lifetime.
+        let mut cache = RetainedShapeCache::default();
         style.on_render.append(move |_| {
             let rect_value = rect.get();
-            if retained_static && retained_enabled() {
-                let shapes_rc = shapes.get_clone();
-                let disabled = cache.borrow().disabled;
-                if !disabled && shapes_rc.vertex_count() >= RETAINED_SHAPE_MIN_VERTICES {
-                    let mut cache = cache.borrow_mut();
-                    let rebuild = cache
-                        .source
-                        .as_ref()
-                        .is_none_or(|source| !Rc::ptr_eq(source, &shapes_rc));
-                    if rebuild {
-                        let mut meshes = Vec::new();
-                        let mut bounds: Option<Rect> = None;
-                        for batch in shapes_rc.retained_batches() {
-                            let texture = batch
-                                .texture
-                                .as_ref()
-                                .map_or_else(retained::white_texture, |texture| {
-                                    texture.raw_miniquad_id()
+            if retained_static && !cache.disabled && retained_enabled() {
+                if cache.meshes.is_empty() {
+                    for batch in shapes.as_static().unwrap().retained_batches() {
+                        let texture = batch
+                            .texture
+                            .as_ref()
+                            .map_or_else(retained::white_texture, |texture| {
+                                texture.raw_miniquad_id()
+                            });
+                        if let Some(mesh) =
+                            RetainedMesh::new(&batch.vertices, &batch.indices, texture)
+                        {
+                            if let Some(batch_bounds) = vertex_bounds(&batch.vertices) {
+                                cache.bounds = Some(match cache.bounds {
+                                    Some(bounds) => bounds.union(&batch_bounds),
+                                    None => batch_bounds,
                                 });
-                            if let Some(mesh) =
-                                RetainedMesh::new(&batch.vertices, &batch.indices, texture)
-                            {
-                                if let Some(batch_bounds) = vertex_bounds(&batch.vertices) {
-                                    bounds = Some(match bounds {
-                                        Some(bounds) => bounds.union(&batch_bounds),
-                                        None => batch_bounds,
-                                    });
-                                }
-                                meshes.push(mesh);
                             }
-                        }
-                        if meshes.is_empty() {
-                            cache.disabled = true;
-                            cache.meshes.clear();
-                            cache.bounds = None;
-                            cache.source = None;
-                        } else {
-                            cache.meshes = meshes;
-                            cache.bounds = bounds;
-                            cache.source = Some(shapes_rc.clone());
+                            cache.meshes.push(mesh);
                         }
                     }
-                    if !cache.meshes.is_empty() {
-                        let model =
-                            current_transform() * Matrix::from_translation(rect_value.min());
-                        if let Some(bounds) = cache.bounds {
-                            let screen = transform_rect(model, bounds);
-                            if !rect_visible(current_clip_logical(), &screen) {
-                                return;
-                            }
-                        }
-                        crate::clip::draw_retained_meshes(
-                            &cache.meshes,
-                            crate::math::model_matrix(model),
-                            1.0,
-                        );
+                    cache.disabled = cache.meshes.is_empty();
+                }
+                if !cache.meshes.is_empty() {
+                    let model = current_transform() * Matrix::from_translation(rect_value.min());
+                    if let Some(clip) = current_clip_logical()
+                        && let Some(bounds) = cache.bounds
+                        && !rect_visible(Some(clip), &transform_rect(model, bounds))
+                    {
                         return;
                     }
+                    crate::material::draw_retained_meshes(
+                        &cache.meshes,
+                        crate::math::model_matrix(model),
+                        1.0,
+                    );
+                    return;
                 }
             }
 

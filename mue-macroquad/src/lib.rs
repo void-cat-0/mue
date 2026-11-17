@@ -35,7 +35,7 @@ pub use scene_transition::{
     ScenePictures, SceneTransition, TransitionFrame, TransitionPhase, TransitionTiming,
 };
 pub use shader::SharedTexture;
-pub use shadow::Shadow;
+pub use shadow::{Shadow, ShadowCache};
 pub use texture::{SafeTexture, flush_pending_texture_deletions};
 
 /// Install a callback for waking a blocking host event loop when a task is woken.

@@ -4,6 +4,11 @@
 //! node's global rect and the shared shadow material; the shader is a rounded
 //! box shadow adapted from Phira's prpr shadow.
 
+mod mask;
+
+pub(crate) use mask::ShadowMaskState;
+pub use mask::{ShadowMaskCacheStats, clear_shadow_mask_cache, shadow_mask_cache_stats};
+
 use std::cell::OnceCell;
 
 use macroquad::math::vec4;
@@ -64,7 +69,31 @@ impl Shadow {
 
 impl PropValue for Shadow {}
 
-const SHADOW_FRAGMENT: &str = r#"#version 100
+/// Admission policy for the shared, bounded native-OpenGL shadow-mask cache.
+/// All policies preserve the analytic fallback and the same quality/resource limits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShadowCache {
+    /// Reuse exact resident masks; bake only stable, repeatedly drawn large shadows.
+    #[default]
+    Auto,
+    /// Allow stable shadows to bake without the Auto profitability heuristic.
+    Enabled,
+    /// Always use the analytic shader and do not participate in the mask pool.
+    Disabled,
+}
+impl PropValue for ShadowCache {}
+impl From<bool> for ShadowCache {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
+const SHADOW_FRAGMENT: &str = concat!(
+    r#"#version 100
 precision highp float;
 
 varying highp vec2 v_pos;
@@ -75,71 +104,16 @@ uniform highp float radius;
 uniform highp vec4 color;
 uniform highp mat4 inverse_model;
 
-float gaussian(float x, float sigma) {
-    const float pi = 3.141592653589793;
-    return exp(-(x * x) / (2.0 * sigma * sigma)) / (sqrt(2.0 * pi) * sigma);
-}
-
-vec2 erf(vec2 x) {
-    vec2 s = sign(x), a = abs(x);
-    x = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
-    x *= x;
-    return s - s / (x * x);
-}
-
-float roundedBoxShadowX(float x, float y, float sigma, float corner, vec2 halfSize) {
-    float delta = min(halfSize.y - corner - abs(y), 0.0);
-    float curved = halfSize.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
-    vec2 integral = 0.5 + 0.5 * erf((x + vec2(-curved, curved)) * (sqrt(0.5) / sigma));
-    return integral.y - integral.x;
-}
-
-float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner) {
-    vec2 lowerp = lower + vec2(corner);
-    vec2 upperp = upper - vec2(corner);
-    float lf = step(point.x, lowerp.x);
-    float tp = step(point.y, lowerp.y);
-    float rt = step(upperp.x, point.x);
-    float bt = step(upperp.y, point.y);
-    float eps = 0.0003;
-    float ein = 0.0007;
-    float factor = 1.0 -
-        (1.0 - step(corner - eps, distance(lowerp, point)) * lf * tp)
-      * (1.0 - step(corner - eps, distance(upperp, point)) * rt * bt)
-      * (1.0 - step(corner - eps, distance(vec2(lowerp.x, upperp.y), point)) * lf * bt)
-      * (1.0 - step(corner - eps, distance(vec2(upperp.x, lowerp.y), point)) * rt * tp)
-      * smoothstep(lower.x, lower.x + ein, point.x)
-      * smoothstep(lower.y, lower.y + ein, point.y)
-      * smoothstep(point.x, point.x + ein, upper.x)
-      * smoothstep(point.y, point.y + ein, upper.y);
-
-    point.y -= sigma * 0.5;
-    vec2 center = (lower + upper) * 0.5;
-    vec2 halfSize = (upper - lower) * 0.5;
-    point -= center;
-
-    float low = point.y - halfSize.y;
-    float high = point.y + halfSize.y;
-    float start = clamp(-3.0 * sigma, low, high);
-    float end = clamp(3.0 * sigma, low, high);
-
-    float s = (end - start) / 4.0;
-    float y = start + s * 0.5;
-    float value = 0.0;
-    for (int i = 0; i < 4; i++) {
-        value += roundedBoxShadowX(point.x, point.y - y, sigma, corner, halfSize) * gaussian(y, sigma) * s;
-        y += s;
-    }
-
-    return value * factor;
-}
-
+"#,
+    include_str!("shadow/functions.glsl"),
+    r#"
 void main() {
     vec2 local = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
     float alpha = roundedBoxShadow(rect.xy, rect.zw, local, elevation, radius);
     gl_FragColor = vec4(color.rgb, alpha * color.a);
 }
-"#;
+"#
+);
 
 thread_local! {
     static SHADOW_MATERIAL: OnceCell<UiMaterial> = const { OnceCell::new() };
@@ -181,25 +155,41 @@ fn shadow_material() -> UiMaterial {
 }
 
 /// Draw a shadow behind rect. Called by use_background before the background.
-pub(crate) fn draw_shadow(paint: &Paint, rect: Rect, shadow: Shadow) {
+pub(crate) fn draw_shadow(
+    paint: &Paint,
+    rect: Rect,
+    shadow: Shadow,
+    cache: ShadowCache,
+    mask: &mut ShadowMaskState,
+) {
     if !shadow.is_visible() || rect.w <= 0. || rect.h <= 0. {
+        mask.reset();
         return;
     }
 
     let transform = current_transform();
     let inverse = transform.inverse();
     if !inverse.is_finite() || inverse.determinant().abs() < f32::EPSILON {
+        mask.reset();
         return;
     }
 
     let alpha = shadow.color.a * paint.opacity();
-    if alpha <= 0. {
+    if !alpha.is_finite() || alpha <= 0. {
+        mask.reset();
         return;
     }
 
     let elevation = shadow.elevation;
     let radius = shadow.radius.min(rect.w.min(rect.h) * 0.5);
-    if elevation <= 0. || radius < 0. {
+    if !elevation.is_finite() || !radius.is_finite() || elevation <= 0. || radius < 0. {
+        mask.reset();
+        return;
+    }
+
+    if cache == ShadowCache::Disabled {
+        mask.reset();
+    } else if mask.draw(paint, rect, shadow, transform, inverse, cache) {
         return;
     }
 
@@ -221,6 +211,6 @@ pub(crate) fn draw_shadow(paint: &Paint, rect: Rect, shadow: Shadow) {
             vec4(shadow.color.r, shadow.color.g, shadow.color.b, alpha),
         );
         material.set_uniform("inverse_model", model_matrix(inverse));
-        paint.draw(|p| p.fill_rect(expanded, Color::WHITE));
+        paint.draw_solid_rect(expanded, Color::WHITE);
     });
 }

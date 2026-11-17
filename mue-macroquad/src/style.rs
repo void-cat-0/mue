@@ -5,6 +5,7 @@ pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
+pub use crate::shadow::ShadowCache;
 use crate::{clip::Sector, color::Color, shader::Brush, shadow::Shadow};
 use cosmic_text::Align;
 use cosmic_text::{FamilyOwned, Weight};
@@ -82,6 +83,19 @@ where
 }
 
 macro_rules! define_style {
+    (@setter $(#[$doc:meta])* shadow_cache, $ty:ty) => {
+        /// Explicitly enable/disable caching, retaining bool and reactive-bool compatibility.
+        /// Use shadow_cache_policy for Auto; leaving the property unset selects Auto.
+        fn shadow_cache(mut self, enabled: impl Into<Prop<bool>>) -> Self {
+            self.style_mut().shadow_cache = Some(enabled.into().map(ShadowCache::from));
+            self
+        }
+        $(#[$doc])*
+        fn shadow_cache_policy(mut self, policy: impl Into<Prop<ShadowCache>>) -> Self {
+            self.style_mut().shadow_cache = Some(policy.into());
+            self
+        }
+    };
     (@setter $(#[$doc:meta])* transform_list, $ty:ty) => {
         $(#[$doc])*
         fn transform_list(mut self, value: impl Into<Prop<Transform>>) -> Self {
@@ -386,6 +400,10 @@ define_style! {
     radius: Size = Size::Px(0.);
     /// Draw a drop shadow behind the background.
     shadow: Shadow;
+    /// Select shared mask admission (Auto by default). Exact resident masks reuse immediately;
+    /// new masks require stable parameters, and Auto also requires substantial recent coverage.
+    /// Currently native OpenGL only; unsupported, small or changing shadows stay analytic.
+    shadow_cache: ShadowCache = ShadowCache::Auto;
     /// Clip children to a rounded rectangle with this radius (px/vw/vh;
     /// percent is not resolved).
     clip_radius: Size = Size::Px(0.);

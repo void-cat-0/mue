@@ -187,6 +187,8 @@ struct RetainedTextContentKey {
     width: f32,
     height: f32,
     y: f32,
+    /// Fraction of the layout origin left after the retained model is snapped.
+    snap_phase: f32,
     max_lines: Option<usize>,
     strike: bool,
     underline: bool,
@@ -196,9 +198,9 @@ struct RetainedTextContentKey {
 #[derive(PartialEq)]
 struct RetainedTextKey {
     content: RetainedTextContentKey,
-    atlas_rasterized: u64,
     atlas_evicted: u64,
-    atlas_pages: usize,
+    /// Includes repeated glyphs; detects previously rejected glyphs becoming resident.
+    resident_glyphs: usize,
 }
 
 #[derive(Default)]
@@ -208,9 +210,10 @@ struct RetainedTextCache {
     glyph_count: usize,
     meshes: Vec<RetainedMesh>,
     line_ranges: Vec<Vec<LineRange>>,
+    /// Scratch ranges are reused across frames rather than allocated per draw.
+    visible_ranges: Vec<Option<Range<u32>>>,
     /// Union of every line's quad bounds, in text-local space.
     content_bounds: Option<Rect>,
-    disabled: bool,
 }
 
 /// Contiguous index range covering the lines that intersect `clip`.
@@ -298,23 +301,30 @@ fn push_quad(
 }
 
 /// Keep every glyph used by a retained mesh resident in the atlas.
-fn pin_glyphs(buffer: &Buffer, fonts: &mut FontState, max_lines: Option<usize>) {
+fn pin_glyphs(buffer: &Buffer, fonts: &mut FontState, max_lines: Option<usize>) -> usize {
+    let mut resident_glyphs = 0;
     for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
         for glyph in run.glyphs.iter() {
             let physical_glyph = glyph.physical((0., 0.), 1.0);
             let atlas = fonts
                 .font_atlas
                 .get_or_insert_with(|| Atlas::new(device_page_size()));
-            let _ = atlas.cache_glyph(
-                &mut fonts.font_system,
-                &mut fonts.swash_cache,
-                physical_glyph.cache_key,
-            );
+            if atlas
+                .cache_glyph(
+                    &mut fonts.font_system,
+                    &mut fonts.swash_cache,
+                    physical_glyph.cache_key,
+                )
+                .is_some()
+            {
+                resident_glyphs += 1;
+            }
         }
     }
     if let Some(atlas) = &mut fonts.font_atlas {
         atlas.end_pass();
     }
+    resident_glyphs
 }
 
 struct RetainedTextStyle<'a> {
@@ -354,9 +364,11 @@ fn build_retained_text(
         lines: Vec::new(),
     }];
     for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
-        let local_origin = vec2(0., y + run.line_i as f32 * spacing);
+        let origin_y = bounds.y + (y + run.line_i as f32 * spacing);
         let starts: Vec<usize> = batches.iter().map(|batch| batch.indices.len()).collect();
-        let pen = vec2(0., (local_origin.y + run.line_y).round());
+        // Snap the global baseline exactly as the immediate path does, then
+        // remove the origin already applied by the retained model.
+        let pen = vec2(0., (origin_y + run.line_y).round() - bounds.y.round());
         // Tight bounds of everything this line contributes. Using the quads
         // themselves instead of the line box keeps glyphs that overhang the
         // ascent/descent from being culled while still visible.
@@ -604,7 +616,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
         }
     });
 
-    let retained_cache = Rc::new(RefCell::new(RetainedTextCache::default()));
+    let mut retained_cache = RetainedTextCache::default();
     style.on_render.append(move |_| {
         let mut buffer = buffer.borrow_mut();
         Runtime::with_fonts_mut(|fonts| {
@@ -637,12 +649,27 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
             let color_brush = color.get_clone();
             // Check the cheap policy gates before walking the glyph runs; on
             // backends without retained support this avoids the scan entirely.
-            let retained_requested = retained_enabled() && !retained_cache.borrow().disabled;
+            // Retained quads use one tint per glyph; gradients need the immediate
+            // path's per-vertex samples to preserve their appearance.
+            let retained_requested = matches!(&color_brush, Brush::Solid(_))
+                && retained_enabled()
+                // round() takes half ties away from zero, so translating across
+                // zero can change a half-tied baseline even with the same phase.
+                && (bounds.y >= 0.
+                    || !buffer
+                        .layout_runs()
+                        .take(max_lines.get().unwrap_or(usize::MAX))
+                        .any(|run| {
+                            let origin = bounds.y + (y + run.line_i as f32 * spacing.get().max(0.));
+                            let baseline = origin + run.line_y;
+                            baseline - baseline.floor() == 0.5
+                        }));
             let content_key = retained_requested.then(|| RetainedTextContentKey {
                 revision: revision.get_untracked(),
                 width: bounds.w,
                 height: bounds.h,
                 y,
+                snap_phase: bounds.y - bounds.y.round(),
                 max_lines: max_lines.get(),
                 strike: strike.get(),
                 underline: text_underline.get(),
@@ -654,7 +681,6 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
             });
             let cache_matches_content = content_key.as_ref().is_some_and(|content_key| {
                 retained_cache
-                    .borrow()
                     .key
                     .as_ref()
                     .is_some_and(|key| &key.content == content_key)
@@ -665,17 +691,16 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
             // still usable until the block becomes visible again.
             if cache_matches_content
                 && let Some(model) = retained_model
-                && let Some(content) = retained_cache.borrow().content_bounds
+                && let Some(content) = retained_cache.content_bounds
+                && let Some(clip) = current_clip_logical()
+                && !rect_visible(Some(clip), &transform_rect(model, content))
             {
-                let screen = transform_rect(model, content);
-                if !rect_visible(current_clip_logical(), &screen) {
-                    return;
-                }
+                return;
             }
             let glyph_count = if !retained_requested {
                 0
             } else if cache_matches_content {
-                retained_cache.borrow().glyph_count
+                retained_cache.glyph_count
             } else {
                 buffer
                     .layout_runs()
@@ -684,13 +709,28 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                     .sum::<usize>()
             };
             let retained_eligible = retained_requested && glyph_count >= RETAINED_TEXT_MIN_GLYPHS;
+            if !matches!(&color_brush, Brush::Solid(_)) {
+                retained_cache = RetainedTextCache::default();
+            } else if retained_requested && !retained_eligible && !cache_matches_content {
+                // Remember short content too: skip repeated eligibility scans and
+                // release buffers left over from a previous long block.
+                retained_cache = RetainedTextCache {
+                    key: content_key.clone().map(|content| RetainedTextKey {
+                        content,
+                        atlas_evicted: 0,
+                        resident_glyphs: 0,
+                    }),
+                    glyph_count,
+                    ..Default::default()
+                };
+            }
             if retained_eligible {
                 let content_key = content_key.expect("retained text has a content key");
-                let mut cache = retained_cache.borrow_mut();
+                let cache = &mut retained_cache;
                 // Keep the atlas entries referenced by the retained buffers alive
                 // even on cache hits. Off-screen blocks were culled above, so this
                 // only pins the blocks that can actually be seen.
-                pin_glyphs(&buffer, fonts, max_lines.get());
+                let resident_glyphs = pin_glyphs(&buffer, fonts, max_lines.get());
                 let stats = fonts
                     .font_atlas
                     .as_ref()
@@ -698,9 +738,8 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                     .unwrap_or_default();
                 let key = RetainedTextKey {
                     content: content_key,
-                    atlas_rasterized: stats.rasterized,
                     atlas_evicted: stats.evicted,
-                    atlas_pages: stats.pages,
+                    resident_glyphs,
                 };
                 if cache.key.as_ref() != Some(&key) {
                     let batches = build_retained_text(
@@ -733,51 +772,39 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                         .map(Atlas::stats)
                         .unwrap_or_default();
                     let key = RetainedTextKey {
-                        content: key.content.clone(),
-                        atlas_rasterized: stats.rasterized,
+                        content: key.content,
                         atlas_evicted: stats.evicted,
-                        atlas_pages: stats.pages,
+                        resident_glyphs,
                     };
-                    if meshes.is_empty() {
-                        cache.disabled = true;
-                        cache.meshes.clear();
-                        cache.line_ranges.clear();
-                        cache.content_bounds = None;
-                        cache.key = None;
-                        cache.glyph_count = 0;
-                    } else {
-                        cache.content_bounds = line_ranges
-                            .iter()
-                            .flatten()
-                            .map(|line| line.bounds)
-                            .reduce(|bounds, line| bounds.union(&line));
-                        cache.meshes = meshes;
-                        cache.line_ranges = line_ranges;
-                        cache.key = Some(key);
-                        cache.glyph_count = glyph_count;
-                    }
+                    // Cache empty output too, but retry after content, eviction or
+                    // glyph-residency changes instead of disabling the node forever.
+                    cache.content_bounds = line_ranges
+                        .iter()
+                        .flatten()
+                        .map(|line| line.bounds)
+                        .reduce(|bounds, line| bounds.union(&line));
+                    cache.meshes = meshes;
+                    cache.line_ranges = line_ranges;
+                    cache.key = Some(key);
+                    cache.glyph_count = glyph_count;
                 }
                 if !cache.meshes.is_empty() {
-                    let model = retained_model.unwrap_or_else(|| {
-                        current_transform()
-                            * Matrix::from_translation(vec2(
-                                bounds.min().x.round(),
-                                bounds.min().y.round(),
-                            ))
-                    });
-                    let draw_retained = || {
+                    let model = retained_model.expect("retained text has a model");
+                    let mut draw_retained = || {
                         let clip = current_clip_logical();
-                        let ranges: Vec<Option<Range<u32>>> = cache
-                            .line_ranges
-                            .iter()
-                            .map(|lines| visible_line_range(lines, clip, model))
-                            .collect();
-                        if ranges.iter().all(Option::is_none) {
+                        cache.visible_ranges.clear();
+                        cache.visible_ranges.extend(
+                            cache
+                                .line_ranges
+                                .iter()
+                                .map(|lines| visible_line_range(lines, clip, model)),
+                        );
+                        if cache.visible_ranges.iter().all(Option::is_none) {
                             return;
                         }
-                        crate::clip::draw_retained_meshes_ranges(
+                        crate::material::draw_retained_meshes_ranges(
                             &cache.meshes,
-                            &ranges,
+                            &cache.visible_ranges,
                             crate::math::model_matrix(model),
                             paint.opacity(),
                         );
@@ -789,7 +816,6 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                     }
                     return;
                 }
-                drop(cache);
             }
 
             let mut draw = || {
@@ -822,7 +848,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 (font_size.get() / 16.).max(1.),
                             );
                             if rect_visible(clip, &transform_rect(transform, rule)) {
-                                p.fill_rect(rule, color.get_clone().shader(bounds));
+                                p.fill_rect(rule, color_brush.shader(bounds));
                             }
                         }
                         if text_underline.get() {
@@ -839,7 +865,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 (font_size.get() / 16.).max(1.),
                             );
                             if rect_visible(clip, &transform_rect(transform, underline)) {
-                                p.fill_rect(underline, color.get_clone().shader(bounds));
+                                p.fill_rect(underline, color_brush.shader(bounds));
                             }
                         }
                         for glyph in run.glyphs.iter() {
@@ -864,26 +890,19 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                             if !rect_visible(clip, &transform_rect(transform, draw_rect)) {
                                 continue;
                             }
+                            let glyph_brush = glyph.color_opt.map(|color| {
+                                Brush::Solid(Color::from_rgba(
+                                    color.r(),
+                                    color.g(),
+                                    color.b(),
+                                    color.a(),
+                                ))
+                            });
                             p.draw_texture(
                                 draw_rect,
                                 cached.texture,
                                 cached.uv,
-                                glyph
-                                    .color_opt
-                                    .map_or_else(
-                                        || color.get_clone(),
-                                        |color| {
-                                            crate::shader::Brush::Solid(
-                                                crate::color::Color::from_rgba(
-                                                    color.r(),
-                                                    color.g(),
-                                                    color.b(),
-                                                    color.a(),
-                                                ),
-                                            )
-                                        },
-                                    )
-                                    .shader(bounds),
+                                glyph_brush.as_ref().unwrap_or(&color_brush).shader(bounds),
                             );
                         }
                     }

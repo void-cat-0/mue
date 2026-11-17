@@ -5,6 +5,8 @@
 //! color (v_color). Use with_material or UiMaterial::with around the draws
 //! that should use it.
 
+use std::{cell::RefCell, ops::Range};
+
 use macroquad::{
     Error,
     material::{Material, MaterialParams, gl_use_default_material, gl_use_material, load_material},
@@ -13,6 +15,7 @@ use macroquad::{
         BlendFactor, BlendState, BlendValue, Equation, PipelineParams, ShaderSource, UniformDesc,
     },
     prelude::GlPipeline,
+    retained::{self, RetainedMaterial, RetainedMesh},
     texture::Texture2D,
     window::get_internal_gl,
 };
@@ -100,8 +103,19 @@ impl UiMaterial {
     }
 
     /// Draw f with this material, restoring the previous pipeline afterwards.
+    /// Text and shape nodes use immediate geometry while this material is active.
     pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
         with_material(&self.material, f)
+    }
+
+    /// Bind the matching retained shader for a built-in clip scope.
+    pub(crate) fn with_retained<R>(
+        &self,
+        retained: Option<RetainedMaterial>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let _guard = MaterialGuard::enter(&self.material, retained);
+        f()
     }
 }
 
@@ -126,6 +140,8 @@ macro_rules! impl_uniform_value {
 impl_uniform_value!(f32, i32, Vec2, Vec3, Vec4, Mat4);
 
 /// Draw f with material, restoring the previous pipeline afterwards.
+/// Text and shape nodes fall back to immediate geometry; arbitrary macroquad
+/// materials do not share the retained vertex layout or shader contract.
 ///
 /// This forces a batch break on entry and exit. QuadGl::pipeline only breaks
 /// batching when the pipeline changes; two scopes using the same material with
@@ -135,22 +151,88 @@ impl_uniform_value!(f32, i32, Vec2, Vec3, Vec4, Mat4);
 /// Nested scopes restore the pipeline, but not the outer material's uniforms:
 /// re-set them after the inner scope if the outer draw continues.
 pub fn with_material<R>(material: &Material, f: impl FnOnce() -> R) -> R {
-    let _guard = MaterialGuard::enter(material);
+    let _guard = MaterialGuard::enter(material, None);
     f()
+}
+
+struct RetainedBinding {
+    pipeline: GlPipeline,
+    material: RetainedMaterial,
+}
+
+thread_local! {
+    static ACTIVE_RETAINED: RefCell<Option<RetainedBinding>> = const { RefCell::new(None) };
+}
+
+/// Only the default pipeline or the current scope's matching shader can use retained geometry.
+pub(crate) fn retained_material_matches() -> bool {
+    let pipeline = unsafe { get_internal_gl() }.quad_gl.get_pipeline();
+    pipeline.is_none()
+        || ACTIVE_RETAINED.with(|active| {
+            active
+                .borrow()
+                .as_ref()
+                .is_some_and(|binding| Some(binding.pipeline) == pipeline)
+        })
+}
+
+/// Call only after retained_enabled has checked the backend and current material.
+pub(crate) fn draw_retained_meshes_ranges(
+    meshes: &[RetainedMesh],
+    ranges: &[Option<Range<u32>>],
+    model: Mat4,
+    alpha: f32,
+) {
+    let pipeline = unsafe { get_internal_gl() }.quad_gl.get_pipeline();
+    if pipeline.is_none() {
+        retained::draw_meshes_ranges(meshes, ranges, model, alpha);
+    } else {
+        ACTIVE_RETAINED.with(|active| {
+            let active = active.borrow();
+            let binding = active
+                .as_ref()
+                .filter(|binding| Some(binding.pipeline) == pipeline)
+                .expect("retained draw requires a matching material");
+            retained::draw_meshes_ranges_with_material(
+                meshes,
+                ranges,
+                model,
+                alpha,
+                &binding.material,
+            );
+        });
+    }
+}
+
+pub(crate) fn draw_retained_meshes(meshes: &[RetainedMesh], model: Mat4, alpha: f32) {
+    draw_retained_meshes_ranges(meshes, &[], model, alpha);
 }
 
 struct MaterialGuard {
     previous: Option<GlPipeline>,
+    previous_retained: Option<RetainedBinding>,
 }
 
 impl MaterialGuard {
-    fn enter(material: &Material) -> Self {
+    fn enter(material: &Material, retained: Option<RetainedMaterial>) -> Self {
         let previous = unsafe { get_internal_gl() }.quad_gl.get_pipeline();
         // Toggle through the default pipeline so entering the same material
         // still starts a new draw call.
         gl_use_default_material();
         gl_use_material(material);
-        Self { previous }
+        let binding = retained.map(|material| RetainedBinding {
+            pipeline: unsafe { get_internal_gl() }
+                .quad_gl
+                .get_pipeline()
+                .expect("material pipeline"),
+            material,
+        });
+        // None deliberately hides an outer partner, even when the pipeline is unchanged.
+        let previous_retained = ACTIVE_RETAINED.with(|active| active.replace(binding));
+        Self {
+            previous,
+            previous_retained,
+        }
     }
 }
 
@@ -162,5 +244,6 @@ impl Drop for MaterialGuard {
                 .quad_gl
                 .pipeline(Some(previous));
         }
+        ACTIVE_RETAINED.with(|active| active.replace(self.previous_retained.take()));
     }
 }

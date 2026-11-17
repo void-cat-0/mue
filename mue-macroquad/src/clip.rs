@@ -1,24 +1,21 @@
 //! Rounded and sector clipping for immediate UI subtrees.
 //!
 //! A clip is a material scope: it replaces the current pipeline with an alpha
-//! mask while the subtree draws. Retained geometry uses an active retained
-//! material; it falls back to immediate only when that material is unavailable.
+//! mask while the subtree draws. Retained geometry is used only while the current
+//! material has a matching retained shader; otherwise nodes draw immediate geometry.
 
-use std::{
-    cell::{OnceCell, RefCell},
-    ops::Range,
-};
+use std::cell::OnceCell;
 
 use macroquad::{
-    math::{Mat4, vec2, vec4},
-    retained::{RetainedMaterial, RetainedMesh},
+    math::{vec2, vec4},
+    retained::RetainedMaterial,
 };
 use mue_core::prop::PropValue;
 
 use crate::{
     material::UiMaterial,
     math::{Rect, Vector, model_matrix},
-    paint::{current_transform, enter_material_clip},
+    paint::current_transform,
 };
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -52,26 +49,6 @@ thread_local! {
     static CLIP_MATERIAL: OnceCell<UiMaterial> = const { OnceCell::new() };
     static RETAINED_CLIP: OnceCell<Option<RetainedMaterial>> = const { OnceCell::new() };
     static RETAINED_SECTOR: OnceCell<Option<RetainedMaterial>> = const { OnceCell::new() };
-    static ACTIVE_RETAINED: RefCell<Vec<RetainedMaterial>> = const { RefCell::new(Vec::new()) };
-}
-
-struct RetainedGuard;
-
-impl Drop for RetainedGuard {
-    fn drop(&mut self) {
-        ACTIVE_RETAINED.with(|stack| {
-            stack.borrow_mut().pop();
-        });
-    }
-}
-
-fn push_retained(material: RetainedMaterial) -> RetainedGuard {
-    ACTIVE_RETAINED.with(|stack| stack.borrow_mut().push(material));
-    RetainedGuard
-}
-
-pub(crate) fn retained_material_active() -> bool {
-    ACTIVE_RETAINED.with(|stack| !stack.borrow().is_empty())
 }
 
 fn retained_clip_material() -> Option<RetainedMaterial> {
@@ -130,29 +107,6 @@ fn retained_sector_material() -> Option<RetainedMaterial> {
     })
 }
 
-/// Draw retained meshes, using the active clip material when one is set.
-pub(crate) fn draw_retained_meshes_ranges(
-    meshes: &[RetainedMesh],
-    ranges: &[Option<Range<u32>>],
-    model: Mat4,
-    alpha: f32,
-) {
-    ACTIVE_RETAINED.with(|stack| {
-        let stack = stack.borrow();
-        if let Some(material) = stack.last() {
-            macroquad::retained::draw_meshes_ranges_with_material(
-                meshes, ranges, model, alpha, material,
-            );
-        } else {
-            macroquad::retained::draw_meshes_ranges(meshes, ranges, model, alpha);
-        }
-    });
-}
-
-pub(crate) fn draw_retained_meshes(meshes: &[RetainedMesh], model: Mat4, alpha: f32) {
-    draw_retained_meshes_ranges(meshes, &[], model, alpha);
-}
-
 fn clip_material() -> UiMaterial {
     CLIP_MATERIAL.with(|cell| {
         cell.get_or_init(|| {
@@ -201,15 +155,12 @@ pub(crate) fn with_clip_radius<R>(rect: Rect, radius: f32, draw: impl FnOnce() -
     }
 
     let material = clip_material();
-    let retained = retained_clip_material().map(|retained| {
+    let retained = retained_clip_material().inspect(|retained| {
         retained.set_vec4("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
         retained.set_f32("radius", radius);
         retained.set_mat4("inverse_model", model_matrix(inverse));
-        push_retained(retained)
     });
-    let _guard = enter_material_clip();
-    let _retained_guard = retained;
-    material.with(|| {
+    material.with_retained(retained, || {
         material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
         material.set_uniform("radius", radius);
         material.set_uniform("inverse_model", model_matrix(inverse));
@@ -415,16 +366,13 @@ pub(crate) fn with_clip_sector<R>(rect: Rect, sector: Sector, draw: impl FnOnce(
     let feather = sector.feather.clamp(0., span * 0.5);
 
     let material = sector_material();
-    let retained = retained_sector_material().map(|retained| {
+    let retained = retained_sector_material().inspect(|retained| {
         retained.set_vec2("center", vec2(center.x, center.y));
         retained.set_vec2("angle", vec2(sector.start, sector.end));
         retained.set_f32("feather", feather);
         retained.set_mat4("inverse_model", model_matrix(inverse));
-        push_retained(retained)
     });
-    let _guard = enter_material_clip();
-    let _retained_guard = retained;
-    material.with(|| {
+    material.with_retained(retained, || {
         material.set_uniform("center", vec2(center.x, center.y));
         material.set_uniform("angle", vec2(sector.start, sector.end));
         material.set_uniform("feather", feather);

@@ -37,25 +37,6 @@ struct Cache {
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::default();
     static DRAW_TRANSFORM: Cell<Matrix> = const { Cell::new(Matrix::IDENTITY) };
-    static MATERIAL_CLIP_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-/// Keeps retained geometry disabled while a clip material is active.
-pub(crate) struct MaterialClipGuard;
-
-impl Drop for MaterialClipGuard {
-    fn drop(&mut self) {
-        MATERIAL_CLIP_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-pub(crate) fn enter_material_clip() -> MaterialClipGuard {
-    MATERIAL_CLIP_DEPTH.with(|depth| depth.set(depth.get() + 1));
-    MaterialClipGuard
-}
-
-fn material_clip_active() -> bool {
-    MATERIAL_CLIP_DEPTH.with(|depth| depth.get() > 0)
 }
 
 /// Apply a transform to a subtree without changing its layout coordinates.
@@ -81,11 +62,10 @@ pub(crate) fn current_transform() -> Matrix {
 
 /// Whether mue should use macroquad's retained geometry path.
 ///
-/// This includes the backend check, so callers can skip building retained
-/// geometry entirely on backends that only support the immediate path.
+/// Check both the backend and the currently selected material before building
+/// retained geometry. Unmatched custom materials keep the immediate path.
 pub(crate) fn retained_enabled() -> bool {
-    macroquad::retained::is_supported()
-        && (!material_clip_active() || crate::clip::retained_material_active())
+    macroquad::retained::is_supported() && crate::material::retained_material_matches()
 }
 
 /// Axis-aligned bounds of a rectangle after a canvas transform.
@@ -225,6 +205,34 @@ impl Paint {
         });
         shapes.draw();
     }
+
+    /// Submit a solid quad without allocating temporary Shapes or tessellation buffers.
+    pub(crate) fn draw_solid_rect(&self, rect: Rect, color: crate::color::Color) {
+        self.draw_quad(rect, color, None);
+    }
+
+    /// Bind a cached mask. Its material derives high-precision UVs from local position.
+    pub(crate) fn draw_mask_rect(&self, rect: Rect, texture: &Texture2D) {
+        self.draw_quad(rect, crate::color::Color::WHITE, Some(texture));
+    }
+
+    fn draw_quad(&self, rect: Rect, color: crate::color::Color, texture: Option<&Texture2D>) {
+        let transform = self.transform.get();
+        let alpha = self.opacity.get();
+        // Row-major corners and the diagonal match ShapesBuilder::fill_quad.
+        let vertices = [
+            rect.min(),
+            vec2(rect.right(), rect.y),
+            vec2(rect.x, rect.bottom()),
+            rect.max(),
+        ]
+        .map(|point| color.new_vertex(&transform, &point, alpha));
+        const INDICES: [u16; 6] = [0, 1, 3, 0, 3, 2];
+        let gl = unsafe { get_internal_gl() }.quad_gl;
+        gl.texture(texture);
+        gl.draw_mode(DrawMode::Triangles);
+        gl.geometry(&vertices, &INDICES);
+    }
 }
 
 fn frobenius_norm(m: &Matrix) -> f32 {
@@ -282,7 +290,7 @@ impl Shapes {
     }
 
     /// Convert the cached geometry into immutable buffer batches.
-    pub(crate) fn retained_batches(&self) -> Vec<RetainedBatch> {
+    pub(crate) fn retained_batches(&self) -> impl Iterator<Item = RetainedBatch> + '_ {
         self.shapes
             .iter()
             .filter(|shape| !shape.buffers.vertices.is_empty() && !shape.buffers.indices.is_empty())
@@ -310,7 +318,6 @@ impl Shapes {
                     .map(|&index| index as u32)
                     .collect(),
             })
-            .collect()
     }
 
     /// Build reusable geometry in local coordinates for a `shape` node.
@@ -756,31 +763,49 @@ impl ShapesBuilder<'_> {
     }
 }
 
-/// Add the background before the node's content hooks.
+/// Cache background geometry and draw it before the node's content hooks.
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
     let radius = crate::style::units::resolve_length(style.take_radius(), "radius");
     let shadow = style.take_shadow();
+    let shadow_cache = style.take_shadow_cache();
+    let mut shadow_mask = crate::shadow::ShadowMaskState::default();
     let paint = use_paint(style);
-    style.on_render.append(move |_| {
-        let rect = rect.get();
-        if rect.w <= 0. || rect.h <= 0. {
-            return;
-        }
-        if let Some(shadow) = shadow.try_get() {
-            crate::shadow::draw_shadow(&paint, rect, shadow);
-        }
-        let brush = background.get_clone();
-        if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
-            return;
-        }
-        let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
-        paint.draw(|p| {
+    // Default transparent containers need no cache, even during inherited opacity changes.
+    let shapes = if matches!(&background, Prop::Static(Brush::Solid(color)) if color.a <= 0.) {
+        None
+    } else {
+        Some(paint.build(move |p| {
+            let rect = rect.get();
+            if rect.w <= 0. || rect.h <= 0. {
+                return;
+            }
+            let brush = background.get_clone();
+            if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
+                return;
+            }
+            let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
             if radius > 0. {
                 p.fill_rounded_rect(rect, radius, brush.shader(rect));
             } else {
                 p.fill_rect(rect, brush.shader(rect));
             }
-        });
+        }))
+    };
+    style.on_render.append(move |_| {
+        let rect = rect.get();
+        if rect.w <= 0. || rect.h <= 0. {
+            shadow_mask.reset();
+            return;
+        }
+        if let Some(shadow) = shadow.try_get() {
+            crate::shadow::draw_shadow(&paint, rect, shadow, shadow_cache.get(), &mut shadow_mask);
+        } else {
+            shadow_mask.reset();
+        }
+        // Keep submission on the immediate path so neighboring backgrounds can batch.
+        if let Some(shapes) = shapes {
+            shapes.get_clone().draw();
+        }
     });
 }
