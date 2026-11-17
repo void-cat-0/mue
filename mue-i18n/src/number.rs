@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{borrow::Cow, rc::Rc, sync::Arc};
 
 use fluent::types::{FluentNumber, FluentNumberOptions};
 use fluent::{FluentArgs, FluentResource, FluentValue};
@@ -15,25 +15,33 @@ type NumberResult<T = ()> = Result<T, &'static str>;
 
 /// Validate before Fluent clones, stringifies or selects on any supplied value.
 /// Custom values, None and Error are deliberately unsupported, even if unused.
-pub(crate) fn validate_arguments(args: &FluentArgs<'_>) -> Vec<TranslationIssue> {
-    args.iter()
-        .filter_map(|(name, value)| {
-            let result = match value {
-                FluentValue::String(_) => Ok(()),
-                FluentValue::Number(number) => validate_number(number),
-                _ => Err("only String and Number arguments are supported"),
-            };
-            result
-                .err()
-                .map(|reason| TranslationIssue::InvalidArgument {
+/// Omitting diagnostics skips their allocation, not validation of any argument.
+pub(crate) fn validate_arguments(
+    args: &FluentArgs<'_>,
+    mut issues: Option<&mut Vec<TranslationIssue>>,
+) -> bool {
+    let mut valid = true;
+    for (name, value) in args.iter() {
+        let result = match value {
+            FluentValue::String(_) => Ok(()),
+            FluentValue::Number(number) => validate_number(number),
+            _ => Err("only String and Number arguments are supported"),
+        };
+        if let Err(reason) = result {
+            valid = false;
+            if let Some(issues) = issues.as_deref_mut() {
+                issues.push(TranslationIssue::InvalidArgument {
                     name: Arc::from(name),
                     reason: Arc::from(reason),
-                })
-        })
-        .collect()
+                });
+            }
+        }
+    }
+    valid
 }
 
 /// Normalize the zero minimum-fraction option without copying ordinary arguments.
+/// Borrow names and strings; clone numbers to leave the original input/options intact.
 /// Fluent 0.16 otherwise renders an integer with Some(0) as `1.` rather than `1`.
 pub(crate) fn normalized_arguments<'a>(args: &'a FluentArgs<'_>) -> Option<FluentArgs<'a>> {
     if !args.iter().any(|(_, value)| {
@@ -44,11 +52,18 @@ pub(crate) fn normalized_arguments<'a>(args: &'a FluentArgs<'_>) -> Option<Fluen
     Some(
         args.iter()
             .map(|(name, value)| {
-                let mut value = value.clone();
-                if let FluentValue::Number(number) = &mut value {
-                    normalize_zero_fraction(number);
-                }
-                (name.to_owned(), value)
+                let value = match value {
+                    FluentValue::String(value) => {
+                        FluentValue::String(Cow::Borrowed(value.as_ref()))
+                    }
+                    FluentValue::Number(number) => {
+                        let mut number = number.clone();
+                        normalize_zero_fraction(&mut number);
+                        FluentValue::Number(number)
+                    }
+                    _ => value.clone(),
+                };
+                (Cow::Borrowed(name), value)
             })
             .collect(),
     )
@@ -231,7 +246,8 @@ pub(crate) fn safe_number(
     validate_named_options(named)?;
     let mut number = number.clone();
     number.options.merge(named);
-    validate_number(&number)?;
+    // Merge changes only options; the original value was already validated.
+    validate_options(&number.options)?;
     normalize_zero_fraction(&mut number);
     Ok(number)
 }

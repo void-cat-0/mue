@@ -2,21 +2,59 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use fluent::{FluentBundle, FluentResource, FluentValue};
+use fluent::{FluentArgs, FluentBundle, FluentResource, FluentValue};
+use fluent_syntax::ast::Pattern;
 use unic_langid::{LanguageIdentifier, langid};
 
 use crate::error::{CatalogError, TranslationIssue};
 use crate::number::{safe_number, validate_resource_numbers};
 
-type Resources = BTreeMap<LanguageIdentifier, BTreeMap<Rc<str>, Vec<Rc<FluentResource>>>>;
+type Resources = BTreeMap<LanguageIdentifier, BTreeMap<Rc<str>, Vec<FluentResource>>>;
 type Bundles = BTreeMap<LanguageIdentifier, BTreeMap<Rc<str>, BundleRecord>>;
 
-struct BundleRecord {
-    bundle: FluentBundle<Rc<FluentResource>>,
+pub(crate) struct BundleRecord {
+    pub(crate) bundle: FluentBundle<FluentResource>,
     // Fluent requires function closures to be Send + Sync even on its ordinary
     // thread-local bundle. The private buffer contains only static reasons; it
     // does not change the catalog's Rc/memoizer thread affinity.
     number_issues: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl BundleRecord {
+    /// Format and clear private NUMBER diagnostics in the same record. Text-only
+    /// consumers still run the checked resolver, but do not package diagnostics.
+    pub(crate) fn format_pattern<'a>(
+        &'a self,
+        pattern: &'a Pattern<&'a str>,
+        args: Option<&FluentArgs<'_>>,
+        issues: Option<&mut Vec<TranslationIssue>>,
+    ) -> Rc<str> {
+        self.number_issues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        let mut errors = Vec::new();
+        let text = self.bundle.format_pattern(pattern, args, &mut errors);
+        let mut reasons = self
+            .number_issues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(issues) = issues {
+            issues.extend(
+                reasons
+                    .drain(..)
+                    .map(|reason| TranslationIssue::InvalidArgument {
+                        name: Arc::from("NUMBER"),
+                        reason: Arc::from(reason),
+                    }),
+            );
+            issues.extend(errors.into_iter().map(TranslationIssue::Fluent));
+        } else {
+            reasons.clear();
+        }
+        drop(reasons);
+        Rc::from(text.as_ref())
+    }
 }
 
 /// Collects complete FTL resources before publishing an immutable catalog.
@@ -78,7 +116,7 @@ impl CatalogBuilder {
             .or_default()
             .entry(namespace)
             .or_default()
-            .push(Rc::new(resource));
+            .push(resource);
         Ok(())
     }
 
@@ -169,7 +207,7 @@ impl CatalogBuilder {
 /// Immutable, isolated Fluent bundles indexed by exact locale and namespace.
 ///
 /// All resources are assembled successfully before a Catalog can be obtained.
-/// Fluent's ordinary memoizer and Rc resources keep this catalog thread-local.
+/// Fluent's ordinary memoizer and Rc namespaces keep this catalog thread-local.
 /// NUMBER accepts finite safe-range numbers and bounded digit options; it is
 /// not a promise of full localized number, date or currency formatting.
 pub struct Catalog {
@@ -188,38 +226,12 @@ impl Catalog {
         self.namespaces.contains(namespace)
     }
 
-    pub(crate) fn bundle(
+    pub(crate) fn bundle_record(
         &self,
         locale: &LanguageIdentifier,
         namespace: &str,
-    ) -> Option<&FluentBundle<Rc<FluentResource>>> {
-        Some(&self.bundles.get(locale)?.get(namespace)?.bundle)
-    }
-
-    /// Drain private NUMBER diagnostics before/after one synchronous format.
-    pub(crate) fn take_number_issues(
-        &self,
-        locale: &LanguageIdentifier,
-        namespace: &str,
-    ) -> Vec<TranslationIssue> {
-        let Some(record) = self
-            .bundles
-            .get(locale)
-            .and_then(|bundles| bundles.get(namespace))
-        else {
-            return Vec::new();
-        };
-        let mut reasons = record
-            .number_issues
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::mem::take(&mut *reasons)
-            .into_iter()
-            .map(|reason| TranslationIssue::InvalidArgument {
-                name: Arc::from("NUMBER"),
-                reason: Arc::from(reason),
-            })
-            .collect()
+    ) -> Option<&BundleRecord> {
+        self.bundles.get(locale)?.get(namespace)
     }
 
     pub(crate) fn fallback_locale(&self) -> &LanguageIdentifier {

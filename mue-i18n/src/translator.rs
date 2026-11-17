@@ -27,16 +27,6 @@ pub struct Translation {
     pub issues: Rc<[TranslationIssue]>,
 }
 
-impl Translation {
-    fn unavailable(key: &str, issues: Vec<TranslationIssue>) -> Self {
-        Self {
-            text: key.into(),
-            resolved_locale: None,
-            issues: issues.into(),
-        }
-    }
-}
-
 struct State {
     catalog: Catalog,
     locale: Signal<LanguageIdentifier>,
@@ -136,7 +126,7 @@ impl Translator {
     /// they do not silently change languages. All output is owned.
     pub fn format(&self, key: &str, args: Option<&FluentArgs<'_>>) -> Translation {
         let locale = self.state.locale.get_clone_untracked();
-        self.format_in(&locale, key, args)
+        self.translation_in(&locale, key, args)
     }
 
     /// Immediately bind a parameter-free text to the current language.
@@ -165,7 +155,7 @@ impl Translator {
             // parameter correction updates the same binding.
             let locale = translator.state.locale.get_clone();
             let args = args();
-            translator.format_in(&locale, &key, Some(&args)).text
+            translator.format_in(&locale, &key, Some(&args), None).0
         }))
     }
 
@@ -185,24 +175,44 @@ impl Translator {
         Prop::from(computed(move |_| {
             let locale = translator.state.locale.get_clone();
             let args = args();
-            translator.format_in(&locale, &key, Some(&args))
+            translator.translation_in(&locale, &key, Some(&args))
         }))
     }
 
-    fn format_in(
+    fn translation_in(
         &self,
         selected: &LanguageIdentifier,
         key: &str,
         args: Option<&FluentArgs<'_>>,
     ) -> Translation {
+        let mut issues = Vec::new();
+        let (text, resolved_locale) = self.format_in(selected, key, args, Some(&mut issues));
+        Translation {
+            text,
+            resolved_locale: resolved_locale.cloned(),
+            issues: issues.into(),
+        }
+    }
+
+    /// One formatting path for snapshots and bindings. Text-only bindings omit
+    /// diagnostic packaging and the resolved-locale clone, not input validation.
+    fn format_in<'a>(
+        &'a self,
+        selected: &'a LanguageIdentifier,
+        key: &str,
+        args: Option<&FluentArgs<'_>>,
+        mut issues: Option<&mut Vec<TranslationIssue>>,
+    ) -> (Rc<str>, Option<&'a LanguageIdentifier>) {
         let Some((id, attribute)) = parse_key(key) else {
-            return Translation::unavailable(key, vec![TranslationIssue::InvalidKey]);
-        };
-        if let Some(args) = args {
-            let issues = validate_arguments(args);
-            if !issues.is_empty() {
-                return Translation::unavailable(key, issues);
+            if let Some(issues) = issues {
+                issues.push(TranslationIssue::InvalidKey);
             }
+            return (key.into(), None);
+        };
+        if let Some(args) = args
+            && !validate_arguments(args, issues.as_deref_mut())
+        {
+            return (key.into(), None);
         }
 
         let normalized = args.and_then(normalized_arguments);
@@ -210,10 +220,10 @@ impl Translator {
         let fallback = self.state.catalog.fallback_locale();
         let mut missing = TranslationIssue::MissingMessage;
         for locale in std::iter::once(selected).chain((selected != fallback).then_some(fallback)) {
-            let Some(bundle) = self.state.catalog.bundle(locale, &self.namespace) else {
+            let Some(record) = self.state.catalog.bundle_record(locale, &self.namespace) else {
                 continue;
             };
-            let Some(message) = bundle.get_message(id) else {
+            let Some(message) = record.bundle.get_message(id) else {
                 continue;
             };
             let pattern = if let Some(attribute) = attribute {
@@ -229,25 +239,13 @@ impl Translator {
                 };
                 pattern
             };
-            // NUMBER is the only installed function. Its private diagnostics
-            // supplement Fluent errors, which do not report every function failure.
-            self.state
-                .catalog
-                .take_number_issues(locale, &self.namespace);
-            let mut errors = Vec::new();
-            let text = bundle.format_pattern(pattern, args, &mut errors);
-            let mut issues = self
-                .state
-                .catalog
-                .take_number_issues(locale, &self.namespace);
-            issues.extend(errors.into_iter().map(TranslationIssue::Fluent));
-            return Translation {
-                text: Rc::from(text.as_ref()),
-                resolved_locale: Some(locale.clone()),
-                issues: issues.into(),
-            };
+            let text = record.format_pattern(pattern, args, issues);
+            return (text, Some(locale));
         }
-        Translation::unavailable(key, vec![missing])
+        if let Some(issues) = issues {
+            issues.push(missing);
+        }
+        (key.into(), None)
     }
 }
 
