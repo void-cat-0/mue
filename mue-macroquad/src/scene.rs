@@ -1,4 +1,21 @@
-//! Scenes own application content; App owns frame scheduling.
+//! Application-owned screens and their lifecycle, input, and rendering contract.
+//!
+//! A [`Scene`] owns its application state and Node trees; [`crate::App`] owns
+//! scheduling and retains the Scene stack. Only the top Scene participates in
+//! normal callbacks and Node updates. Covered Scenes keep their state, but are
+//! not implicitly drawn behind the active Scene.
+//!
+//! `event` delivers lifecycle notifications and the complete raw
+//! [`InputBatch`], after Node UI dispatch. UI routing
+//! does not consume that raw batch or decide which events count as gameplay.
+//! Implement the policy your application needs, including cancellation after an
+//! interrupted batch via [`InputBatch::is_interrupted`].
+//!
+//! Stack operations from [`SceneContext`] register deferred [`SceneRequest`]s.
+//! They commit at a safe boundary after input/global/host work, before the
+//! subsequent layout and drawing. Use [`SceneEvent`] for lifecycle timing and
+//! [`SceneTransition`] for optional draw-only effects;
+//! neither replaces the host's frame loop.
 use crate::{
     CallbackResult, SceneError,
     input::InputBatch,
@@ -8,7 +25,11 @@ use crate::{
 };
 use std::any::Any;
 
-/// How a displayed root participates in pointer routing.
+/// How a displayed root participates in Node pointer routing.
+///
+/// This policy never filters the raw batch delivered through
+/// [`SceneEvent::Input`]. See [`SceneRoot::input`] and the [`input`](crate::input)
+/// module for the separate Node and Scene input paths.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RootInput {
     /// Draw/update only; input passes through this root.
@@ -23,7 +44,10 @@ pub enum RootInput {
 }
 
 /// A borrowed root and its logical window-space layout constraints.
-/// The Scene retains its owner through input, preparation and drawing.
+///
+/// The Scene must retain the owning tree through input, preparation, and
+/// drawing. [`SceneRoot::bounds`] constrain available layout space and new Node
+/// input queries; they do not clip drawing or Scene raw input.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SceneRoot {
     pub node: NodeRef,
@@ -44,7 +68,11 @@ impl SceneRoot {
     }
 }
 
-/// One application frame. UI delta time and host time are not an audio clock.
+/// Timing and viewport data shared by one Scene frame's callbacks.
+///
+/// `dt` is frame-driven UI/gameplay time and `time` is macroquad host time. Neither
+/// is an audio or judgement clock; applications that need those semantics should
+/// own the corresponding clock. See [`Scene::update`] and [`Scene::layout`].
 #[derive(Clone, Copy, Debug)]
 pub struct SceneFrame {
     pub dt: f32,
@@ -137,7 +165,12 @@ impl<'a> SceneRequest<'a> {
     }
 }
 
-/// Frame data and a deferred request applied after input and update callbacks.
+/// Frame data, transition state, and deferred Scene-stack operations.
+///
+/// Calls such as [`SceneContext::push`] and [`SceneContext::pop`] register a
+/// [`SceneRequest`] rather than mutating the stack inline. Requests are applied
+/// at the frame's safe boundary. `transition()` returns the last successfully
+/// presented sample for callback-side readiness decisions.
 pub struct SceneContext<'a> {
     pub frame: SceneFrame,
     pub(crate) command: &'a mut Option<SceneRequestData>,
@@ -150,6 +183,7 @@ impl SceneContext<'_> {
         self.transition
     }
 
+    /// Whether a Scene transition is active or waiting for presentation.
     pub fn is_transitioning(&self) -> bool {
         self.transition.is_some()
     }
@@ -181,8 +215,14 @@ impl SceneContext<'_> {
     }
 }
 
-/// A retained Scene owning its Node trees and gameplay/custom drawing resources.
-/// App schedules only the top Scene; covered instances retain their state.
+/// One retained screen in an [`crate::App`]-owned Scene stack.
+///
+/// A Scene owns its Node trees, gameplay state, and custom drawing resources.
+/// App schedules only the top Scene; covered instances retain their state but do
+/// not receive ordinary updates. Implement [`event`](Scene::event) for lifecycle
+/// and raw input, [`update`](Scene::update) for frame-driven business,
+/// [`layout`](Scene::layout) to submit roots, and [`render`](Scene::render) to
+/// order custom drawing with UI.
 ///
 /// Keep hit-test state unchanged between drawing and the next input callback.
 /// App preplans and dispatches Node input, then passes the complete original
@@ -212,14 +252,21 @@ pub trait Scene {
     fn layout(&mut self, _frame: &SceneFrame, _roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         Ok(())
     }
+    /// Draw custom content and submitted roots in their intended visual order.
+    ///
+    /// Use [`SceneRender::draw`] rather than calling `NodeRef::render` directly,
+    /// so App can track displayed root order for the next input batch.
     fn render(&mut self, _render: &mut SceneRender<'_>) -> CallbackResult<()> {
         Ok(())
     }
 }
 
 /// Controlled UI drawing inside a Scene's custom drawing sequence.
-/// draw() records actual root order for the next input batch; omitted roots do
-/// not receive new input. External rendering belongs between complete draw calls.
+///
+/// [`SceneRender::draw`] records actual root order for the next input batch;
+/// omitted roots do not receive new Node input. External rendering belongs
+/// between complete draw calls. Transition state describes this candidate draw;
+/// see [`SceneRender::transition`] and [`SceneRender::is_transition_source`].
 pub struct SceneRender<'a> {
     pub frame: SceneFrame,
     pub(crate) prepared: &'a [SceneRoot],

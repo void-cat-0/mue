@@ -38,7 +38,7 @@ Each non-instant segment first draws at raw progress zero, even if the frame del
 
 A drawing/flush success acknowledges the endpoint, not a prediction during layout. An `AroundSwitch` exit endpoint is therefore visible while the old Scene is still top; commit occurs in the **following normal frame**, after that frame's input/global/host work. A completed entering endpoint remains observable for that frame; the following normal frame retires the effect. These are render-thread submission guarantees, not OS/display scanout fences. Hosts must keep the normal one-App-frame/`next_frame` loop to display frames.
 
-Only the active top receives ordinary Scene/Node updates. During an exit segment it is still active and may continue business; stopping gameplay earlier is an explicit application decision. After its exit endpoint has been presented, the departing Scene skips ordinary update in the commit frame; input/global/host work still precedes that boundary. Switching cancels old Node capture and preserves existing Pause/Enter/Returned-before-Resume semantics. New-top Scene update is skipped and its one Node update uses zero delta in the switching frame.
+Only the active top receives ordinary Scene/Node updates. During an exit segment it is still active and may continue business; stopping gameplay earlier is an explicit application decision. After its exit endpoint has been presented, the departing Scene skips ordinary update in the commit frame; input/global/host work still precedes that boundary. Submit commands that must take effect on this last input, such as Quit, directly from `SceneEvent::Input` rather than relying on a later `update`. Switching cancels old Node capture and preserves existing Pause/Enter/Returned-before-Resume semantics. New-top Scene update is skipped and its one Node update uses zero delta in the switching frame.
 
 A terminal `pop`/`exit` has no entering Scene. `AroundSwitch` can present its exit, then ends the App without an enter segment; an `AfterSwitch` terminal request is instantaneous. Never-entered sources and fault/exit recovery also commit instantaneously without outgoing drawing, default-factory invocation or manufactured Enter/Pause notifications.
 
@@ -47,7 +47,6 @@ A terminal `pop`/`exit` has no entering Scene. `AroundSwitch` can present its ex
 `SceneTransition::crossfade(curve)` is a built-in RGB mix with opaque output. `SceneTransition::composite(curve, callback)` uses the same `AfterSwitch` scheduling but lets the callback draw the whole composite. The callback receives borrowed `ScenePictures { from, to }`, valid only during that draw, and a `TransitionFrame`.
 
 ```rust
-use anyhow::Result;
 use macroquad::prelude::{draw_texture_ex, vec2, DrawTextureParams, WHITE};
 use mue_macroquad::{SceneTransition, transition::Transition};
 
@@ -65,7 +64,7 @@ fn slide() -> SceneTransition {
                 ..Default::default()
             });
         }
-        Ok::<(), anyhow::Error>(())
+        Ok(())
     })
 }
 ```
@@ -76,7 +75,7 @@ When no interrupted composite exists, App captures the outgoing **current retain
 
 Resize/DPI changes discard invalid pictures, **not** the phase clock or Scene/input state. If the departed Scene can no longer be captured, `from` and `to` both reference the freshly rendered live picture for the remainder; timing continues. This is a defined fallback, not an old image stretched into a mismatched viewport or a restart.
 
-Current composite restrictions: **OpenGL**, full origin-zero logical window viewport, default-camera host entry, no active raw miniquad pass, balanced model matrices and complete opaque pictures. All Scene/custom/UI rendering must retain App's target camera until returning; do not call `set_default_camera` or start a raw output pass inside a captured Scene. Render-target texture copies require `flip_y: true`. Custom shader/resource setup belongs in the callback, lazily on the render thread. Boundaries flush and restore default camera/pass plus the existing narrow material/mode/scissor/viewport guard, not arbitrary host GPU state. Metal composite requests report an explicit error before allocating targets; overlay drawing has no composite backend restriction.
+Current composite restrictions: **OpenGL**, full origin-zero logical window viewport, default-camera host entry, no active raw miniquad pass, balanced model matrices and complete opaque pictures. All Scene/custom/UI rendering must retain App's target camera until returning; do not call `set_default_camera` or start a raw output pass inside a captured Scene. Render-target texture copies require `flip_y: true`. Custom shader/resource setup belongs in the callback, lazily on the render thread. Boundaries flush and restore default camera/pass plus the existing narrow material/mode/scissor/viewport guard, not arbitrary host GPU state. App initializes picture targets with an opaque draw that writes all color channels. App also restores all-channel writes when leaving an effect. Within a callback or ordinary host drawing, submit an all-channel pipeline before `clear_background` if the last submitted draw used a partial mask. Changing the selected QuadGl material alone does not apply its mask. Metal composite requests report an explicit error before allocating targets; overlay drawing has no composite backend restriction.
 
 ## Custom overlay without pictures
 
@@ -115,8 +114,8 @@ There is **no implicit raw-input or Node-press filtering** based on alpha. Node 
 
 A newer request cancels the current effect at the safe boundary. If the old command has not committed, its pending destination/result is dropped; if it has committed, the stack is **not rolled back**. Last-request-wins applies before selection. Composite-to-composite interruption can continue from the last displayed blend; arbitrary overlay continuity, reverse playback and automatic shared-element matching are not promised. Closures and pending requests are released before source owners on cancellation/fault/App drop, including failed commit preparation. There is no unbounded request queue.
 
-Host suspension draws no effects, allocates no pictures and advances no phase clock. Animated requests over an entered source wait for a normal rendering frame; instantaneous requests retain the prior suspended-commit/deferred-results behavior. Resume's first Scene/Node/effect delta is zero. Non-GPU global work still runs once per suspended frame. A new request can cancel a waiting effect without rendering it. Instantaneous requests and overlays do not require a valid picture size merely to discard an old composite; an unavailable old picture is invalidated, not treated as a Scene error.
+Host suspension draws no effects, allocates no pictures and advances no phase clock. Animated requests over an entered source wait for a normal rendering frame; instantaneous requests retain the prior suspended-commit/deferred-results behavior. Resume's first Scene/Node/effect delta is zero. Non-GPU global work runs once per suspended frame when no error stops it. A normal frame with no drawable area also waits without acknowledging picture draws; it does not suppress Scene input. A new request can cancel a waiting effect without rendering it. Instantaneous requests and overlays do not require a valid picture size merely to discard an old composite; an unavailable old picture is invalidated, not treated as a Scene error.
 
 Effect/capture errors propagate through `try_frame`, fault the App and clear input eligibility exactly like Scene errors. Failed endpoint drawing does not commit the pending switch; a failure after installation does not roll back it. Recovery is explicit and instant. See [Scene lifecycle/errors](<scenes.md>) for the shared ownership and stopped-state contract.
 
-The [scene-transitions example](<../examples/scene-transitions/README.md>) demonstrates built-in fade, a custom slide composite and a two-phase cover. The [song-transition example](<../examples/song-transition/README.md>) adds illustration expansion/shrink, rounded shape/crop interpolation and retained list state using the same overlay API, without Scene screenshots. These examples are ordinary interactive applications with Scene-local state and separate effect/view modules, without a built-in validation CLI or global test-state bag. GPU-free request/clock/ownership and rendering regressions remain in the framework tests. This interface is not a generic render graph or an audio/game-session timeline.
+The [scene-transitions example](<../examples/scene-transitions/README.md>) demonstrates built-in fade, a custom slide composite and a two-phase cover. The [song-transition example](<../examples/song-transition/README.md>) adds illustration expansion/shrink, rounded shape/crop interpolation and retained list state using the same overlay API, without Scene screenshots. Both examples use Scene-local state and separate modules for effects and views.

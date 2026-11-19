@@ -35,7 +35,10 @@ fn portal_uv(flip_y: bool) -> Rect {
 ///
 /// The portal fills its layout rect and stretches the texture. Use an
 /// `aspect_ratio` container or an explicit rect to preserve the chart aspect
-/// ratio.
+/// ratio. The host owns target resizing and render timing; the stable order is to
+/// finish/flush external rendering and publish the texture before
+/// [`crate::App::try_frame_with_update`] or the next App draw. The portal itself
+/// never starts or restores a host camera/pass.
 #[mue_macros::node]
 pub fn portal(ctx: NodeContext, texture: SharedTexture, #[default(true)] flip_y: bool) -> Node {
     ctx.finish_without_defaults(move |style| {

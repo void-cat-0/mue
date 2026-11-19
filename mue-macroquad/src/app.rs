@@ -1,3 +1,24 @@
+//! Frame scheduler and retained Scene-stack owner.
+//!
+//! Construct [`App`] only after macroquad has initialized. A normal host loop
+//! calls [`App::try_frame`] (or [`App::frame`]) once, then awaits
+//! [`macroquad::window::next_frame`]. `App` handles input, Scene callbacks, Node
+//! updates, layout, drawing, and pending Scene requests; it does not own or end
+//! the host loop. Use [`App::with_scene`] for a custom [`Scene`], or [`App::new`]
+//! for a single Node tree.
+//!
+//! Stack methods register deferred [`SceneRequest`]s. A normal request commits
+//! after the current input/global/host work and before layout/drawing. The top
+//! Scene alone is scheduled; covered instances retain their state and resources.
+//! For lifecycle and raw-input details, see the [`scene`] module. Optional
+//! draw-only effects are described by [`SceneTransition`].
+//!
+//! External renderers should finish their target draws, close raw passes, and
+//! restore the default camera before the App frame. [`crate::RenderStateGuard`]
+//! restores material, draw mode, scissor, and viewport, not camera/pass/depth or
+//! arbitrary backend state. [`crate::node::portal`] displays a texture published
+//! by the host; it does not invoke the renderer.
+
 use crate::{
     AppError, CallbackError, CallbackResult, Result, SceneError,
     event::pointer::PointerManager,
@@ -80,10 +101,12 @@ impl ActiveTransition {
     }
 }
 
-/// Retains a Scene stack, scheduling only its top for input, layout and drawing.
-/// Covered instances keep their resources, but receive no Scene or Node updates.
-/// Global work runs once per application frame, not once per retained Scene.
-/// `new(root)` retains the convenient Node-only application entry point.
+/// Retains a Scene stack and schedules its top for each normal frame.
+///
+/// Covered instances keep their resources, but receive no ordinary Scene or Node
+/// updates. Global work runs once per application frame, not once per retained
+/// Scene. Use [`App::new`] for the Node-only entry point or [`App::with_scene`]
+/// to supply a custom [`Scene`].
 pub struct App {
     scenes: Vec<SceneEntry>,
     state: AppState,
@@ -147,6 +170,9 @@ impl App {
     }
 
     /// Build and retain one Node tree as a Scene.
+    ///
+    /// The root is updated, laid out, and drawn by the same scheduler used by
+    /// [`App::with_scene`]. The macroquad host must already be initialized.
     pub fn new(root_node: impl IntoNode) -> Self {
         let viewport = Self::initialize_host();
         let root = root_node.into_node();
@@ -158,8 +184,9 @@ impl App {
         app
     }
 
-    /// Own a Scene. Its SceneEvent::Enter notification runs once on its first normal frame.
-    /// Scene UI starts receiving new input after its first successful drawing.
+    /// Own a [`Scene`]. Its [`SceneEvent::Enter`] notification runs once on its
+    /// first normal frame. Scene UI starts receiving new input after its first
+    /// successful drawing; raw Scene input is delivered independently.
     pub fn with_scene(scene: impl Scene + 'static) -> Self {
         Self::initialize_host();
         Self::from_scene(scene)
@@ -210,6 +237,7 @@ impl App {
             .map(|transition| transition.sample)
     }
 
+    /// Whether a draw-only [`SceneTransition`] is active or waiting for a frame.
     pub fn is_transitioning(&self) -> bool {
         self.active_transition.is_some()
     }
@@ -248,12 +276,19 @@ impl App {
         self.state == AppState::Faulted
     }
 
-    /// Run one frame, panicking if a Scene callback returns an error.
-    /// Use try_frame when the host handles application errors.
+    /// Run one normal frame, panicking if a callback returns an error.
+    ///
+    /// Use [`App::try_frame`] when the host handles application errors. A normal
+    /// frame is followed by the host's [`macroquad::window::next_frame`] call.
     pub fn frame(&mut self) {
         self.try_frame().expect("Scene frame failed");
     }
 
+    /// Run one normal frame and return callback, layout, or transition errors.
+    ///
+    /// An error faults the App and cancels input eligibility; it is not retried.
+    /// Recover explicitly with [`App::replace_scene`] or [`App::reset_scene`].
+    /// Call this once before the host awaits [`macroquad::window::next_frame`].
     pub fn try_frame(&mut self) -> Result<()> {
         self.try_frame_with_update(|| {})
     }
@@ -265,6 +300,10 @@ impl App {
             .expect("Scene frame failed");
     }
 
+    /// Fallible form of [`App::frame_with_update`].
+    ///
+    /// The host callback runs after displayed-frame input and ready tasks, but
+    /// before Scene update/layout. It runs once per normal App frame.
     pub fn try_frame_with_update(&mut self, update: impl FnOnce()) -> Result<()> {
         let input = self.pointer_manager.prepare_input();
         let time = macroquad::time::get_time();
@@ -758,12 +797,17 @@ impl App {
         self.pointer_manager.cancel_input();
     }
 
-    /// Cancel/drain input and advance tasks without layout, drawing or node time.
-    /// pause runs once. Commands may commit while suspended, but results and
-    /// enter/resume wait for the first normal frame, whose Scene/Node dt is zero.
+    /// Suspend Scene presentation while draining input and ticking host tasks.
+    ///
+    /// This runs no layout, drawing, Node updates, or frame-driven transition
+    /// time. The running top receives [`SceneEvent::Pause`] once. Instantaneous
+    /// queued commands may commit, but result/enter/resume notifications wait for
+    /// the first normal frame, whose Scene/Node delta is zero. Use
+    /// [`App::try_frame_paused`] to handle errors.
     pub fn frame_paused(&mut self) {
         self.try_frame_paused().expect("Scene pause failed");
     }
+    /// Fallible form of [`App::frame_paused`].
     pub fn try_frame_paused(&mut self) -> Result<()> {
         self.pointer_manager.pause_input();
         let frame = SceneFrame {

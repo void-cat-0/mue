@@ -1,3 +1,9 @@
+//! Reactive effects, derived signals, and cleanup callbacks.
+//!
+//! Effects and derived signals belong to the scope active when they are
+//! created. Rerunning a callback uses the ambient scope at the time of the
+//! rerun. Use [`on_cleanup`] to release resources on a rerun or on disposal.
+
 use std::{marker::PhantomData, ops::Deref, rc::Rc, slice};
 
 use slotmap::{Key, new_key_type};

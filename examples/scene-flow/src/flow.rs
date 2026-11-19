@@ -45,7 +45,7 @@ fn next_generation() -> u64 {
 
 /// The bundled MSF1 source consists of a 16-byte little-endian header
 /// (magic, duration:f32, width:u16, height:u16, point_count:u32), raw RGBA8 pixels,
-/// and point_count records (at:f32, x:f32, y:f32, color:[u8;4]). Coordinates are
+/// and point_count records (at:f32, x:f32, y:f32, color:`[u8; 4]`). Coordinates are
 /// normalized; point times are sorted and lie within the positive duration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Point {
@@ -387,7 +387,7 @@ struct Attempt {
     discard_next_dt: bool,
 }
 
-/// Put this in Rc to retain one retry context and one Rc<Prepared> across results.
+/// Put this in `Rc` to retain one retry context and one `Rc<Prepared>` across results.
 /// This model has no GPU resource; the Scene retains its matching GPU upload and
 /// starts the attempt only after that upload succeeds during a normal update.
 pub struct Session {

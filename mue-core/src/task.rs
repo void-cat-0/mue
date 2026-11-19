@@ -1,3 +1,93 @@
+//! A thread-local executor for foreground tasks, timers, and reactive results.
+//!
+//! # Driving the executor
+//!
+//! [`spawn`] schedules a `'static` future on the current thread and accepts
+//! non-`Send` futures. Hosts drive tasks with [`tick`], usually once per frame.
+//! The budget counts ready runnables, and one long poll can exceed the frame's
+//! time budget. Work scheduled during polling waits until a later tick.
+//! [`set_wake_callback`] lets a host request another frame when work is queued.
+//! The callback can run on a different thread, so it should post a request for
+//! the original thread to tick later. Use [`block_on`] or [`block_with_timeout`]
+//! to await results in tests and headless hosts.
+//!
+//! Keep I/O that requires an external runtime on that runtime and await its
+//! result through a cheap handle in the foreground. This executor has no I/O
+//! reactor. Use [`spawn_blocking`] for occasional blocking file I/O or decoding
+//! and the host's blocking pool for frequent work. Return `Send` data to the
+//! foreground before updating signals or creating UI resources such as textures.
+//!
+//! # Ownership and cancellation
+//!
+//! [`Task`] awaits to the future's output, including any business `Result`.
+//! Dropping the handle requests cancellation without interrupting an active
+//! poll or rolling back side effects. A scope only cancels a task if it owns a
+//! value that drops the task handle. Use [`Task::detach`] to let the executor
+//! continue without an observer, or [`Task::detach_and_report`] to report a
+//! business error. Use [`JoinSet`] to await several tasks while retaining
+//! cancellation of the remaining tasks, and [`AsyncResource`] to publish loading
+//! and result state to a view.
+//!
+//! A plain task polls and drops its future without ambient scope, context,
+//! effect tracking, or [`crate::update_context::UpdateContext`]. Captured
+//! reactive handles keep their original owners. Use [`crate::scope::scope_future`]
+//! when an operation needs inherited context or owns its own reactive resources.
+//! Otherwise, resources created under the null scope require explicit disposal.
+//! To publish into a view that may have been disposed while work was pending, use
+//! [`Signal::try_set`] and the corresponding fallible reads on [`ReadSignal`] or
+//! [`crate::prop::Prop`]. A fallible read still requires a live dependency graph
+//! when a derived value is recomputed.
+//!
+//! ```
+//! use mue_core::{OwnedScope, signal::signal, task::{spawn, tick}};
+//!
+//! let view = OwnedScope::new();
+//! let destination = view.run(|| signal(0));
+//! let mut task = spawn(async move { destination.try_set(42) });
+//! drop(view);
+//! tick(1);
+//! assert_eq!(task.try_take(), Some(Err(42)));
+//! ```
+//!
+//! # Timers
+//!
+//! [`sleep`] waits on the executor's clock. [`timeout`] polls the operation
+//! before checking the deadline on each poll. Both futures are `!Send`. Each
+//! tick wakes due timers before taking its ready snapshot. An idle host can
+//! arrange a wake at [`next_timer_deadline`] and tick then. Dropping a polled
+//! [`Sleep`] leaves its registered waker until the deadline.
+//!
+//! ```
+//! use mue_core::task::{Elapsed, next_timer_deadline, set_clock, spawn, tick, timeout};
+//! use std::{future::pending, sync::{Arc, Mutex}, time::{Duration, Instant}};
+//!
+//! let start = Instant::now();
+//! let time = Arc::new(Mutex::new(start));
+//! let clock = Arc::clone(&time);
+//! set_clock(Some(Arc::new(move || *clock.lock().unwrap())));
+//! let delay = Duration::from_millis(10);
+//! let mut task = spawn(async move { timeout(delay, pending::<()>()).await });
+//! tick(1);
+//! assert_eq!(next_timer_deadline(), Some(start + delay));
+//! *time.lock().unwrap() += delay;
+//! tick(1);
+//! assert_eq!(task.try_take(), Some(Err(Elapsed)));
+//! set_clock(None);
+//! ```
+//!
+//! # Shutdown and panics
+//!
+//! [`shutdown`] permanently stops new submissions on this thread. Existing
+//! tasks can still be driven with [`tick`] until the executor is destroyed.
+//! Use [`try_spawn`] and [`try_tick`] in future destructors that may run during
+//! executor teardown, when the executor's thread-local storage is unavailable.
+//! A panic in a thread-local destructor can abort the process.
+//!
+//! A panic during polling propagates. The tick guard and the task's effect and
+//! update context are restored during unwinding, but the ambient scope may
+//! remain stale. Treat expected failures as values. The runtime provides no
+//! panic recovery or state rollback.
+
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, VecDeque},
@@ -235,8 +325,8 @@ thread_local! {
     static IS_BACKGROUND_WORKER: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Whether the current thread is a background worker. Reactive access and
-/// foreground task APIs are rejected there in debug builds.
+/// Whether the current thread is a worker created by [`spawn_blocking`].
+/// Reactive access and foreground task APIs are rejected on these workers.
 pub(crate) fn is_background_worker() -> bool {
     IS_BACKGROUND_WORKER.with(Cell::get)
 }
@@ -272,8 +362,8 @@ impl<F> Drop for TaskFuture<F> {
 /// Install the host callback used to request another frame after a task wake.
 ///
 /// The callback is stored in the current thread's executor, so a foreground
-/// task spawned earlier observes a callback installed later. It may be called
-/// from any thread.
+/// task spawned earlier observes a callback installed later. A wake can invoke
+/// it on any thread. Request a later frame instead of polling synchronously.
 pub fn set_wake_callback(callback: Option<Arc<dyn Fn() + Send + Sync>>) {
     EXECUTOR.with_borrow(|executor| executor.wake.set(callback));
 }
@@ -292,9 +382,10 @@ impl std::error::Error for ExecutorClosed {}
 
 /// Stop accepting new tasks on the current thread's executor.
 ///
-/// Existing tasks continue until they complete or the executor is dropped. After
-/// this call, [`try_spawn`] returns `Err(ExecutorClosed)` and [`spawn`] panics.
-/// The flag is per-thread and cannot be cleared.
+/// After this call, [`try_spawn`] returns [`ExecutorClosed`] and [`spawn`]
+/// panics. Existing tasks remain scheduled and [`tick`] can still drive them.
+/// This per-thread flag cannot be cleared. Executor destruction is what stops
+/// and drops any remaining futures.
 pub fn shutdown() {
     let _ = EXECUTOR.try_with(|cell| cell.borrow_mut().quitting = true);
 }
@@ -427,10 +518,12 @@ impl<F: Future> Future for Timeout<F> {
 /// A caller-owned task yielding T directly. Dropping the handle requests cancellation;
 /// detach lets the executor run it without an observer. The creator scope does not own it.
 ///
-/// The handle is Send when T is Send, even for a foreground non-Send future. Moving
-/// the handle never moves polling or future destruction away from the foreground thread.
-/// Cross-thread cancellation is cleaned up by that thread's next tick or shutdown.
-/// Completed output is owned by the handle and may be consumed/dropped on its thread.
+/// The handle is `Send` when `T` is `Send`, even for a non-`Send` foreground
+/// future. The future is always polled and dropped on its original thread.
+/// Dropping the handle on another thread requests cancellation. The original
+/// executor cleans up the future when it processes the cancellation during a
+/// tick or is destroyed. Completed output can be consumed or dropped on the
+/// thread observing the result.
 /// Polling after completion panics; use [`Task::fallible`] to observe a task stopped
 /// by the executor as `None` instead of a panic. Dropping the handle is cancellation,
 /// but it consumes the handle, so it cannot be awaited afterwards.
@@ -474,6 +567,10 @@ impl<T> Task<T> {
         }
     }
 
+    /// Give up the output and let the executor manage the remaining work.
+    ///
+    /// Dropping a scope does not stop detached tasks. A completed output, if
+    /// still present, is discarded.
     pub fn detach(mut self) {
         match &mut self.state {
             TaskState::Ready(value) => {
@@ -567,9 +664,12 @@ impl<T> Task<T> {
 }
 
 impl<T: 'static, E: 'static> Task<Result<T, E>> {
-    /// Detach while explicitly handling a business error once, on the foreground thread.
-    /// Cancellation is silent: it yields `None` and does not invoke the reporter.
-    /// If the executor is already shutting down, the reporter is not spawned.
+    /// Detach and report a business error on the foreground thread.
+    ///
+    /// The callback receives the error and this call's location. It runs in a
+    /// plain [`spawn`] task and needs explicit ownership for any reactive
+    /// resources it creates. An executor stop is silent, and an executor that
+    /// has already shut down rejects the reporter.
     #[track_caller]
     pub fn detach_and_report(self, report: impl FnOnce(E, &'static Location<'static>) + 'static) {
         let location = Location::caller();
@@ -644,6 +744,7 @@ enum FallibleTaskState<T> {
 /// `Some(value)` means the task completed; `None` means the executor closed the task
 /// without completing it, for example when its thread exits. Dropping the handle still
 /// requests cancellation, but it consumes the handle, so it cannot be awaited afterwards.
+/// Polling after the result was consumed returns `Ready(None)`.
 #[must_use = "dropping a fallible task cancels it; use detach() to run without observing its output"]
 pub struct FallibleTask<T> {
     state: FallibleTaskState<T>,
@@ -770,15 +871,18 @@ impl<T> fmt::Debug for FallibleTask<T> {
     }
 }
 
-/// Spawn a non-Send foreground future without implicitly inheriting reactive scope.
-/// Its handle owns the task and awaits to its output. Each poll and future destructor
-/// runs without an ambient scope, effect tracker, or `UpdateContext`, restoring them
-/// on normal return. Captured signals keep their existing owner. For new task-owned reactive resources
-/// or inherited context, use [`crate::scope::scope_future`]; otherwise dispose new
-/// resources explicitly or provide an owner.
+/// Schedule a foreground future on the current thread's executor.
 ///
-/// Panics if the current thread's executor is shutting down; use [`try_spawn`] to
-/// observe that as `Err(ExecutorClosed)` instead.
+/// Both the future and its output must be `'static`. The future may capture
+/// non-`Send` values. Each poll and future destructor runs without an ambient
+/// scope, effect tracker, or [`crate::update_context::UpdateContext`]. To give
+/// the operation an explicit scope, wrap it with [`crate::scope::scope_future`].
+///
+/// # Panics
+///
+/// Panics after [`shutdown`] or during executor destruction. Use [`try_spawn`]
+/// to observe closure as [`ExecutorClosed`]. This API also panics on a
+/// [`spawn_blocking`] worker.
 #[track_caller]
 pub fn spawn<F: Future + 'static>(future: F) -> Task<F::Output>
 where
@@ -865,17 +969,24 @@ impl Drop for TickGuard<'_> {
     }
 }
 
-/// Poll at most limit tasks ready at the start of this tick. Wakes during polling
-/// are deferred to the next tick. One poll cannot be preempted by this budget.
+/// Wake due timers and drive up to `limit` ready runnables without waiting.
 ///
-/// Panics if the current thread's executor is shutting down; use [`try_tick`] to
-/// observe that as `Err(ExecutorClosed)` instead.
+/// The ready queue is sampled after due timers are woken. Work scheduled
+/// during a poll waits until the next tick. Nested ticks do no work. The return
+/// value is the number of runnables driven.
+///
+/// # Panics
+///
+/// Panics when the current thread's executor has already been destroyed or
+/// when called from a [`spawn_blocking`] worker. Use [`try_tick`] to handle
+/// executor destruction.
 pub fn tick(limit: usize) -> usize {
     try_tick(limit).unwrap_or_else(|_| panic!("cannot tick tasks after executor shutdown"))
 }
 
-/// Like [`tick`], but returns `Err(ExecutorClosed)` instead of panicking when the
-/// current thread's executor is shutting down or already destroyed.
+/// Like [`tick`], but returns [`ExecutorClosed`] when the current thread's
+/// executor has already been destroyed. Existing tasks can still be driven
+/// after an explicit [`shutdown`].
 pub fn try_tick(limit: usize) -> Result<usize, ExecutorClosed> {
     assert!(
         !is_background_worker(),
@@ -938,8 +1049,9 @@ pub fn try_tick(limit: usize) -> Result<usize, ExecutorClosed> {
 ///
 /// This is intended for tests and headless hosts. Do not call it on the UI thread
 /// while the frame loop is running: it parks the thread and can deadlock the host.
-/// It is not reentrant with `tick`. With a fake clock installed, advance it from
-/// another thread; `block_on` cannot advance it.
+/// Call outside of [`tick`]. While waiting, it temporarily replaces the host
+/// wake callback with one that unparks the calling thread. If a test uses an
+/// installed clock, the test must arrange for that clock to advance.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     assert!(
         !is_background_worker(),
@@ -1058,10 +1170,22 @@ pub fn next_timer_deadline() -> Option<Instant> {
 
 /// A set of foreground tasks joined together.
 ///
-/// The set owns every spawned `Task`; dropping the set cancels the remaining
-/// tasks. `join_next` yields outputs as tasks complete; `join_all` drains the
-/// set and returns outputs in completion order. Foreground-only: it uses
-/// [`spawn`], so it must be driven by `tick` on the thread that created it.
+/// The set owns its [`Task`] handles. Dropping the set cancels any remaining
+/// tasks. Drive the tasks with [`tick`] on the spawning thread.
+/// [`JoinSet::join_next`] returns a ready output and [`JoinSet::join_all`]
+/// collects outputs in the order they are observed. If several results are
+/// already ready when joined, their order is unspecified.
+///
+/// ```
+/// use mue_core::task::{JoinSet, block_on};
+///
+/// let mut set = JoinSet::new();
+/// set.spawn(async { 2 });
+/// set.spawn(async { 3 });
+/// let mut outputs = block_on(set.join_all());
+/// outputs.sort_unstable();
+/// assert_eq!(outputs, [2, 3]);
+/// ```
 #[derive(Debug, Default)]
 pub struct JoinSet<T> {
     tasks: Vec<Task<T>>,
@@ -1084,12 +1208,12 @@ impl<T: 'static> JoinSet<T> {
         self.tasks.push(spawn(future));
     }
 
-    /// Number of tasks that have not completed yet.
+    /// Number of tasks in the set whose outputs have not been joined.
     pub fn len(&self) -> usize {
         self.tasks.len()
     }
 
-    /// Whether the set has no pending tasks.
+    /// Whether the set contains no task handles.
     pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
@@ -1101,7 +1225,7 @@ impl<T: 'static> JoinSet<T> {
         JoinNext { set: self }
     }
 
-    /// Wait for every task and return outputs in completion order.
+    /// Drain the set, returning outputs in the order they are observed.
     ///
     /// Dropping the returned future cancels the remaining tasks.
     pub async fn join_all(mut self) -> Vec<T> {
@@ -1147,8 +1271,7 @@ impl<T> Future for JoinNext<'_, T> {
     }
 }
 
-/// A renderable result state for one asynchronous operation. Dropping the
-/// resource cancels its task and disposes its state signal.
+/// The loading state or most recent result of an [`AsyncResource`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum AsyncState<T, E> {
     Loading,
@@ -1196,6 +1319,37 @@ impl<T, E> AsyncState<T, E> {
     }
 }
 
+/// A foreground publisher and its independently owned reactive result.
+///
+/// The state starts at [`AsyncState::Loading`] and becomes
+/// [`AsyncState::Ready`] when the operation finishes. Errors are retained as
+/// typed values for the application to display or report. The state stays
+/// alive after completion and after the construction scope is dropped.
+/// Dropping this resource cancels its publisher and disposes the state. A
+/// blocking closure that has started will still run to completion.
+///
+/// Create derived UI bindings in their consuming scope. Retain that scope
+/// and the resource while the UI reads the bindings.
+///
+/// ```
+/// use mue_core::{OwnedScope, signal::Access, task::{AsyncResource, AsyncState, tick}};
+///
+/// let mut resource = AsyncResource::<_, &str>::new(async { Ok(42) });
+/// let view = OwnedScope::new();
+/// let caption = view.run(|| resource.state().map(|state| match state {
+///     AsyncState::Loading => String::from("Loading…"),
+///     AsyncState::Ready(Ok(value)) => value.to_string(),
+///     AsyncState::Ready(Err(error)) => format!("Could not load: {error}"),
+/// }));
+/// assert_eq!(caption.get_clone(), "Loading…");
+/// tick(1);
+/// assert_eq!(caption.get_clone(), "42");
+///
+/// resource.reload_with(async { Err("offline") });
+/// assert_eq!(caption.get_clone(), "Loading…");
+/// tick(1);
+/// assert_eq!(caption.get_clone(), "Could not load: offline");
+/// ```
 pub struct AsyncResource<T: 'static, E: 'static> {
     state: Signal<AsyncState<T, E>>,
     state_owner: Option<OwnedScope>,
@@ -1205,9 +1359,11 @@ pub struct AsyncResource<T: 'static, E: 'static> {
 
 impl<T: 'static, E: 'static> AsyncResource<T, E> {
     /// Run the operation on the foreground executor. The future is polled on the
-    /// UI thread; if it only awaits a foreign handle (for example a host I/O task),
-    /// the actual work happens on the host's runtime. Use [Self::new_blocking] for
-    /// blocking closures, and the host's runtime for I/O.
+    /// UI thread, under the same isolation as [`spawn`]. Use
+    /// [`crate::scope::scope_future`] for operation-local reactive state,
+    /// [`Self::new_blocking`] for blocking closures, or await a handle from
+    /// the host's runtime for I/O. The operation scope and the result state
+    /// have separate lifetimes.
     pub fn new<F>(future: F) -> Self
     where
         F: Future<Output = Result<T, E>> + 'static,
@@ -1260,6 +1416,7 @@ impl<T: 'static, E: 'static> AsyncResource<T, E> {
         })
     }
 
+    /// Read-only state. Copying the handle does not keep the resource alive.
     pub fn state(&self) -> ReadSignal<AsyncState<T, E>> {
         *self.state
     }
@@ -1267,8 +1424,9 @@ impl<T: 'static, E: 'static> AsyncResource<T, E> {
 
 impl<T: 'static + Send, E: 'static + Send> AsyncResource<T, E> {
     /// Run a blocking closure on a fresh OS thread and publish its result on the
-    /// UI thread. Use for low-frequency file I/O or decoding; for frequent
-    /// blocking work, use the host's blocking pool.
+    /// UI thread. The closure, success value, and error must be `Send`. This
+    /// is suited to occasional file I/O or decoding. For frequent blocking
+    /// work, use the host's blocking pool.
     ///
     /// ```
     /// use mue_core::prelude::*;

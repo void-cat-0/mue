@@ -1,3 +1,16 @@
+//! Reactive scope ownership and typed context.
+//!
+//! A [`Scope`] is a copyable, non-owning handle. Attached scopes are disposed
+//! with their parent; [`OwnedScope`] owns a detached scope and disposes it on
+//! drop. Context lookup follows a separate parent chain, so
+//! [`OwnedScope::new_inherited`] inherits lookup without transferring lifetime
+//! ownership.
+//!
+//! Use [`scope_future`] to install an owned scope while polling and destroying
+//! an asynchronous operation. Its owner is released when the future completes
+//! or is dropped; return ordinary owned data rather than handles to resources
+//! created in that temporary scope.
+
 use std::{
     any::{Any, TypeId},
     cell::RefCell,
@@ -100,9 +113,10 @@ pub struct Scope {
 
 /// Owns a detached scope and disposes its resources when dropped.
 ///
-/// Moving this guard transfers ownership without attaching the scope to the
-/// ambient scope. Context is explicit with `new`, or inherited with `new_inherited`.
-/// Copying its [`Scope`] handle does not keep resources alive.
+/// Moving this guard transfers ownership. Use [`OwnedScope::new`] for an
+/// independent context or [`OwnedScope::new_inherited`] to look up values
+/// from the current scope. Copying its [`Scope`] handle does not keep
+/// resources alive.
 ///
 /// ```compile_fail,E0277
 /// fn assert_send<T: Send>() {}
@@ -172,25 +186,36 @@ pub struct ScopedFuture<F> {
 
 /// Give a future an explicit reactive scope, inheriting context at this call site.
 ///
-/// The lookup parent is non-owning: disposing it removes inherited context without
-/// cancelling this future. Resources created while polling belong to the wrapper;
-/// captured resources created earlier keep their original owner. The inner future
-/// is destroyed in its scope before the scope is disposed, including on completion.
-/// Returned reactive handles do not keep that scope alive.
+/// The lookup parent is non-owning. Disposing it removes access to its context
+/// without cancelling the future. Resources created while the wrapper's scope
+/// is installed belong to it. Captured resources keep their original owners.
+/// The inner future is dropped in its scope before the scope is disposed.
+/// Return owned data because handles to that scope's resources are already
+/// invalid by the time the wrapper yields its result.
 ///
-/// The wrapper is confined to its runtime thread and can also be awaited without
-/// spawning. It installs scope only; task/effect isolation is provided by
-/// [`crate::task::spawn`].
+/// On its runtime thread, the wrapper can be awaited directly and may borrow
+/// local data. Spawning with [`crate::task::spawn`] also isolates the operation
+/// from ambient effect tracking and requires a `'static` future. Keep the
+/// wrapper within the lifetime of its runtime so it can dispose its scope.
 ///
 /// ```
-/// use mue_core::{prelude::*, task::tick};
-/// let task = spawn(scope_future(async {
-///     let value = signal(21);
-///     let doubled = computed(move |_| value.get() * 2);
-///     doubled.get() // Return owned data, not the task-local signal.
-/// }));
-/// tick(1);
-/// assert!(task.is_finished());
+/// use mue_core::{
+///     OwnedScope, scope_future,
+///     scope::{inject, provide},
+///     signal::{Access, signal},
+///     task::{block_on, spawn},
+/// };
+///
+/// let view = OwnedScope::new();
+/// let operation = view.run(|| {
+///     provide(String::from("Loaded"));
+///     scope_future(async {
+///         let label = inject::<String>().expect("the view is still alive");
+///         let local = signal(label);
+///         local.get_clone()
+///     })
+/// });
+/// assert_eq!(block_on(spawn(operation)), "Loaded");
 /// ```
 #[track_caller]
 pub fn scope_future<F: Future>(future: F) -> ScopedFuture<F> {
@@ -373,7 +398,11 @@ impl Scope {
         });
     }
 
-    /// Run with this current scope, restoring the previous scope afterwards.
+    /// Run a synchronous callback with this scope installed.
+    ///
+    /// The previous scope is restored on normal return. Constructing a future
+    /// in the callback only scopes its construction. Use [`scope_future`] to
+    /// install a scope when the future is polled.
     pub fn run<R>(self, f: impl FnOnce() -> R) -> R {
         assert!(self.is_null() || self.is_alive(), "Scope has been disposed");
         self.assert_not_disposing();
@@ -472,6 +501,8 @@ impl Scope {
     }
 }
 
+/// Store a typed context value in the current scope, replacing any prior value
+/// for that type in the same scope.
 pub fn provide<T: 'static>(value: T) {
     current_scope().provide(value);
 }
@@ -480,6 +511,8 @@ pub fn provide_with<T: 'static>(f: impl FnOnce(Option<&T>) -> T) {
     current_scope().provide_with(f);
 }
 
+/// Clone the nearest visible context value of this type, starting at the
+/// current scope and following its context parents.
 pub fn inject<T: Clone + 'static>() -> Option<T> {
     current_scope().inject()
 }

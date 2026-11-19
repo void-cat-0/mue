@@ -1,3 +1,8 @@
+//! Locale selection, namespace translators, snapshots, and reactive bindings.
+//!
+//! Bindings are created immediately in the consumer's live scope and track both
+//! locale and parameter reads.
+
 use std::rc::Rc;
 
 use fluent::FluentArgs;
@@ -16,14 +21,15 @@ use crate::{
 
 /// Owned text, the language which supplied its pattern, and collected diagnostics.
 ///
-/// A fallback-language pattern is a normal successful lookup. `None` means no
-/// pattern was formatted (invalid key/arguments or a missing message). Empty
-/// text is not a missing pattern. An empty `issues` list is not a proof that
-/// every Fluent function or expression was semantically valid.
+/// A fallback-language pattern is a successful lookup. Even an empty string
+/// can come from a pattern. Fluent can leave some invalid expressions undiagnosed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Translation {
+    /// The formatted text, or the original key if no pattern was formatted.
     pub text: Rc<str>,
+    /// The pattern's language. `None` indicates that no pattern was formatted.
     pub resolved_locale: Option<LanguageIdentifier>,
+    /// Lookup and formatting diagnostics for this key.
     pub issues: Rc<[TranslationIssue]>,
 }
 
@@ -37,11 +43,10 @@ struct State {
 
 /// Application-owned language control.
 ///
-/// This write capability is deliberately not Clone. A read-only Translator
-/// shares ownership of the entire service, including its reactive scope.
-/// Dropping I18n therefore does not invalidate remaining Translators. The
-/// service is released after its last owner; bindings themselves still belong
-/// to the consumer scopes in which they were created.
+/// Keep this handle wherever the application changes languages. Each
+/// [`Translator`] shares ownership of the service and its private reactive
+/// scope. The last owner releases the service. Bindings belong to the
+/// consumer scopes in which they were created.
 pub struct I18n {
     state: Rc<State>,
 }
@@ -106,10 +111,9 @@ impl I18n {
 
 /// An owning, cloneable, read-only translator for one namespace.
 ///
-/// It tracks the service current language, not a frozen bundle. It may be
-/// explicitly provided through ordinary mue scope context; no global or TLS
-/// translator is installed. Strong ownership keeps service resources alive,
-/// not arbitrary parameter signals or the consumer scope.
+/// Uses the service's current language and can be shared through ordinary
+/// mue scope context. Its ownership covers the catalog and language selector.
+/// Keep consumer scopes and parameter sources alive separately.
 #[derive(Clone)]
 pub struct Translator {
     state: Rc<State>,
@@ -129,7 +133,9 @@ impl Translator {
         self.translation_in(&locale, key, args)
     }
 
-    /// Immediately bind a parameter-free text to the current language.
+    /// Bind a message without parameters to the current language.
+    ///
+    /// See [`Self::text_with`] for the consumer scope requirement.
     #[track_caller]
     pub fn text(&self, key: impl Into<Rc<str>>) -> Prop<Rc<str>> {
         self.text_with(key, FluentArgs::new)
@@ -137,10 +143,15 @@ impl Translator {
 
     /// Immediately bind text to the language and tracked parameter reads.
     ///
-    /// Call inside a live non-null consumer scope. Each provider evaluation
-    /// builds owned arguments once, even when fallback is needed. It may read
-    /// Signal/Prop values but must not mutate state or create reactive resources.
-    /// The captured parameter sources must outlive this binding.
+    /// The provider builds owned arguments once per evaluation, including for
+    /// fallback. It may read tracked signals and properties. Keep those
+    /// sources alive for the lifetime of the binding. Locale and parameter
+    /// reads stay tracked even on lookup or argument errors. Dependents are
+    /// notified when the resulting text changes.
+    ///
+    /// # Panics
+    ///
+    /// Panics outside a live, non-null consumer scope.
     #[track_caller]
     pub fn text_with(
         &self,
@@ -161,8 +172,34 @@ impl Translator {
 
     /// Bind the complete result when the UI or application needs diagnostics.
     ///
-    /// This has the same scope/provider contract as text_with. Project its text
-    /// with `result.map(|result| result.text)` in the same consumer scope.
+    /// Uses the same scope and provider contract as [`Self::text_with`].
+    /// Project the text with `result.map(|result| result.text)` in the same
+    /// consumer scope.
+    ///
+    /// ```
+    /// use mue_core::{OwnedScope, signal::{Access, signal}};
+    /// use mue_i18n::{CatalogBuilder, I18n, TranslationIssue, fluent_args, langid};
+    ///
+    /// let mut catalog = CatalogBuilder::new();
+    /// catalog.add_ftl(langid!("en-US"), "app", "total = { NUMBER($count) }\n")?;
+    /// let i18n = I18n::new(catalog.build()?, langid!("en-US"))?;
+    /// let app = i18n.translator("app")?;
+    /// let owner = OwnedScope::new();
+    /// let (count, result, text) = owner.run(|| {
+    ///     let count = signal(f64::NAN);
+    ///     let result = app.bind("total", move || fluent_args!["count" => count.get()]);
+    ///     let text = result.map(|result| result.text);
+    ///     (count, result, text)
+    /// });
+    /// assert_eq!(text.get_clone().as_ref(), "total");
+    /// assert!(matches!(result.get_clone().issues.as_ref(),
+    ///     [TranslationIssue::InvalidArgument { .. }]));
+    ///
+    /// count.set(7.0);
+    /// assert_eq!(text.get_clone().as_ref(), "7");
+    /// assert!(result.get_clone().issues.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[track_caller]
     pub fn bind(
         &self,

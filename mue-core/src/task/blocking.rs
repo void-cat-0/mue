@@ -83,10 +83,20 @@ impl<T> Future for BlockingTask<T> {
 
 /// Run a blocking closure on a fresh OS thread and return a handle for its output.
 ///
-/// Use this for low-frequency file I/O, image decoding, and other work that
-/// would occupy an async worker. Dropping the handle does not cancel or join
-/// the thread; the closure runs to completion. The thread is named
-/// `mue-blocking-N`. For frequent blocking work, use the host's blocking pool.
+/// Use this for infrequent blocking work such as file I/O or decoding. Each
+/// call starts a new thread. Use the host's blocking pool if you need to bound
+/// concurrency. The closure must avoid reactive APIs and UI-thread resources.
+/// Dropping the handle discards the result while the closure keeps running.
+///
+/// ```
+/// use mue_core::task::{block_on, spawn, spawn_blocking};
+///
+/// let worker = spawn_blocking(|| 21 * 2);
+/// let publisher = spawn(async move { worker.await });
+/// assert_eq!(block_on(publisher), 42);
+/// ```
+///
+/// # Panics
 ///
 /// Panics if the OS thread cannot be spawned.
 pub fn spawn_blocking<F, T>(f: F) -> BlockingTask<T>

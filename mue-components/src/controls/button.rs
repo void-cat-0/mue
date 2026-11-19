@@ -63,10 +63,20 @@ fn foreground_color(disabled: bool) -> Color {
     }
 }
 
-/// A button with a text label.
+/// A text button with secondary visual weight by default.
 ///
-/// Defaults to the secondary variant. Use primary or variant to change the
-/// visual weight, and on_activate to handle taps.
+/// Use [`ButtonBuilder::primary`] or [`ButtonBuilder::variant`] to select its
+/// visual weight. A disabled or loading button ignores activation. Its label,
+/// disabled state, and loading state accept reactive properties. Builder hooks
+/// and style settings remain part of the same node when consumed.
+///
+/// ```
+/// use mue_components::prelude::*;
+///
+/// let _save = button("Save")
+///     .primary(true)
+///     .on_activate(|| {});
+/// ```
 pub struct ButtonBuilder {
     label: Prop<Rc<str>>,
     variant: ButtonVariant,

@@ -2,7 +2,7 @@
 
 Applications define their own colors, spacing, typography, and component variants as ordinary Rust data. Pass the values explicitly to component parameters and style setters. Share them across a subtree with `provide` / `inject` from `mue_core::scope` when passing every value through intermediate components would be cumbersome. The structure and naming of these tokens belong to the application.
 
-This page keeps the former theme guide's URL. Obsolete selector-theme records have been removed from the document tree; historical versions remain in Git. See the [project status and design record](project-status.md) for the current implementation and decisions.
+Applications can define ordinary token structs and pass them explicitly or through scope context. The optional `mue-components` token store is separate from this pattern; it adds typed lookup and live updates without imposing a global theme engine.
 
 ## Bind values explicitly
 

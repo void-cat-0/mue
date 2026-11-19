@@ -63,11 +63,13 @@ Put shared `provide` / context setup in the node author body before `ctx.finish(
 
 `Style` stores ordinary fields and exposes its hook fields publicly. Register callbacks with `style.on_render.append(callback)`, `style.on_wheel_event.append(callback)`, and the corresponding public fields. Fluent builder methods such as `.on_render(...)` remain available. The synchronous author body and init closure may use local borrowed data; hooks, effects, event callbacks, and retained child plans keep their own existing `'static` requirements.
 
-Local `provide`, signals, effects, and `map` / `computed` projections created in a node body share its node scope, just as component-local resources do. External inputs still require their original owner to remain alive. Handwritten `BuildNode` implementations use the same `NodeContext::finish(defaults, body)` protocol and receive `IntoNode` from a blanket impl, so only `build` is written by hand. See the [project design record](project-status.md) for the implementation and validation status.
+Local `provide`, signals, effects, and `map` / `computed` projections created in a node body share its node scope, just as component-local resources do. External inputs still require their original owner to remain alive. Handwritten `BuildNode` implementations use the same `NodeContext::finish(defaults, body)` protocol and receive `IntoNode` from a blanket impl, so only `build` is written by hand. The crate-level Rustdoc covers the generated builder and node contracts; run `cargo doc -p mue-components --no-deps --open` to read it.
 
 ## Frame phases
 
 `App::frame` preplans Node input against the displayed frame before lifecycle/input callbacks, dispatches Node pointer/hover/wheel, and notifies the current Scene through `event(SceneEvent::Input(&batch), ctx)` with the complete original raw batch. Node UI handling does not consume or filter that batch. Transitions, timeouts/tasks, the `frame_with_update` callback and `Scene::update` follow. App prepares all submitted roots, invokes each snapshotted node's `Style::on_update(&dt)` once, stabilizes geometry again, and lets the Scene organize drawing. Suspended frames do not run node updates or layout; see [Scene input and lifecycle](scenes.md#input).
+
+A measurement installed with `Layout::set_measure_fn` and its reactive subscriptions belong to the measuring node, even when installed from another scope. Replacing it or disposing the node releases the old callback and subscriptions. It runs in the Taffy solver: read sizing inputs (or `Layout::rect.get_untracked()` for previously published geometry), but do not mutate reactive/layout state or call `with_taffy` from it.
 
 Use `style.on_layout.append(...)` for geometry correction after the node's rect is published and before its children are visited. It may run repeatedly while layout stabilizes; do not advance time there. Use `style.on_update.append(...)` for frame state such as momentum or elapsed time, and keep `on_render` / `on_after_children` limited to drawing and render caches. App snapshots the active node list for updates: deleted nodes are skipped, and nodes mounted during an update start updating next frame.
 
@@ -155,16 +157,113 @@ overlay_host(
 .on_dismiss(move || open.set(false));
 ```
 
+`use_background` caches CPU `Shapes` through `Paint::build`, rebuilding when its
+tracked rect, brush, radius or paint state changes. Cached geometry still uses
+immediate submission and batching; no per-background GPU buffers are created.
+Permanently transparent solid backgrounds do not create a cache, but may still
+draw shadows. The reactive cache is eager: changing dependencies can rebuild
+hidden retained nodes too. Paint-building callbacks and their property producers
+should be pure geometry/value computations, not recursively draw or build nodes
+while the shared tessellator is borrowed.
+
 `Style::shadow(Shadow::new(elevation, radius))` draws a drop shadow behind the
 background; use the same radius as `border-radius`. The shadow follows the
 node transform (rotation and scale). Shadows are drawn by `use_background`, so
-custom nodes must call `use_container` or `use_background`.
+custom nodes must call `use_container` or `use_background`. Shadow geometry is a
+stack-built quad with fixed indices, submitted on the immediate path without
+temporary `Shapes` or geometry `Vec`s. Material uniform snapshots and batch-buffer
+growth may still allocate. Shadow-mask admission defaults to `ShadowCache::Auto`:
+
+```rust
+flexbox().shadow(Shadow::new(18., 16.)) // Auto when unset
+
+flexbox()
+    .shadow(Shadow::new(18., 16.))
+    .shadow_cache(false) // always analytic (Disabled)
+
+flexbox()
+    .shadow(Shadow::new(18., 16.))
+    .shadow_cache_policy(ShadowCache::Enabled) // bypass the Auto admission heuristic
+```
+
+The existing `.shadow_cache(true/false)` API still accepts bool, `Prop<bool>` and
+bool signals; true means Enabled, false means Disabled. Use `.shadow_cache_policy`
+with `ShadowCache::{Auto, Enabled, Disabled}` or a reactive policy signal. These
+setters write the same property; the last setter wins. Declared/take accessors now
+return `Prop<ShadowCache>` rather than bool. The fluent API does not add a CSS
+`shadow-cache` or `box-shadow` declaration to `style!`.
+
+Exact resident masks reuse immediately, including a new node or a return to an
+old geometry key. Only new bakes wait for width, height, effective radius, blur
+and sampling resolution to remain unchanged for 100 ms. Color, opacity, translation
+and rotation at the same density reuse the mask; size/scale/DPI/camera/viewport
+changes may require a new key.
+
+Auto estimates conservative visible halo coverage in physical target pixels: an
+affine projected quad clipped by target, viewport and raw scissor, minus the full
+body rectangle. A new key needs at least 8192 halo pixels in one observation or
+at least four recently drawn distinct same-key nodes whose halo sum reaches 8192.
+It also needs eight observations and accumulated halo work at least the bake
+texture pixel count within a 500 ms fixed window. The bookkeeping is bounded to
+16 pending keys and four contributors/key, using the strongest recent coverage;
+repeated calls on one node are not four contributors. These are conservative
+heuristics, not a GPU-profit guarantee or a frame snapshot. Enabled bypasses these
+economic checks, but not stability/backend/quality/storage limits. Small shadows
+and overloaded pending sets may stay analytic indefinitely.
+
+Zero physical coverage or a clip strictly within the knockout core does not
+count demand, sample or bake. Uncertain rounded edges/corners still draw. Auto
+does not infer occlusion by other widgets/materials, and native projected or
+non-normalized homographies fall back rather than applying unsafe culling.
+The sharp interior cutout is still evaluated per fragment, preventing filtered
+mask texels from leaking into a transparent panel; this is not a full pixel
+snapshot or a retained mesh. RGBA8 quantization/filtering can cause small visual
+differences from the analytic shader.
+
+The render-thread pool has at most 8 reusable slots and a 16 MiB logical storage
+budget, with a 4 MiB/2048-pixel limit per mask. It uses native OpenGL only; blur
+below 1 logical pixel, projective transforms, excessive scale/size, unsupported
+backends, resource failure or cache pressure fall back to the analytic path.
+Continuously changing parameters do not bake every frame; a slow step animation
+that rests longer than the stable window can still bake. Missing/evicted nodes wait again,
+recently sampled masks are protected from eviction for 100 ms, and GPU bake
+attempts (including failures) are throttled to one per 16 ms after completion.
+A full actively used pool leaves extra shadows analytic instead of rotating all
+masks through repeated bakes. These are heuristics, not GPU-time budgets. No WebGL or Metal support is added by this option.
+
+First bake, slot reuse and `shadow::clear_shadow_mask_cache()` flush queued work
+before an offscreen pass or texture resize. They leave macroquad's camera, model,
+material, viewport and scissor state intact, but cannot resume an arbitrary host
+raw miniquad pass. Keep mue drawing outside host raw passes. Read
+`shadow::shadow_mask_cache_stats()` for hits, bakes, fallbacks, Auto rejections,
+culled draws, bounded pending keys and logical bytes;
+clear on the live render thread to discard demand history, invalidate masks and
+shrink valid slots to 1x1 (the 16 ms attempt throttle remains). Failed storage or
+passes can reuse their existing slot after the wait; failed texture/FBO object
+creation is never repaired by a resize or drawn through. Known shader initialization
+failures fall back without repeating GPU work. The bounded pool and its baker live
+until context teardown, not node drop.
+In-flight driver storage may temporarily exceed the logical budget. Built-in rounded/sector
+clip stacks are applied to both analytic and cached shadow sampling; arbitrary external
+materials remain outside that stack.
 
 `Style::clip_radius(Size::Px(12.))` clips the node's children to a rounded
 rectangle. It does not clip the node's own background; use `border-radius` for
 that. Rotation and scale are exact via the inverse model, and hit-testing
-follows the clip. Retained text/shape use the retained clip material; they only
-fall back to immediate drawing if that material is unavailable.
+follows the clip. Retained text/shape use the matching retained clip material
+while that clip pipeline is selected. If the matching shader is unavailable, or
+an inner custom material replaces the clip, nodes fall back to immediate drawing.
+
+`UiMaterial::with` / `with_material` use immediate geometry for text and shape
+nodes; ordinary macroquad materials do not share the retained vertex layout.
+Leaving the scope restores the previous pipeline and retained partner, not the
+outer ordinary material's uniforms. Direct raw pipeline switches are checked by
+pipeline identity; raw changes to the same material's uniforms or textures are
+not mirrored into its retained partner. Temporary material fallback preserves
+previously uploaded text/shape meshes. Large text uses retained quads only with a
+solid foreground brush; gradients keep immediate per-vertex sampling. Text cache
+keys track atlas evictions and the block's own glyph residency, not unrelated
+glyph insertions. Fractional layout origins participate in baseline snapping.
 
 `Style::clip_sector(Sector::new(center, start, end))` clips children to an
 angular sector. `center` is relative to the node's layout origin, angles are

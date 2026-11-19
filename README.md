@@ -1,509 +1,55 @@
 # mue
 
-基于 [macroquad](https://macroquad.rs) 的响应式声明式 UI / 组件库，用 Rust 编写。
-布局交给 [taffy](https://github.com/DioxusLabs/taffy)，文本由 [cosmic-text](https://github.com/pop-os/cosmic-text) 排版。
+mue is a retained, reactive UI toolkit for [Macroquad](https://macroquad.rs), written in Rust. It combines typed Rust builders with Taffy layout and cosmic-text shaping.
 
-> 通过普通应用 tokens、响应式属性和作用域上下文显式配置外观，见[应用 tokens 与上下文](docs/themes.md)。已确认方向与当前 NodeContext 构建契约见[项目现状与设计记录](docs/project-status.md)；旧主题档案已删除，历史从 Git 查阅。
+## Crates
 
-## 特性
-
-- **细粒度响应式**：`signal` / `computed` / `watch_effect`，配合 `scope` 自动追踪与释放依赖。
-- **声明式节点树**：`flexbox` / `text` / `image` / `circle`，所有样式属性都可以接收响应式 `Prop`。
-- **声明宏**：`#[component]` / `#[node]` 生成可配置的 builder，消耗为节点时同步执行一次，参数自动支持字面量或 signal。
-- **事件与手势**：点击、hover、滚轮、长按、拖动、滑动、双指缩放与旋转，以及基于 taffy 布局的命中测试。
-- **自定义字体**：按字面（family / weight）注册 `ttf` / `otf`，字重本身也能是响应式的。
-- **显式外观配置**：应用自定义 tokens，通过 `Prop` / `map` 绑定样式，并用普通 `provide` / `inject` 共享上下文。
-- **文档节点**：`document` / `markdown` 使用 cosmic-text 排版多段文本，支持富文本 span、标题、粗体、斜体、代码与列表。
-- **样式过渡**：节点 `.transition(...)`、线性/缓动/弹簧曲线，`App::frame` 自动推进，可在途中改变目标。
-- **Scene 调度**：Scene 拥有 Node 和 gameplay 资源、组织交错绘制；App 保留场景栈，只调度栈顶的输入、多根布局与每帧更新。支持 push/pop、结果回传、覆盖/宿主暂停恢复、栈顶替换和全栈退出，见 [Scenes](docs/scenes.md)。
-- **Scene 过渡**：切换请求可链式配置内置 crossfade、自定义画面合成或无需截图的 overlay；统一驱动切换前后时间轴、终点呈现与打断清理，见 [Scene transitions](docs/scene-transitions.md)。
-- **独立输入契约**：Node 按已显示内容整批预命中并维持 UI capture；当前 Scene 收到完整原始输入，包括 UI 命中及跨 Scene 持续 Move/Up，不做 UI/gameplay 按压归属过滤。
-- **Fluent i18n**：可选 `mue-i18n` 提供命名空间资源、English fallback、强只读 Translator，以及随语言和参数更新的文本绑定与 `tl!`；不重建 Node/Scene，不安装框架全局服务。见 [i18n](docs/i18n.md)。
-
-## 工作区结构
-
-| crate | 说明 |
+| Crate | Purpose |
 | --- | --- |
-| `mue-core` | 与渲染无关的响应式内核：signal、effect、scope、prop。可通过 feature 接入 taffy / cosmic-text。 |
-| `mue-macros` | `#[component]` / `#[node]` 属性过程宏与 style 风格的 `style!`。 |
-| `mue-macroquad` | 渲染与应用运行时：Node 生命周期、布局准备/绘制、事件、手势、字体、shader，以及 `App` / `Scene` 场景栈与顶层调度。 |
-| `mue-components` | 布局、排版与图形组件，包括滚动区域、图片、形状、圆和文档；重导出组件宏与 `style!`。 |
-| [mue-i18n](<docs/i18n.md>) | 可选 Fluent 本地化：资源目录、语言选择、English fallback、响应式翻译与 `tl!`。仅依赖 reactive core，不依赖 renderer/components。 |
-| `examples/basics` | 响应式样式、图片、字体（Space Mono 400/700）示例。 |
-| `examples/events` | 简单的点击、长按、hover、滚轮与 `set_timeout` 示例。 |
-| `examples/gestures` | 八个等大可视化面板：点击、长按、hover、滚轮、拖动、滑动、双指缩放与旋转。 |
-| `examples/map` | 图片网格地图，支持拖动、惯性滑动、双指缩放与旋转。 |
-| `examples/pages` | 页面切换与切换动画。 |
-| `examples/tab` | 固定底部 Tab 栏，页面切换与切换动画。 |
-| `examples/style` | style 声明、响应式变换，以及滚动区域、图片、形状、圆和文档组件。 |
-| `examples/theme` | 练习计数、主题 tokens、响应式按钮参数、显式 hover 与明暗切换。 |
-| `examples/document` | Markdown 阅读视图、字号与内容切换、富文本署名。 |
-| `examples/animation` | 尺寸、圆角与颜色的状态动画，弹簧与缓动切换。 |
-| `examples/nodes` | 布局、排版、动态列表、嵌套滚动与链接卡片。 |
-| `examples/color` | 纯色、渐变、图片与移动半调线条 shader。 |
-| `examples/playground` | 多页节点与属性练习、分页、独立动画开关。 |
-| [scenes](examples/scenes/README.md) | 常规游戏/结果场景组织、HUD 与暂停 UI、多根交错绘制、push/pop 结果与状态返回。 |
-| [scene-flow](examples/scene-flow/README.md) | 详情、可取消/失败加载、CPU→GPU 移交、显式启动、结束/重试/返回，以及公共 Scene 淡入淡出。 |
-| [scene-transitions](examples/scene-transitions/README.md) | 可交互的内置 crossfade、自定义 slide 合成与两阶段覆盖动画，场景和效果分模块组织。 |
-| [song-transition](<examples/song-transition/README.md>) | 曲绘展开/缩回与保留列表状态；应用级资源/全局 signals、设置 Scene、明暗主题、减少动态效果与 English/简体中文 Fluent 切换。 |
-| [portal](docs/examples.md) | 外部 renderer 的纹理合成、局部暂停输入策略与 UI overlay。 |
-| [input-timing](examples/input-timing/README.md) | 1–2 FPS 的已显示几何与下一布局命中对照。 |
+| `mue-core` | Renderer-independent signals, effects, scopes, properties, and foreground tasks. |
+| `mue-macroquad` | Macroquad nodes, styles, input, rendering, App, and Scene runtime. |
+| `mue-components` | Layout, typography, graphics, and optional application token components. |
+| `mue-macros` | `#[component]`, `#[node]`, and `style!` procedural macros. |
+| `mue-i18n` | Optional Fluent catalogs and reactive translations. |
 
-## 快速开始
+## Documentation
 
-需要 Rust 1.90+（与 workspace 的 `rust-version` 一致）。
+Build the public API documentation for the workspace crates:
 
-```bash
+```sh
+cargo doc --workspace --no-deps --open
+```
+
+The crate and module pages document the public API, contracts, limitations, and examples. The guides cover workflows that span several APIs:
+
+- [Getting started](docs/getting-started.md)
+- [Components and custom nodes](docs/components.md)
+- [Styles and units](docs/style.md)
+- [Scenes and input](docs/scenes.md)
+- [Scene transitions](docs/scene-transitions.md)
+- [Application tokens](docs/themes.md)
+- [Foreground tasks](docs/tasks.md)
+- [Fluent localization](docs/i18n.md)
+- [Examples](docs/examples.md)
+
+## Examples
+
+Run a workspace example with Cargo, for example:
+
+```sh
 cargo run -p basics
-cargo run -p events
-cargo run -p gestures
-cargo run -p map
-cargo run -p pages
-cargo run -p tab
-cargo run -p theme
-cargo run -p style-example
-cargo run -p document
-cargo run -p animation
-cargo run -p nodes
-cargo run -p color
-cargo run -p playground
 cargo run -p scenes
 cargo run -p scene-flow
 cargo run -p scene-transitions
 cargo run -p song-transition
-cargo run -p portal
 ```
 
-`#[component]` / `#[node]` 都生成 builder；调用构造器和 setter 只配置输入，不执行声明 body。消耗式 `into_node()` 同步构建一次，`App::new` 会为根 builder 调用这一转换。组件 body 在节点 scope 内执行并返回另一个 builder，参数在 body 内是响应式 `Prop`。用 `map` 或 `computed` 把状态显式映射为样式：
+The examples in [examples/](examples/) are executable applications and integration references. Macroquad examples open a window and require a working graphics backend.
 
-```rust
-use std::rc::Rc;
-use mue_core::prelude::*;
-use mue_components::prelude::*;
-use mue_macroquad::style::{Styleable, StyleableExt};
+## Requirements
 
-#[component]
-fn button(caption: Rc<str>, #[default] primary: bool) -> impl Component {
-    text(caption)
-        .padding((12.,))
-        .opacity(primary.map(|value| if value { 1. } else { 0.7 }))
-        .with_hovered(|view, hovered| view.radius(hovered.select(12., 8.)))
-}
-
-let view = button("Hello").primary(true);
-```
-
-共享外观由应用自定义 tokens 结构体，通过普通参数或 `mue_core::scope::provide` / `inject` 传递；消费者把 `Prop` 或 `map` 的结果交给样式 setter。读取 `get()` / `get_clone()` 后传入普通值只会设置当时的快照，持续更新须保留绑定。完整示例见[应用 tokens 与上下文](docs/themes.md)。
-
-组件函数在节点 scope 中同步执行一次，可局部 `provide`，也可创建 `map`、`computed`、signal 和 effect；这些资源随节点清理。响应式更新只更新已有绑定，不重跑 body。共享源由活得足够久的作用域拥有，复制 signal/Prop/Scope 句柄不延长其资源生命周期。构建期间发生 panic 不做恢复：panic 直接向外传播，未完成的节点、其 owner 以及已注册的布局/手势条目都不会被回收，节点栈也不回退，本库没有任何 catch_unwind 路径。释放只发生在正常的显式 `drop`（未消费的 builder/plan）或构建成功完成时；请把构建 panic 当作进程级致命错误，而不是可恢复错误。
-
-`Scope::run(|| async { ... })` 只安装创建 future 时的同步上下文。前台异步任务使用 `mue_core::spawn`：它不创建 `OwnedScope`、不继承 context，每次 poll 和 future 析构都在 `Scope::null` 与 `Runtime::without_effect` 下执行，没有 ambient tracker / `current_effect`，正常返回时还原调用方上下文。需要操作级资源所有权和 context 查找时，显式使用 `scope_future(future)` 或 `spawn(scope_future(future))`。包装时创建独立的 `OwnedScope::new_inherited()`，父级只是弱引用查找，既不保活也不做快照；包装器在 poll / 析构时安装自己的 scope，完成时在返回输出前释放 inner future 和 owner，即使保留已完成的包装器也一样。只有在该 scope 下实际创建的资源受它拥有，预先创建后捕获的资源不会转移所有权；返回的局部 reactive handle 在完成后已经失效。单独使用包装器只管理 scope 和所有权，任务执行的 tracker 隔离来自 `spawn`。普通 task 内新建的 reactive resources 需要显式 owner 或手动 dispose，句柄 drop 不会自动清理。Effect 重跑也不恢复创建时的 scope。
-
-调用方持有 `Task<T>` 以控制任务生命周期；创建 scope 的释放不会取消任务，句柄 drop 会取消，`detach()` 将其交给 executor 管理。`Task<T>.await` 直接得到 `T`，业务失败可用 `Result<T, E>` 表达；`Task::fallible` 转成 `FallibleTask<T>` 后 await 得到 `Option<T>`，executor 停止任务（例如线程退出）时返回 `None` 而不是 panic；drop 句柄仍是取消，但句柄已被消费，不能再 await。`try_spawn` / `try_tick` 在 shutdown 时返回 `Err(ExecutorClosed)`，`Task::location` / `spawned_at` 与 `Debug` 暴露 spawn 位置；`Task::try_take` 提供同步取结果，取走后后续返回 `None`。`sleep` / `timeout` 由前台 executor 的 timer queue 驱动，`App::frame` 的 `tick` 会在 deadline 后触发；`Sleep` / `Timeout` 是 `!Send`，后台任务用不了。后台阻塞工作用 `spawn_blocking`（每任务一个线程，drop 不取消；高频阻塞工作请用 host 的 blocking pool）；前台任务可用 `JoinSet` 聚合，测试/headless 可用 `block_on`。`Task<T>` 在 `T: Send` 时可跨线程移动和 await/drop，但其非 `Send` future 仍由原线程 poll，清理也在 UI 线程执行。网络/IO 由 host runtime 执行，结果通过前台 continuation 或 `AsyncResource::new` 发布。`AsyncResource<T, E>` 自己持有状态 owner 与任务，状态保留到 resource drop；`new` 在前台执行 operation（可 await host 的 `JoinHandle`），`new_blocking` 在线程上执行阻塞闭包，状态仍在 UI 线程发布；阻塞 operation 不能使用 `scope_future(...)`。`App::frame` 在布局前有限驱动前台任务，长计算或同步 I/O 仍会阻塞 UI；host I/O 不阻塞 UI，但前台 continuation 仍受 tick 预算约束。详见[前台任务](docs/tasks.md)与[阻塞任务](docs/tasks.md#blocking-tasks)。
-
-自定义终端节点声明的第一个参数由宏按位置注入 `NodeContext`，可以使用任意简单标识符，例如 `ctx: NodeContext`。函数体通过 `ctx.finish(defaults, body)` 返回真实 `Node`。公开的 `spacer()` 构造器仍返回 builder，调用方无需传入 `ctx`：
-
-```rust
-use mue_components::node;
-use mue_macroquad::{
-    layout::use_layout,
-    node::{Node, NodeContext},
-    style::{Style, Styleable},
-};
-
-#[node]
-fn spacer(ctx: NodeContext, #[default(8.)] height: f32) -> Node {
-    ctx.finish(Style::new().height(height), move |style| {
-        use_layout(style);
-    })
-}
-
-let view = spacer().height(12.);
-```
-
-`#[node]` 函数体在节点 scope 中同步执行一次。`ctx.finish` 先合并默认样式，绑定 transition、opacity、font、transform，再在父 scope 中物化声明的 children 计划，再执行 `move |style| { ... }` 初始化布局、绘制和事件消费者，随后挂接 hooks。在作者 body 或 component body 中于 `ctx.finish` 之前完成共享 `provide` / context 设置；`body` 回调中操作的是已物化的 children。`Style` 使用普通字段，hook 可通过 `style.on_render.append(callback)` 等公开字段注册，链式 `.on_render(...)` 仍可用。留存的 hooks、effects 和事件回调仍须满足自身的 `'static` 约束。调用方和外层组件的显式样式覆盖内层返回 builder 的样式，其次是节点默认样式，再其次是框架默认值或继承；同一 builder 的同一属性后写覆盖先写。
-
-`.children(...)` 只保留 `ChildrenPlan`；父节点在 `finish` 中先安装 context 并绑定样式，再同步物化各自拥有独立 owner 的 children，随后执行 `body` 回调。`map_keyed` 后续新增项恢复父 context，同 key 保留原节点与局部状态，移除 key 释放资源；同 key 的内容变化需显式响应式绑定。`show_if` 在计划物化时构建一次，即使初始为 false；隐藏只改变可见列表，节点和状态保留到 owner 释放。预构建 `Node` 保留原构建 context。详见[组件与节点教程](docs/components.md)。
-
-文本子树前景继承使用 `mue_macroquad::inherit::provide_foreground`；它接受显式 `Prop<Brush>` 输入，节点自身的颜色设置优先。
-
-在 `macroquad` 的窗口回调里构建并驱动一棵节点树：
-
-```rust
-use mue_core::prelude::*;
-use mue_components::prelude::*;
-use mue_macroquad::App;
-
-#[mue_macros::component]
-fn counter() -> impl Component {
-    let count = signal(0);
-
-    text(computed(move |_| format!("clicked {} times", count.get()).into()))
-        .on_tap(move |_| count.update(|c| *c += 1))
-}
-
-async fn the_main() {
-    let mut app = App::new(counter());
-
-    loop {
-        macroquad::prelude::clear_background(macroquad::prelude::BLACK);
-        app.frame(); // 布局、更新、命中测试、绘制都在这里发生
-        macroquad::prelude::next_frame().await;
-    }
-}
-```
-
-## Scene 与输入阶段
-
-`App::new(root)` 保留单棵 UI 树的便捷入口；组合 gameplay、自定义绘制或多个 UI 根时，使用 `App::with_scene(scene)`。Scene 持有 Node 与业务资源，统一 `event` 响应 Enter/Pause/Resume/Input/Returned 通知，`update` 推进业务，通过 `layout` 提交借用根及逻辑 bounds，通过 `SceneRender::draw` 在完整 UI 绘制入口之间穿插自定义绘制。根的实际绘制顺序决定下一批 Node 输入顺序，提交但未绘制的根不接新 Node 输入。
-
-当前普通帧顺序为：Node 整批预命中 → 必要的 event(Returned/Enter/Resume) → Node pointer/hover/wheel 派发 → 当前 event(Input) 收完整原始批次 → transition/timeout/tasks 与 host/Scene update → App 多根几何准备 → 一次 Node 更新 → 再稳定几何 → Scene 绘制 → 纹理清理。Scene 回调使用 `mue_macroquad::CallbackResult`。`try_frame()` 使用 `AppError` 聚合 `SceneError`、`TransitionError` 和 `CallbackError`，并保留原始错误链。`frame()` 等便利方法在错误时 panic。
-
-Node capture 只保证一次 UI 操作的目标稳定，不决定 gameplay 输入归属。UI 命中、模态层内事件及没有本 Scene Down 的持续 Move/Up 都可见于原始批次，顺序、物理坐标和原触摸时间戳不变。切换时取消旧 UI capture，但不把后续接触屏蔽到抬起：旧批次不重放给新 Scene，后续 Move/Up 直接交新 Scene，是否参与判定由游戏决定。`RootInput::None/Interactive/Modal` 只控制 Node 根之间的路由。
-
-当前未提供静止接触快照、伪造 Down 或逐事件消费接口；App 默认先自动派发 UI，Scene 自行管理游戏的模态、暂停与接触策略。宿主挂起仍排空旧输入并取消 UI，恢复首个正常帧接收新输入；首帧和 resize/DPI 变化不做整批丢弃。Scene stack 与 push/pop 结果已实现：旧实例保留，pop 先发送 Returned 再 Resume，不重复 Enter；被覆盖与宿主挂起条件分别维护。转场帧不重放输入、不更新新顶层业务，Node 更新使用零 dt；恢复首普通帧 Scene/Node 亦用零 dt，不回拨全局时间。通用异步退场未实现；[scene-flow](examples/scene-flow/README.md) 已用现有接口验证可取消加载与资源移交，并通过独立 GPU 画面缓存实现切换淡入淡出，不保活旧 Scene 业务。完整契约、错误处理与验证见 [Scenes](docs/scenes.md)、[项目现状](docs/project-status.md#2026-11-15scene-stack-与返回结果) 和 [scenes 示例](examples/scenes/README.md)。
-
-## style 风格的 `style!`
-
-保留 Rust 组件 builder，通过 `.style(style! { ... })` 应用样式，不引入模板语言。
-属性使用 style 的 kebab-case 名称；同一字段后声明覆盖前声明，也遵循 `.style(...)` 与后续 builder 调用的顺序。
-
-```rust
-use mue_components::prelude::*;
-use mue_core::prelude::*;
-use mue_macroquad::style::Size;
-
-let width = signal(Size::Percent(80.));
-let card = flexbox()
-    .style(style! {
-        display: flex;
-        flex-direction: column;
-        width: {width};
-        max-width: 640px;
-        margin: 0 auto;
-        padding: 16px 24px;
-        gap: 12px;
-        background-color: #eef4ff;
-        border-radius: 12px;
-        transform: translateY(8px) rotate(-2deg);
-        transform-origin: center top;
-    })
-    .children(text("Hello").style(style! {
-        font-size: 1.25rem;
-        line-height: 1.5;
-        color: rgb(20 40 80 / 90%);
-    }));
-width.set(Size::Px(480.));
-```
-
-`{Rust 表达式}` 接受对应属性的原有类型、`Prop` 或 signal，保留响应式更新；每个表达式只求值一次。
-`padding` / `margin` / `inset` / `border-width` 使用 style 的一至四值顺序：上、右、下、左。
-`gap: 8px 16px` 分别设置行、列间距。它们与原 builder 的 tuple 顺序无关。
-
-支持尺寸与定位、flex 布局、overflow、颜色、透明度、字体、行高、字距、文本对齐与装饰，以及二维和有限三维变换。
-长度支持 `px`、`%`、`vw`、`vh`（取决于属性），`font-size` 另支持 `em` / `rem`；零可省略单位。
-颜色支持十六进制、`rgb` / `rgba` 和常用颜色名。`line-height` 的无单位数和百分比按当前字号计算。
-
-`transform` 是节点样式，作用于整个子树，绘制和命中测试使用同一变换。
-支持 `translate` / `translateX` / `translateY`、`translate3d` / `translateZ`、`scale` / `scaleX` / `scaleY` / `scale3d`、`rotate` / `rotateX` / `rotateY`、`skew` / `skewX` / `skewY`、`perspective`、`matrix`、`matrix3d` 和 `none`。
-按 style 顺序组合；translate 百分比相对节点自身 border box，默认变换原点为中心；变换不改变布局占位。
-角度支持 `deg` / `rad` / `turn` / `grad`。`transform: {value}` 和 `.transform(value)` 都接受
-Rust 矩阵、`Transform` 函数列表及其响应式属性，并参与现有动画；
-同类、同单位的列表及 `none` 与列表之间可插值，不兼容列表立即切换。
-
-这是当前画布渲染器支持的 style 声明子集，不包含 `calc()`、grid 或完整的 3D 场景渲染；3D 变换会投影到 2D 画布。
-`background` 当前只接受颜色或 Rust Brush 表达式（`mue_macroquad::shader` 的 `solid`、`linear_gradient`、`radial_gradient`），圆角只支持统一半径；`white-space` 只控制换行，不实现空白折叠。
-`overflow` 是布局属性，交互滚动使用 `scroll_area` 组件。不支持的属性或值在编译期报错。
-运行 `cargo run -p style-example` 查看组合示例。
-
-## 长度单位
-
-`mue_macroquad::style` 的长度是纯值 `Size`：`Size::Px`、`Size::Percent`、`Size::Vw`、`Size::Vh` 和 `Size::Auto`。公开百分比以 100 表示整体，不限制为 `0..=100`（例如 `Size::Percent(50.)` 表示 50%），视口单位分别相对逻辑视口宽度和高度。`px`、`percent`、`vw`、`vh` 是对应的纯值构造器，不会把值预先换算成当前视口像素。
-
-```rust
-use mue_components::text;
-use mue_macroquad::style::{FontSize, Styleable, percent, px, vw};
-
-let label = text("Hello")
-    .width(percent(80.))
-    .font_size(FontSize::px(18.))
-    .radius(vw(1.))
-    .padding((px(12.), px(8.)));
-```
-
-裸 `f32` 及 `Signal<f32>` / `ReadSignal<f32>` 均表示像素；显式的动态像素值可写成 `signal.map(Size::Px)`。需要保留单位并在运行时切换的值，应使用 `Signal<Size>`（或 `Signal<FontSize>`）并单独回写，例如在 `Px`、`Percent`、`Vw`、`Vh` 和 `Auto` 之间切换。信号保存的是声明本身，视口变化只影响随后解析，不会把声明改写成像素。
-
-```rust
-use mue_core::prelude::*;
-use mue_components::text;
-use mue_macroquad::style::{FontSize, Size, Styleable};
-
-let width = signal(Size::Percent(50.));
-let font_size = signal(FontSize::Em(1.25));
-let label = text("Editable units").width(width).font_size(font_size);
-width.set(Size::Px(240.));
-font_size.set(FontSize::Rem(1.5));
-```
-
-字号使用独立的纯值 `FontSize`：`FontSize::Px`、`Percent`、`Em`、`Rem`、`Vw`、`Vh`，也提供 `FontSize::px`、`percent`、`em`、`rem`、`vw`、`vh` 构造器。默认根字号为 32px；未声明字号继承父节点的计算值，`Percent` / `Em` 相对父字号，`Rem` 相对根字号，根节点的相对单位以 32px 为基准。
-
-所有布局长度及 radius、line-height、paragraph-spacing、letter-spacing 都保留 `Prop<Size>` 声明，在具体消费边界解析。布局支持 `Percent` 和 `Auto` 的地方保留 Taffy 语义；标量长度支持 `Px`、`Vw`、`Vh`，对 `Percent` 和 `Auto` 明确拒绝，不隐式转成像素。`opacity`、flex 权重和宽高比仍是无量纲数值，不能传长度。
-
-示例默认以 `Percent`、`Vw`、`Vh`、`flex` 和 `wrap` 组织布局，优先让内容随逻辑视口和父容器变化；`max_width` / `max_height` 只作为桌面端阅读宽度或演示上限。地图坐标、绘图形状、动画位移，以及滚动示例中刻意制造溢出的超宽内容仍使用固定值，因为它们是对应 API 的演示参数而不是界面尺寸。移动端验证建议使用窄屏窗口并分别测试横屏、竖屏和高分辨率设备。
-
-示例排版统一使用 `examples/shared/responsive.rs`：以视口短边 480 为设计基准，`scale = max(min(width, height) / 480, 0.75)`，根字号为 `32 * scale`，子字号通过 `font(...)` 转为 `Rem`，行高、触控目标及相关留白通过 `ui(...)` 同比缩放。各入口在构建前和每帧布局前同步尺寸，旋转不改变缩放比例，高分辨率不设置缩放上限；这是示例级视口适配，不是系统 DPI 或无障碍字号换算。
-
-自定义 `#[node]` / `#[component]` 参数直接声明为 `Size` 或 `FontSize`，宏会生成接受 `impl Into<Prop<T>>` 的构造器和 setter。默认值可写为 `#[default(Size::Px(8.))]`，或使用 `#[default]` 采用该类型的默认值。`#[model]` 参数接收可回写的 `Signal<T>`。
-
-`Size` 和 `FontSize` 定义在 `mue_core::units`，并由 `mue_macroquad::style` 重新导出。标准 `From/Into` 支持裸 `f32`、`Prop<f32>` 和数值信号；启用 `impl-taffy` feature 时，`Size` 也接受 Taffy 长度输入。`mue-macroquad` 已启用该 feature。
-
-## 文档与 Markdown
-
-`document("第一段\n\n第二段")` 显示纯文本；`markdown(source)` 将 CommonMark 转成 cosmic-text 的富文本 spans。两者都接受响应式属性，使用现有的字体、字号、行高、对齐、颜色及宽度样式。改变内容、宽度或字体会重新排版，自动高度包含全部段落。正文颜色可使用现有的 Brush，span 颜色可单独覆盖。
-
-```rust
-use mue_components::{document, markdown, Document, Span};
-use mue_macroquad::style::Styleable;
-
-let article = markdown("# Field notes\n\nA **quiet** morning by the *sea*.")
-    .width(600.).font_size(18.).line_height(28.);
-let signature = document(Document::rich([
-    Span::new("Mara Ellis").bold(),
-    Span::new("\nOctober 13, 2026").italic(),
-]));
-```
-
-Markdown 支持段落、标题、嵌套强调、行内/块代码、引用、列表及软/硬换行。链接和图片只显示标签，HTML 显示为文字；不提供编辑、点击链接、图片加载、表格或代码高亮。cosmic-text 负责字形与双向文本，CommonMark 解析由 pulldown-cmark 完成。
-
-## 过渡
-
-```rust
-use mue_core::prelude::*;
-use mue_components::text;
-use mue_macroquad::{transition::Transition, style::{Styleable, StyleableExt}};
-
-let visible = signal(true);
-let label = text("Hello")
-    .opacity(visible.select(1., 0.2))
-    .transition(Transition::ease_in_out(0.3))
-    .on_activate(move || visible.toggle());
-```
-
-`.transition(...)` 为节点的可插值属性提供默认动画。状态立即改变，显示值逐帧更新；在动画途中改变目标会从当前显示值继续。`Transition::Instant` 立即切换。
-
-支持 `Transition::linear(seconds)`、`ease_in_out(seconds)` 和 `spring(seconds, bounce)`。可动画属性包括同单位 `Size` 尺寸/边距/内距/位置、透明度、圆角、`FontSize` 字号、行高、变换矩阵、纯色及结构一致的渐变。同一单位按数值插值；不同单位以及 `Auto` 离散切换，不做隐式单位换算。不同种类的 Brush 立即切换。弹簧是按时长结束的阻尼曲线；重新指定目标保持位置连续，不保留速度。矩阵按系数插值。普通节点不自动添加挂载/卸载过渡。此版本不含关键帧或匹配几何。
-
-实现 `mue_macroquad::transition::Interpolatable` 可以扩展可过渡值。`App::frame` 会在布局前调用 `mue_macroquad::transition::advance(dt)`。
-
-更完整的[应用 tokens 与上下文](docs/themes.md)、[组件声明](docs/factories.md)、[自定义节点](docs/components.md)和[示例说明](docs/examples.md)位于 [`docs/`](docs/)。
-
-`pages` 示例使用独立的同级页面组件，顶部按钮改变选中索引，所有页面保留局部状态；`tab` 示例自行组合底部按钮与位置动画。`theme` 展示每日练习计数、按钮变体、显式状态样式，以及由主题 tokens 驱动的颜色过渡。
-
-## 同级页面
-
-`pages(selected, children)` 用静态或响应式 `usize` 索引选择固定列表中的页面。页面按传入顺序排列，索引增加时向左滑动，减少时向右滑动；跨页跳转经过中间页。全部页面只构建一次并保留到组件释放，切换后计数器等局部状态不会重置。按钮栏由调用方组合，不提供滑动手势。
-
-```rust
-use mue_core::prelude::*;
-use mue_components::{pages, text, PagesTransition};
-use mue_macroquad::style::StyleableExt;
-
-let selected = signal(0usize);
-let view = pages(selected, [text("Home"), text("Notes"), text("Settings")])
-    .page_transition(PagesTransition::Slide);
-selected.set(2);
-selected.set(1); // 向右滑动回到 Notes
-```
-
-`.page_transition(...)` 支持 `Slide`（默认）、`SlideVertical` 和 `None`；`.transition_curve(...)` 配置曲线。垂直切换时索引增加向上、减少向下。动画中途切换从当前显示位置重新定向，位移限制在起点和终点之间；尺寸变化时立即结束过渡并重新布局。只有视口内页面参与布局与绘制，仅选中的页面参与命中测试。空列表显示空内容；越界索引按最后一页显示，不修改选中信号。
-
-## 手势
-
-通过 `Styleable` 为节点添加手势回调：
-
-```rust
-let position = signal(mue_macroquad::math::Vector::ZERO);
-let direction = signal(String::new());
-let scale = signal(1.0_f32);
-let rotation = signal(0.0_f32);
-
-text("Pan").on_pan(move |event| position.set(event.translation));
-text("Swipe").on_swipe(move |event| direction.set(format!("{:?}", event.direction)));
-text("Pinch").on_pinch(move |event| scale.set(event.scale));
-text("Rotate").on_rotate(move |event| rotation.set(event.rotation));
-```
-
-- `on_pan`：单指或鼠标拖动，默认超过 10 像素后开始。提供位置、总位移及本次增量。
-- `on_swipe`：释放时触发，默认位移至少 50 像素、平均速度至少 300 像素/秒。提供方向、位移及平均速度。
-- `on_pinch`：双指距离变化超过 10 像素后开始。`scale` 为相对双指初始距离的比例，`delta` 为比例的加法增量。
-- `on_rotate`：双指旋转超过 0.1 弧度后开始。`rotation` 为累计弧度（屏幕坐标中顺时针为正），`delta` 为本次弧度增量。
-
-连续手势通过 `GesturePhase::{Start, Update, End, Cancel}` 报告生命周期，只有识别成功后才发送结束或取消事件。首次回调的增量包含触发阈值前的移动。坐标和距离均使用屏幕像素。双指手势在任一手指释放或取消时结束；再次识别需要两次新的按下。
-
-手势沿用独占竞争规则：先成功认领指针的手势获胜，其余手势被拒绝。因此同一节点上的 pan 会阻止随后释放时的 swipe；pinch 和 rotate 也不会同时触发。同一节点同时达到阈值时，pinch 优先于 rotate，两者优先于 pan。示例为四种手势提供独立区域。
-
-## 调试示例
-
-`gestures` 和 `map` 的交互读数显示在窗口内，不输出控制台日志。
-
-### Events
-
-`cargo run -p events` 运行简单的文本事件示例，显示点击计数、按下、hover、长按和滚轮状态。
-
-### Gestures
-
-```bash
-cargo run -p gestures
-```
-
-八个面板采用相同尺寸、标题位置和读数位置，整个面板都可以接收输入。
-
-| 面板 | 操作与反馈 |
-| --- | --- |
-| Tap | 点击后累计计数。 |
-| Long press | 按住 0.5 秒后累计计数。 |
-| Hover | 显示鼠标是否位于面板内。 |
-| Wheel | 显示累计垂直滚轮量。 |
-| Pan | 显示拖动阶段与总位移。 |
-| Swipe | 显示识别到的滑动方向。 |
-| Pinch | 显示双指相对缩放比例。 |
-| Rotate | 显示双指累计旋转角度。 |
-
-Pinch 与 Rotate 需要多点触控输入；鼠标可以测试其余面板。长按使用当前默认识别阈值（0.5 秒、15 像素）。
-
-### Map
-
-```bash
-cargo run -p map
-```
-
-地图重复绘制仓库根目录的 `deer.png`，形成 16 × 16 网格。图片通过 `include_bytes!` 嵌入，无需从特定工作目录启动。
-
-| 输入 | 操作 |
-| --- | --- |
-| 鼠标或单指拖动 | 平移地图 |
-| 快速拖动后释放 | 惯性滑动，逐渐减速 |
-| 双指移动 | 同时平移、缩放和旋转 |
-| 滚轮 | 以指针位置为中心缩放 |
-| Shift + 滚轮 | 以指针位置为中心旋转 |
-| 底部减号 / 加号 | 缩小 / 放大 |
-| 底部旋转按钮 | 每次旋转 15° |
-| Reset view 或 R | 恢复初始位置、缩放和角度 |
-
-右上角显示缩放百分比与旋转角度，缩放范围为 25%–400%。地图通过 `on_pointer_event` 组合交互，以支持同一表面上的拖动、惯性和同步双指变换；它不组合互相竞争的独占手势回调。
-
-## 验证
-
-```bash
-cargo check --workspace
-cargo clippy -p events -p gestures -p map --all-targets --no-deps
-# 交互模式；可切换到超预算场景观察拒绝计数
-cargo run -p atlas
-```
-
-字形图集按需创建 1024² RGBA 页面，最多 8 页，满载时约占 32 MiB GPU 图集和 32 MiB 常驻 CPU 镜像，另有上传临时缓冲、字体源数据及驱动开销。每个文本节点先合并上传新字形，再提交几何，后续自定义节点提前 flush 也能读取正确像素；本轮已引用的字形在下一轮提交已有绘制后才允许回收。淘汰候选在发生压力时每轮只排序一次，并逐步回收。单个字形超出页面或单轮工作集超过预算时跳过该字形，不覆盖已排队内容，也不因缓存压力 panic；交互模式中的 4000 字形、大字号组合可能刻意超出此预算。连续字号动画仍按原始精度栅格化，本版本没有字号量化。
-
-## 备注
-
-- `macroquad` / `miniquad` 目前指向 fork 的 git 源，见根 `Cargo.toml` 的 `[workspace.dependencies]`。
-- `basics` 使用 vendored Space Mono（SIL OFL 1.1，见 `examples/basics/assets/fonts/OFL-SpaceMono.txt`）。`playground` 自包含嵌入 Noto Sans / Serif / Mono、Sans CJK SC、Sans Arabic 和 Symbols 2，不依赖移动端系统字体；基础三类映射到对应 Noto 家族。字体资源约 37.1 MiB，覆盖示例文字而非所有语言，不包含彩色 Emoji。进入 playground 的 **Font licenses** 页面可查看随二进制嵌入的版权和完整 OFL 1.1 协议；固定来源、版本及 SHA-256 见 `examples/playground/assets/fonts/sources.json`。
-- 无系统字体环境可先构建 `mue_macroquad::font::fontdb::Database`，加载字体并设置通用家族，再调用 `font::initialize(locale, db)`。必须在当前 UI 线程加载其他字体或创建文本前调用；重复初始化会返回错误，避免使现有文本的字体 ID 失效。
-- 可变字体在 `fontdb` 中只按默认实例登记字重；演示非默认字重时请使用按字重拆分的静态字体文件。
+Rust 1.90 or newer. See [Cargo.toml](Cargo.toml) for workspace dependencies and example packages.
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
-
-## 简洁的响应式属性
-
-`expanded.select(480., 180.)` 根据布尔状态选择值，可直接传给 `.width(...)`。响应式像素值不需要手动构造 Taffy 尺寸。`text(open.select("Open", "Closed"))` 和 `text(count.map(|n| format!("{n}")))` 自动转换文本类型。
-
-`state.toggle()` 切换布尔状态，`.toggle_on_tap(state)` 绑定点击切换。`.on_activate(move || ...)` 接受没有事件参数的点击回调。`document` / `markdown` 及其内容类型位于 `mue_components`。
-
-
-## 布局与排版节点
-
-所有组件的实现与构建器都位于 `mue-components`，按 `layout`、`typography`、`graphics` 分组，
-也可以从 crate 根或 `mue_components::prelude::*` 导入。原来的 `mue_macroquad::node` 组件导入需迁移到这里。
-`mue-macroquad::node` 只保留节点生命周期、自定义节点和 children 树工具；字体排版与 GPU 绘制仍由渲染器负责。
-
-| 分组 | 节点 |
-| --- | --- |
-| 布局 | `pages`、`aspect_ratio`、`center`、`container`、`div`、`flexbox`、`float`、`scroll_area`、`separator`、`stack` / `hstack` / `vstack`、`wrap` |
-| 排版 | `blockquote`、`code`、`code_block`、`em`、`heading`、`link`、`link_overlay`、`list` / `list_item`、`text`、`document` / `markdown` |
-| 图形 | `circle`、`shape`、`image` |
-
-`stack()` 默认纵向排列，`wrap()` 自动换行，两者默认间距为 8 像素。
-`.gap(...)` 同时设置行列间距，也可以分别设置 `.row_gap(...)` 和 `.column_gap(...)`。
-`container()` 默认最大宽度 1280 像素、水平居中、左右内边距 24 像素。
-`aspect_ratio().ratio(16. / 9.)` 在一个尺寸为自动值时约束宽高比；
-`float().placement(FloatPlacement::TopEnd)` 将子节点中心锚定在父节点右上角。
-所有默认样式都可以通过现有样式 API 覆盖。
-
-`heading` 使用 `HeadingLevel`；`list().marker(ListMarker::Ordered(1))` 给任意子节点添加编号。
-`code_block` 默认保留长行，可以放入横向滚动区域，或用 `.text_wrap(true)` 开启换行。
-`link` 和 `link_overlay` 通过 `.on_activate(...)` 绑定应用自己的导航操作，
-不会自动打开浏览器；卡片内的子链接优先响应点击。
-这些是画布节点，不提供浏览器 DOM 的键盘焦点和无障碍语义。
-
-`Document::blocks(...)` 组合段落；`Document::heading`、`Document::em`、
-`Document::code`、`Document::blockquote` 和 `Document::list` 复用相同的排版约定。
-文档仍由现有 cosmic-text 富文本实现渲染，支持同一段落内的多种样式。
-Markdown 保持只读：链接显示标签，代码不做语法高亮，引用不绘制独立节点的边线。
-
-```rust
-use mue_core::prelude::*;
-use mue_components::prelude::*;
-use mue_macroquad::math::Vector;
-
-let offset = signal(Vector::ZERO);
-let view = scroll_area()
-    .height(420.)
-    .offset(offset)
-    .options(ScrollOptions {
-        mouse_drag: true,
-        ..Default::default()
-    })
-    .content_style(Style::new().gap(16.).padding((20.,)))
-    .children((
-        heading("Notes").level(HeadingLevel::H2),
-        text("Content keeps its existing styles."),
-        code_block("let view = stack().gap(16.);"),
-    ));
-```
-
-滚动区域需要有限高度；横向滚动还需要有限宽度。默认纵向滚动、启用触摸和滚轮、
-显示可拖动滚动条，不启用鼠标拖动内容。`.axis(ScrollAxis::Horizontal)` 和
-`ScrollAxis::Both` 切换方向。`ScrollOptions` 提供触摸/鼠标/滚轮开关、拖动阈值、
-方向锁定、惯性、摩擦系数、速度上限、滚轮倍率、滚动条与边界传递选项。
-超过拖动阈值才争夺手势，取消和第二触点会停止滚动。已获得手势的拖动保持所有权直到释放；
-嵌套触摸区域在开始拖动时若已到边界，可以交给祖先。滚轮会把未消费的距离传给祖先。
-边界使用硬停止，不做弹性回弹。滚轮沿用系统惯性，不额外模拟；Macroquad 未区分滚轮和触控板单位，
-可通过 `wheel_speed` 调整。裁剪采用轴对齐矩形，不随绘制 transform 旋转。
-外部写入 `.offset(...)` 的信号可跳转位置，内容变化后会重新限制范围并停止旧惯性。
-
-运行 `cargo run -p nodes` 查看布局、排版、动态列表、嵌套滚动和链接卡片示例。
-组件职责参考 [Chakra UI](https://github.com/chakra-ui/chakra-ui)，
-滚动输入选项参考 [egui ScrollArea](https://github.com/emilk/egui/blob/main/crates/egui/src/containers/scroll_area.rs)；
-实现复用 Mue 现有 Taffy 布局、cosmic-text 和手势系统。
-
-
-## 示例与交互练习
-
-`cargo run -p playground` 打开按页分组的交互练习：布局、排版、图形、动画、滚动、输入与应用外观配置。
-属性可单独切换，数值属性使用弹簧动画；底部可以前进、后退、切换过渡方向与分栏。
-滚动页提供分页和 `ScrollOptions` 的各项输入/物理参数。配置选项切换会重建相应视口，
-共享 offset 保留并重新限制滚动位置。其他示例只保留各自主题需要的代码。
-
-排版增加 `.text_wrap_mode(TextWrap::Word / Glyph / WordOrGlyph)`、
-`.text_overflow(TextOverflow::Visible / Clip / EllipsisStart / EllipsisMiddle / EllipsisEnd)`、
-`.text_max_lines(Some(n))`、`.text_vertical_align(TextVerticalAlign::Top / Center / Bottom)`、
-`.letter_spacing(px)`、`.paragraph_spacing(px)`、`.tab_width(n)` 与 `.text_strikethrough(bool)`。
-`.text_wrap(false)` 仍可关闭换行。段落间距按换行分隔的段落计算；行限制裁剪超出的内容，
-默认 Visible 保持原有溢出显示；Clip 在内容边界裁剪。省略号通过 cosmic-text 排版，未设置行限制时默认使用一行。
-这些样式也适用于 document、markdown、heading、code 等共享文本渲染的节点。
-行列间距、段落间距、字距与宽高比现已加入样式动画绑定。不同枚举值仍然立即切换。
-
-`cargo run -p color` 包含渐变、图片和移动半调线条 GPU 材质。
-图片来自 Picsum / Unsplash，作者与来源见 `examples/color/assets/README.md`，资源已保存在本地，运行无需联网。
-材质示例位于 `examples/shared/halftone.rs`；`Shapes::build` 可创建供 `shape` 节点复用的局部坐标几何。
+MIT. See [LICENSE](LICENSE).

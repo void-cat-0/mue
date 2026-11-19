@@ -1,4 +1,12 @@
-//! Read-only rich text and a CommonMark adapter for cosmic-text.
+//! Read-only rich text, styled spans, and a CommonMark adapter.
+//!
+//! [`Document`] is a list of styled [`Span`] values. Use [`Document::plain`]
+//! for plain text, [`Document::rich`] for manually styled spans, and
+//! [`Document::markdown`] when parsing CommonMark is useful. Paragraph breaks
+//! are represented by newlines; blank lines add paragraph spacing. A
+//! [`Prop<Document>`](mue_core::prop::Prop) lets text content update without rebuilding
+//! the node. Markdown links and images render their labels only; HTML is shown
+//! literally. See [`markdown`] for the node constructor.
 use mue_macroquad::node::{Node, NodeContext};
 // Preserve the original public document module's Markdown entry points.
 pub use super::markdown::{Markdown, MarkdownBuilder, markdown};

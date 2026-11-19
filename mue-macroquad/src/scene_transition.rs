@@ -20,6 +20,32 @@
 //! passes start with all channels enabled, and effect boundaries restore them
 //! on return. Within a callback or ordinary host draw, submit an all-channel
 //! pipeline before clearing after a custom OpenGL color-write mask.
+//!
+//! Attach an effect to a deferred [`SceneRequest`](crate::SceneRequest), or set an
+//! App-level factory for defaults. The default is no animation.
+//! [`TransitionTiming::AfterSwitch`] commits before its draw segment;
+//! [`TransitionTiming::AroundSwitch`] presents an exit segment before committing
+//! at a later safe boundary. Only the active top Scene receives ordinary
+//! updates. These effects are presentation, not lifecycle callbacks or raw-input
+//! filters.
+//!
+//! A selected composite captures pictures lazily and currently requires OpenGL.
+//! Overlays allocate no pictures and have no picture-backend restriction. Keep
+//! callback resources owned for the full effect lifetime; a departing Scene is
+//! not retained by the transition. See [`SceneTransition::composite`] and
+//! [`SceneTransition::overlay`] for their callback contracts.
+//!
+//! ```no_run
+//! use mue_macroquad::{Scene, SceneContext, SceneTransition, transition::Transition};
+//!
+//! struct Details;
+//! impl Scene for Details {}
+//!
+//! fn open_details(ctx: &mut SceneContext<'_>) {
+//!     ctx.push(Details)
+//!         .transition(SceneTransition::crossfade(Transition::ease(0.25)));
+//! }
+//! ```
 
 mod clock;
 mod picture;

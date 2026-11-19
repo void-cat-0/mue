@@ -5,6 +5,21 @@
 //! leaves no queue behind. A macroquad coroutine expires the batch at frame end,
 //! including frames without an App. This module does not change pointer owners,
 //! coordinates, timestamps, or the stage at which consumers dispatch input.
+//!
+//! [`InputSubscriber`] is for a host integration that needs the same raw events
+//! as the UI runtime. Construct it after macroquad starts and call
+//! [`InputSubscriber::read`] from the main application future or a synchronous
+//! callback, before yielding to [`macroquad::window::next_frame`]. A new
+//! subscriber starts at the current end of the stream. Unread events expire at
+//! frame end; consumers do not get a private replay queue.
+//!
+//! [`App`](crate::App) handles input automatically. In a custom
+//! [`Scene`](crate::Scene), [`SceneEvent::Input`](crate::SceneEvent::Input)
+//! receives the complete raw [`InputBatch`] after Node UI dispatch. UI hit-testing
+//! and capture are separate from game/contact ownership. When replaying a batch,
+//! check [`InputBatch::is_interrupted`] first and cancel local pressed state as
+//! needed; [`InputBatch::repeat`] preserves event order and reports source DPI
+//! metadata without rescaling positions.
 
 use std::{
     cell::{Cell, RefCell},

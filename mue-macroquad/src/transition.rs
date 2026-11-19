@@ -1,6 +1,19 @@
 //! Style transitions for reactive values.
 //!
-//! A style transition interpolates matching property values; call [`advance`] once per frame.
+//! Reactive property transitions and their time curves.
+//!
+//! A style transition interpolates compatible property values when their
+//! reactive source changes. The configured curve is [`Transition`], exposed as
+//! the transition style property through [`crate::style::Style`]. [`advance`]
+//! moves active property transitions forward; [`crate::App`] calls it once during
+//! each normal frame before layout. It does not advance in
+//! [`crate::App::try_frame_paused`].
+//!
+//! Only values with compatible representations interpolate. For example, a size
+//! change from pixels to percent is discrete because resolution requires layout
+//! context. Nonpositive or non-finite durations also resolve immediately. Scene
+//! effects use the same [`Transition`] curve type but are scheduled and presented
+//! independently by [`crate::SceneTransition`].
 
 use std::{
     cell::RefCell,

@@ -1,36 +1,28 @@
-//! Optional reactive token store for application-defined themes.
+//! Optional reactive token store for application-defined values.
 //!
-//! A [`TokenSet`] is a named bag of values of one type. Build one with
-//! [`token_set!`](crate::token_set) for literal keys, or with [`TokenSet::with`]
-//! when a key is computed. A [`Theme`] registers every key once, at startup, into live signals,
-//! and hands out [`Prop`] handles that stay bound to those signals:
+//! A [`TokenSet`] holds named values of one type. Build one with
+//! [`token_set!`](crate::token_set) for literal keys or [`TokenSet::with`] for a
+//! runtime key. Register keys once with [`Theme::register`]; lookup returns a
+//! live [`Prop`] bound to a signal. Applying another set updates those signals
+//! in place.
+//!
+//! The store supplies values through ordinary properties. Applications can also
+//! define their own token types and share them through
+//! [`provide`](mue_core::scope::provide) and [`inject`].
 //!
 //! ```
-//! use mue_components::tokens::{Theme, TokenSet};
+//! use mue_components::{token_set, tokens::Theme};
 //! use mue_core::prelude::*;
 //!
-//! let _ = Scope::null().run(|| {
+//! let owner = mue_core::scope::OwnedScope::new();
+//! owner.run(|| {
 //!     let theme = Theme::new();
-//!     theme.register(&TokenSet::<f32>::new().with("gap", 8_f32));
-//!
+//!     theme.register(&token_set! { gap: 8_f32 });
 //!     let gap: Prop<f32> = theme.get("gap");
-//!     assert_eq!(gap.get(), 8.);
-//!
-//!     // Switching themes writes values in place; existing bindings update.
-//!     theme.apply(&TokenSet::<f32>::new().with("gap", 16_f32));
+//!     theme.apply(&token_set! { gap: 16_f32 });
 //!     assert_eq!(gap.get(), 16.);
 //! });
 //! ```
-//!
-//! The store is indexed by value type first and by name second, so the same key can
-//! hold a `Brush` and a `FontSize` without colliding, and a key can never be read as
-//! the wrong type. A missing key panics with the value type, the keys registered for
-//! that type, and any other types that own the same key.
-//!
-//! This module is a value store, not a theme engine: it has no selectors, no
-//! cascade, and no specificity. Its macros only construct sets and read values;
-//! components still read ordinary properties, and the store only decides which
-//! value a property receives.
 
 use std::{
     cell::RefCell,
@@ -141,25 +133,36 @@ macro_rules! __token_set_key {
 
 /// Read a theme token as a live [`Prop`].
 ///
-/// `token!(key)` uses the nearest installed [`Theme`]; `token!(theme, key)`
-/// uses an explicit theme handle. A key is a bare identifier, which is
-/// stringified, or a string literal. The value type is inferred from context,
-/// so inside [`style!`](crate::style) the style macro supplies it; elsewhere,
-/// annotate the binding or argument when inference is ambiguous.
+/// `token!(key)` uses the nearest installed [`Theme`]. Pass an explicit theme
+/// with `token!(theme, key)`. Keys are identifiers or string literals.
+/// [`style!`](crate::style) supplies the property type for direct token values
+/// and rewrites unqualified `token!(...)` calls in supported braced expressions.
+/// Elsewhere, annotate the binding if Rust cannot infer the type.
+///
+/// Resolve handles while the theme scope is active. Capture those handles in
+/// deferred computations so later evaluations can read the same signals.
 ///
 /// ```
-/// use mue_components::{token, token_set, tokens::Theme};
+/// use mue_components::{style, token, token_set, tokens::Theme};
 /// use mue_core::{FontSize, prelude::*};
 /// use std::rc::Rc;
 ///
 /// let owner = mue_core::scope::OwnedScope::new();
 /// owner.run(|| {
 ///     let theme = Rc::new(Theme::new());
-///     theme.register(&token_set! { title: FontSize::Px(28.) });
+///     theme.register(&token_set! { title: FontSize::Px(28.), body: FontSize::Px(18.) });
 ///     Theme::install(&theme);
 ///
 ///     let title: Prop<FontSize> = token!(title);
+///     let emphasized = Prop::from(signal(true));
+///     let declarations = style! {
+///         font-size: {emphasized.pick(token!(theme, title), token!(theme, body))};
+///     };
+///     let bound_size = declarations.declared_font_size().unwrap();
 ///     assert_eq!(title.get(), FontSize::Px(28.));
+///
+///     theme.apply(&token_set! { title: FontSize::Px(32.) });
+///     assert_eq!(bound_size.get(), FontSize::Px(32.));
 /// });
 /// ```
 #[macro_export]
@@ -226,12 +229,9 @@ impl<T: Clone + PartialEq + 'static> TokenStore<T> {
 
 /// A set of live token stores, indexed by value type and then by name.
 ///
-/// Register every theme's keys before building the view, then read keys as
-/// [`Prop`] handles. Switching a theme writes new values into the same signals, so
-/// every handle that was already handed out stays live.
-///
-/// Signals are created by [`Theme::register`], so call it inside a scope that
-/// outlives the view.
+/// The same name can hold values of different types. Use [`Self::register`] in a
+/// scope that outlives every consumer of the registered signals. Reading gives
+/// a [`Prop`] bound to its signal, so applying a set updates existing bindings.
 #[derive(Default)]
 pub struct Theme {
     stores: RefCell<TypeMap>,
@@ -249,7 +249,7 @@ impl Theme {
         Self::default()
     }
 
-    /// Register every key in `set`. Keys that already exist keep their signal.
+    /// Register new keys of type `T`. Existing keys keep their values and signals.
     pub fn register<T: Clone + PartialEq + 'static>(&self, set: &TokenSet<T>) {
         let inserted = self
             .stores
@@ -269,9 +269,11 @@ impl Theme {
 
     /// Read a token as a live property.
     ///
-    /// Panics when the key is not registered for this value type. The panic
-    /// names the type, lists the keys registered for it, and reports other
-    /// types that own the same key.
+    /// # Panics
+    ///
+    /// If the key is missing for `T`. The diagnostic lists the available keys
+    /// for `T` and other types that have registered this key. For optional
+    /// lookups, use [`Self::try_get`].
     pub fn get<T: Clone + PartialEq + 'static>(&self, key: &str) -> Prop<T> {
         self.try_get(key)
             .unwrap_or_else(|| panic!("{}", self.missing_token_message::<T>(key)))
@@ -312,8 +314,8 @@ impl Theme {
 
     /// Write the values in `set` into their signals, returning how many changed.
     ///
-    /// Keys missing from `set` keep their current value. Equal values do not
-    /// notify, so switching between themes that share a value costs nothing.
+    /// This updates registered keys of type `T` present in `set`. Unregistered
+    /// keys are skipped. Equal values do not notify consumers.
     pub fn apply<T: Clone + PartialEq + 'static>(&self, set: &TokenSet<T>) -> usize {
         self.stores
             .borrow()
@@ -352,9 +354,10 @@ impl Theme {
 
 /// Build a subtree with an installed theme, using the ordinary scope context.
 ///
-/// This is the counterpart of [`mue_macroquad::inherit::provide_foreground`] for
-/// tokens: it creates a scope, provides the theme, and retains that scope on the
-/// resulting node.
+/// When converted to a node, the provider runs `view` in an inherited scope and
+/// retains that scope on the resulting node. Create token signals with
+/// [`Theme::register`] in a scope that outlives the view. For an inherited text
+/// foreground, use [`mue_macroquad::inherit::provide_foreground`].
 pub fn provide_theme<T>(
     theme: Rc<Theme>,
     view: impl FnOnce() -> T,
@@ -362,6 +365,7 @@ pub fn provide_theme<T>(
     ThemeProvider { theme, view }
 }
 
+/// Deferred subtree produced by [`provide_theme`].
 pub struct ThemeProvider<F> {
     theme: Rc<Theme>,
     view: F,

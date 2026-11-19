@@ -79,11 +79,15 @@ impl Default for ScrollOptions {
     }
 }
 
-/// A clipped viewport. Give it a bounded height (and width for horizontal scrolling).
-/// Content uses a column by default; customize it with `content_style`.
-/// Touch drags claim the existing gesture arena only after the threshold; a
-/// second contact cancels scrolling so pinch gestures can take over before claim.
-/// Bounds are hard stops, without elastic overscroll. Wheel momentum is left to the OS.
+/// A clipped, interactive scrolling viewport. Give it a bounded height (and a
+/// bounded width for horizontal scrolling). Content uses a column by default;
+/// customize that inner column with [`ScrollAreaBuilder::content_style`].
+///
+/// Touch drags claim the gesture arena only after the threshold. A second contact
+/// cancels scrolling so pinch gestures can take over before the scroll claims the
+/// gesture. Bounds are hard stops without elastic overscroll; wheel momentum is
+/// left to the operating system. See [`ScrollOptions`] for axis, chaining, drag,
+/// momentum, and scrollbar settings.
 pub fn scroll_area() -> ScrollAreaBuilder {
     ScrollAreaBuilder {
         style: Style::new(),

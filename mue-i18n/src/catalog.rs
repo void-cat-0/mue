@@ -1,3 +1,8 @@
+//! Fluent resource validation and immutable locale/namespace bundles.
+//!
+//! [`CatalogBuilder`] accepts complete FTL resources, validates the crate's
+//! bounded `NUMBER` support, and publishes only complete catalogs.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -73,15 +78,12 @@ impl CatalogBuilder {
         Self::default()
     }
 
-    /// Parse and validate a complete resource without changing published data.
+    /// Parse and validate a complete resource for a nonempty namespace.
     ///
-    /// NUMBER accepts numeric literals, variables or nested NUMBER calls,
-    /// with literal named options; values/digit options must satisfy the safe
-    /// range documented by this crate. This is stricter than arbitrary valid FTL.
-    ///
-    /// An error leaves this builder unchanged. Successfully parsed duplicate
-    /// registrations are retained only until build rejects them; they never
-    /// override entries in a published catalog.
+    /// See the [numeric argument rules](crate#numeric-arguments-and-number)
+    /// for literal and `NUMBER` validation. An error leaves the builder
+    /// unchanged. [`Self::build`] checks for duplicate entries before
+    /// publishing the catalog.
     pub fn add_ftl(
         &mut self,
         locale: LanguageIdentifier,

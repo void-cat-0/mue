@@ -31,9 +31,6 @@ members = [
     "examples/playground",
     "examples/tokens",
 ]
-# vendor/ 下的 macroquad / miniquad 仅作为 path 依赖使用，不作为工作区成员，
-# 否则它们自己的 dev-dependencies 等会被一并解析进 Cargo.lock。
-exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]

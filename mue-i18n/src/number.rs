@@ -1,3 +1,7 @@
+//! Checked Fluent numeric values and the crate's intentionally bounded
+//! `NUMBER` function support. This is not a general locale-aware formatting
+//! implementation.
+
 use std::{borrow::Cow, rc::Rc, sync::Arc};
 
 use fluent::types::{FluentNumber, FluentNumberOptions};

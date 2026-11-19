@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-doctest = false
+doctest = true
 
 [dependencies]
 mue-core.workspace = true

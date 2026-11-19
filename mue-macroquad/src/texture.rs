@@ -17,7 +17,9 @@
 //!
 //! `App::frame` flushes the queue automatically. Hosts that do not use `App`
 //! must call [`flush_pending_texture_deletions`] on the render thread after
-//! their draw calls.
+//! their draw calls. When using a [`crate::node::portal()`] or another UI texture
+//! consumer, publish/update its [`SharedTexture`] on the render thread before the
+//! App frame. A paused App frame does not automatically flush this deletion queue.
 
 use std::{
     fmt,

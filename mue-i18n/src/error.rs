@@ -1,3 +1,6 @@
+//! Errors from catalog construction and locale/namespace selection, plus
+//! per-translation diagnostics.
+
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -29,7 +32,8 @@ pub enum CatalogError {
         locale: LanguageIdentifier,
         namespace: Arc<str>,
     },
-    /// A resource contains a number or NUMBER option outside the supported range.
+    /// The namespace is empty or the resource violates the numeric or `NUMBER`
+    /// validation rules.
     InvalidResource {
         locale: LanguageIdentifier,
         namespace: Arc<str>,

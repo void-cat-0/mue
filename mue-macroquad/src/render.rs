@@ -9,6 +9,15 @@
 //! or own a render pass. The channel contract still requires
 //! `set_default_camera()` before returning and closing its own pass. Keeping
 //! the guard narrow means it cannot steal a host raw miniquad pass.
+//!
+//! A stable host sequence is: render and flush the external target, close any raw
+//! pass and restore the default camera, publish its texture, then run
+//! [`crate::App::try_frame_with_update`] and await
+//! [`macroquad::window::next_frame`]. Do not wrap an App frame in a host
+//! `begin_pass`/`end_pass` pair; ordinary frames may flush or switch internal
+//! passes even though App does not generally take ownership of host camera/pass
+//! state. Scene transition capture/composition has its own narrower OpenGL/full
+//! window contract, documented in [`crate::scene_transition`].
 
 use macroquad::prelude::{DrawMode, GlPipeline};
 use macroquad::window::get_internal_gl;

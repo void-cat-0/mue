@@ -3,9 +3,8 @@
 `App::with_scene(scene)` starts a retained Scene stack with one active top. A Scene retains its Node trees, gameplay state and resources, submits layout roots, and chooses the order of custom drawing and UI. Only the top receives Scene events and participates in update/layout/render and Node updates; covered instances remain owned but are not automatically drawn behind it. `App::new(root)` remains the Node-only convenience entry point and uses the same scheduler.
 
 ```rust
-use anyhow::Result;
 use mue_macroquad::{
-    App, Scene, SceneFrame, SceneRender, SceneRoot,
+    App, CallbackResult, Scene, SceneFrame, SceneRender, SceneRoot,
     node::{Node, IntoNode, flexbox},
     style::{Styleable, StyleableExt},
 };
@@ -13,12 +12,12 @@ use mue_macroquad::{
 struct Menu { ui: Node }
 
 impl Scene for Menu {
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         roots.push(SceneRoot::new(*self.ui, frame.viewport));
         Ok(())
     }
 
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         // Custom gameplay/background drawing can precede this call.
         render.draw(*self.ui)?;
         // Custom foreground drawing can follow it.
@@ -38,10 +37,10 @@ See the [scenes example](../examples/scenes/README.md) for a runnable gameplay/H
 A Scene has four entry points. `event` responds to notifications; `update` advances ordinary frame-driven business; `layout` submits UI roots; `render` organizes drawing. Notifications keep their own timing instead of being delayed until `update`.
 
 ```rust
-fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()>;
-fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()>;
-fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()>;
-fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()>;
+fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()>;
+fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()>;
+fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()>;
+fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()>;
 ```
 
 `SceneEvent` is exported at the crate root and contains `Enter`, `Pause`, `Resume`, `Input(&InputBatch)` and `Returned(SceneResult)`. Match only the notifications your Scene needs. The default `event` ignores them, dropping any owned returned value. `update`, `layout` and `render` also have no-op defaults. Earlier independent `enter/input/on_result/pause/resume` trait methods have been removed, not retained as wrappers; migrate their bodies to the corresponding event arms.
@@ -50,9 +49,9 @@ fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()>;
 
 A normal frame preplans Node input for the complete batch against roots actually drawn in the last successful frame. It then delivers any pending `Returned` values and required `Enter`/`Resume` notifications, automatically dispatches UI input and calls `Scene::event(SceneEvent::Input(&batch), ctx)` with the complete, unfiltered raw batch. UI dispatch does not consume events from that batch. Global transition, timeout and ready-task work runs once, followed by the optional `App::frame_with_update` host callback and `Scene::update`. An empty input batch is still a normal Input notification; Enter/Pause/Resume/Returned are not per-frame updates.
 
-The Scene submits roots through `layout`; App prepares all geometry, snapshots all active nodes across every root, calls each node update once, asks for roots again, and prepares final geometry. Finally `Scene::render` interleaves custom drawing with `SceneRender::draw(node)`. Frame-end texture deletion remains App-owned. Layout hooks and root submission may repeat; neither should advance time.
+The Scene submits roots through `layout`; App prepares all geometry, snapshots all active nodes across every root, calls each node update once, asks for roots again, and prepares final geometry. Finally `Scene::render` interleaves custom drawing with `SceneRender::draw(node)`. Frame-end texture deletion remains App-owned. Layout hooks and root submission may repeat; neither should advance time. If the window temporarily has no drawable area, a normal frame still handles input and business work but skips Node layout, Node updates, presentation and render-thread texture deletion. Animated switches wait for drawable frames. Use `try_frame_paused` when the host actually suspends.
 
-`SceneFrame` contains `dt`, host `time` and a logical window `viewport`. Global time is never rewound when returning to a Scene. Game audio/judgement may use its own clock. A switching frame skips the newly active Scene's ordinary update, but prepares/draws its roots and updates its nodes once with `dt = 0`. On the first normal host-resume frame, Scene callbacks and Node updates also receive `dt = 0`, not the time spent suspended. Initial App entry otherwise keeps the ordinary frame delta. Nodes mounted during the node-update snapshot start updating next frame. Roots newly submitted in the second layout pass are prepared and may draw immediately, without an extra node update.
+`SceneFrame` contains `dt`, host `time` and a logical window `viewport`. Global time is never rewound when returning to a Scene. Game audio/judgement may use its own clock. A switching frame skips the newly active Scene's ordinary update, but prepares/draws its roots and updates its nodes once with `dt = 0`. On the first normal host-resume frame, Scene callbacks, Node updates, and frame-driven style and Scene transitions receive `dt = 0`. Wall-clock time and timer deadlines are not reset. App measures subsequent normal-frame deltas at its own frame boundary, so it does not apply the suspended interval on the following frame. Nodes mounted during the node-update snapshot start updating next frame. Roots newly submitted in the second layout pass are prepared and may draw immediately, without an extra node update.
 
 ## Layout roots and drawing
 
@@ -60,7 +59,7 @@ The Scene submits roots through `layout`; App prepares all geometry, snapshots a
 
 Roots must be independent. Duplicate/shared nodes, ancestor/descendant submissions and a layout root attached to another Taffy tree return an error. App snapshots the whole forest before any node update, and stabilizes geometry across roots so later rect observers cannot leave an earlier root stale.
 
-Call `render.draw(root)` for each submitted tree at its intended position in the drawing sequence. The order of these calls determines Node input stacking in the next frame; the submission Vec does not. A submitted root omitted from drawing receives no new Node input. The controlled entry point rejects unsubmitted, disposed or repeatedly drawn roots and brackets the existing UI text-atlas pass. Custom camera/target/pass operations belong between complete UI draw calls and retain the [existing rendering contract](phira-integration.md#33-app-passcamera-reset).
+Call `render.draw(root)` for each submitted tree at its intended position in the drawing sequence. The order of these calls determines Node input stacking in the next frame; the submission Vec does not. A submitted root omitted from drawing receives no new Node input. The controlled entry point rejects unsubmitted, disposed or repeatedly drawn roots and brackets the existing UI text-atlas pass. Custom camera/target/pass operations belong between complete UI draw calls. See the [`mue-macroquad` Rustdoc](../mue-macroquad/src/lib.rs) and [`RenderStateGuard`](../mue-macroquad/src/render.rs) for the host rendering contract.
 
 During Scene rendering, call this entry point rather than bypassing it with `NodeRef::render()`, which cannot record displayed membership. Render callbacks should only draw or update rendering caches. Neither a borrowed root list nor reactive `batch` is a full display snapshot: keep hit-test state unchanged from drawing until the next preplanning phase.
 
@@ -74,7 +73,7 @@ Root input policy applies only to routing between Node trees. None of these poli
 | `RootInput::Interactive` | A path with pointer, gesture, custom-hit, hover or wheel handling is routed to this Node tree; empty layout space passes to lower Node roots. |
 | `RootInput::Modal` | New UI input inside the submitted bounds is blocked from lower Node roots, including empty space. Outside the bounds it can pass through. Scene raw input is unaffected. |
 
-`InputPlan` and `PointerManager` preplan and dispatch Node paths, capture and gestures; they do not assign presses to UI versus Scene. Pointer, hover and wheel use the preplanned UI paths before user callbacks. Hover/wheel-only paths also participate in Node routing; `App::hit_test_ui` retains its narrower pointer-interactive query. Wheel targets the cursor independently of pressed-button capture. A callback opening another root cannot redirect later Node events of that batch. Node capture continues from Down through Move/Up/Cancel; hiding/removing a captured UI root cancels its Node capture, not the Scene's raw events. Existing Node capture is independent of new bounds or a newly visible modal layer.
+`InputPlan` and `PointerManager` preplan and dispatch Node paths, capture and gestures; they do not assign presses to UI versus Scene. Pointer, hover and wheel use the preplanned UI paths before user callbacks. Hover/wheel-only paths also participate in Node routing; `App::hit_test_ui` retains its narrower pointer-interactive query. Wheel targets the cursor independently of pressed-button capture. A callback opening another root cannot redirect later Node events of that batch. Node capture continues from Down through Move/Up/Cancel. Detaching or hiding a node with `show_if` on the captured path, or omitting its root from drawing, revokes the capture without filtering Scene raw events. A path absent from a presented frame cannot regain the press by reappearing before the next input. Existing Node capture does not depend on current pointer bounds or a newly visible modal layer.
 
 The `SceneEvent::Input` arm receives the complete original batch in its original event order, with physical positions and touch timestamps unchanged. This includes Down on UI, wheel over UI, events inside a modal root and Move/Up without a matching Down in that Scene. Replay with `InputBatch::repeat(&mut handler)` and handle `is_interrupted()` first. Keyboard/character/native window events are also available. No new backend subscription or per-Scene queue is created.
 
@@ -82,7 +81,7 @@ App currently dispatches UI automatically before delivering `SceneEvent::Input` 
 
 Earlier revisions used `SceneInputRouter` to filter batches by UI/Scene press ownership. That filter has been withdrawn; Node capture/gesture routing remains separate from the complete Scene raw batch.
 
-First-frame Scene UI becomes eligible after its first successful drawing; Scene raw input does not wait for UI geometry. The Node-only `App::new(root)` preserves existing custom first-frame hit bounds. Resize/DPI changes do not discard batches or cancel Node capture. `frame_paused` drains suspended input and cancels old UI state; fresh input on the first normal frame is accepted. This lifecycle cleanup, and draining old input while faulted, is not UI/Scene ownership filtering.
+First-frame Scene UI becomes eligible after its first successful drawing; Scene raw input does not wait for UI geometry. The Node-only `App::new(root)` preserves existing custom first-frame hit bounds. Resize/DPI changes do not discard batches or cancel Node capture. Node hit-testing and dispatch use the event's source DPI scale when available, and the current window scale otherwise. The raw batch is not rescaled. `frame_paused` drains suspended input and cancels old UI state; fresh input on the first normal frame is accepted. This lifecycle cleanup, and draining old input while faulted, is not UI/Scene ownership filtering.
 
 ### Continuing touches across replacement
 
@@ -116,7 +115,7 @@ A normal running frame is `event(Input) → global work → update → layout/re
 | `app.reset_scene(root)` | Release the whole old stack and install a new root, without treating the intermediate empty stack as exit. |
 | `ctx.exit()` | Release the whole stack and set `is_exited()`. The host, not the library, ends its outer loop/process. |
 
-Requests can be made from context-bearing Scene callbacks. They commit after the current input batch and global/host updates, before layout/render; a pending request skips the departing Scene's ordinary update. At most one topology change commits per application frame. The chosen command is taken before boundary callbacks: requests from a retained Scene's pause or the new top's result/enter/resume wait until the next frame. A permanently removed Scene's pause requests are dropped before its owner, so they cannot accidentally pop/replace its parent or retain invalid handles; unrelated host/task requests remain separate. A later request before a boundary replaces the earlier one. Initial enter or a host-resume/result callback before ordinary input may request that frame's one safe-boundary change. Explicit exit/last pop discard remaining Scene-originated commands; the host can explicitly start a new instance afterward. `scene_count()` reports the retained count before any queued command is committed.
+Requests can be made from context-bearing Scene callbacks. They commit after the current input batch and global/host updates, before layout/render; a pending request skips the departing Scene's ordinary update. At most one topology change commits per application frame. The chosen command is taken before boundary callbacks: requests from a retained Scene's pause or the new top's result/enter/resume wait until the next frame. When an operation actually removes a Scene at that boundary, its Pause request is dropped before its owner and cannot affect its parent. If an animated operation only starts waiting, the source's Pause request becomes eligible at the next boundary and can interrupt the waiting operation. A later request before a boundary replaces the earlier one. Initial enter or a host-resume/result callback before ordinary input may request that frame's one safe-boundary change. Explicit exit/last pop discard remaining Scene-originated commands; the host can explicitly start a new instance afterward. `scene_count()` reports the retained count before any queued command is committed.
 
 A newly exposed/installed top can draw in the switching frame, but receives neither the completed old input batch nor an ordinary Scene update. Subsequent batches reach it in full, including continuing Move/Up whose Down it never saw. App does not synthesize Down, restore the old Node capture or suppress raw contacts until release.
 
@@ -125,17 +124,17 @@ A newly exposed/installed top can draw in the switching frame, but receives neit
 `SceneResult` is `Box<dyn Any>` with no Send bound; the receiving Scene defines a concrete business type and downcasts it. The default `event` drops unhandled Returned values. This is runtime type erasure, not compile-time parent/child result matching; handle an unexpected type explicitly. Pass a concrete business value to `pop_with_result`/`pop_scene_with_result`, not an already boxed `SceneResult` (which would be boxed again). Results must own or share any resources needed after the child is dropped; they cannot rely on child-owned reactive handles staying alive.
 
 ```rust
-use anyhow::{bail, Result};
-use mue_macroquad::{Scene, SceneContext, SceneEvent};
+use mue_macroquad::{CallbackResult, Scene, SceneContext, SceneEvent};
+use std::io;
 
 struct PlayResult { score: u32 }
 struct SongDetails { last_score: Option<u32> }
 impl Scene for SongDetails {
-    fn event(&mut self, event: SceneEvent<'_>, _ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, _ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         match event {
             SceneEvent::Returned(value) => {
                 let Ok(result) = value.downcast::<PlayResult>() else {
-                    bail!("expected PlayResult");
+                    return Err(io::Error::other("expected PlayResult").into());
                 };
                 self.last_score = Some(result.score);
             }
@@ -152,7 +151,9 @@ impl Scene for SongDetails {
 
 ### Host suspension and resource ownership
 
-`try_frame_paused()` drains suspended input, cancels UI, pauses the running top on the first edge and ticks timeout/tasks once. It may commit one already queued instantaneous stack request; animated requests over an entered source wait for normal rendering. It runs no layout/drawing/Node/effect updates and delivers no Enter/Resume/Returned notifications. A returned value remains queued on its receiving instance, even if that instance is covered again; multiple returns use FIFO order. The first normal frame delivers those Returned values before Enter/Resume. A result receiver that never entered (for example after host-side stack changes while suspended) receives its pending Returned values before first Enter, not a fake Resume. An unchanged top retains its last displayed UI geometry so fresh input is accepted immediately on host resume; topology changes clear that eligibility until the new top draws.
+`try_frame_paused()` drains suspended input, cancels UI, pauses the running top on the first edge and, if that succeeds, ticks timeout/tasks once. It may commit one already queued instantaneous stack request; animated requests over an entered source wait for normal rendering. It runs no layout/drawing/Node/effect updates and delivers no Enter/Resume/Returned notifications. A returned value remains queued on its receiving instance, even if that instance is covered again; multiple returns use FIFO order. The first normal frame delivers those Returned values before Enter/Resume. A result receiver that never entered (for example after host-side stack changes while suspended) receives its pending Returned values before first Enter, not a fake Resume. A waiting AfterSwitch request can resume the old top for input and pause it again at the same frame's switch boundary. An unchanged top retains its last displayed UI geometry so fresh input is accepted immediately on host resume; topology changes clear that eligibility until the new top draws.
+
+For external playback, stop immediately on `Pause`, but treat `Resume` as eligibility. Start audio from the first ordinary `update` in which the session should run, after processing user pause or stop actions. A switch can commit after the resumed Scene sees input but before it gets an update.
 
 App does not pause/cancel arbitrary tasks merely because their Scene is covered. Scene-owned Task handles stay owned; dropping them requests cancellation under the existing caller-owned rules, while detached or host-side work may continue. Field/drop ownership must keep resources alive as long as needed. Normal permanent removal pauses a running top before releasing it, but App destruction does not run fallible lifecycle callbacks. Stacks are released top-down. Optional draw-only [Scene transitions](scene-transitions.md) can delay a stack commit; asynchronous lifecycle callbacks, cross-Scene business/input propagation and automatic audio/contact policy are not implemented.
 
@@ -160,7 +161,7 @@ App does not pause/cancel arbitrary tasks merely because their Scene is covered.
 
 The [song-transition application](<../examples/song-transition/README.md>) demonstrates a concrete ownership pattern with existing APIs, not a new framework container. Its [host](<../examples/song-transition/src/application.rs>) owns App, an immutable `Rc<Catalog>` and Settings; Settings keeps an independent `OwnedScope` alive for theme/reduced-motion signals. App is the first field and therefore drops before those external resources. Library/Details constructors receive read-only settings and an editor-Scene factory; only SettingsScene receives writable access.
 
-Each independently owned view explicitly provides a typed `ReadSettings` in its detached construction scope. Deep UI components inject during synchronous build and retain the handles they need; Scene callbacks do not automatically enter a Scene scope, and scope context follows the construction chain rather than the Scene stack. Local maps/computed belong to the view or node owner. Theme bindings update retained UI without resetting selection/scroll, while artwork transitions sample the reduced-motion preference at request time. Settings pops without a result; Details still returns its typed selected index even when animation is bypassed.
+Each independently owned view explicitly provides a typed `ReadSettings` in its detached construction scope. Deep UI components inject during synchronous build and retain the handles they need; Scene callbacks do not automatically enter a Scene scope, and scope context follows the construction chain rather than the Scene stack. Local maps/computed belong to the view or node owner. Theme and [Fluent localization](<i18n.md>) bindings update retained UI without resetting selection/scroll, while artwork transitions sample the reduced-motion preference at request time. Settings pops without a result; Details still returns its typed selected index even when animation is bypassed. Locale/namespace Translators are passed explicitly to independently owned views; only SettingsScene receives the language-changing capability.
 
 Signal/Scope copies do not keep their owner alive; owning Rc assets do. Keep the global owner alive through all consumers and teardown. This example has no asynchronous tasks: if a consumer adds caller-owned or host tasks, cancel/finish them and drain foreground cleanup before disposing shared reactive resources. Dropping App or a Task handle is not a general synchronous task join.
 
@@ -174,6 +175,8 @@ The consumer submits roots with `RootInput::None` until the actual current pictu
 
 ## Errors
 
-Scene callbacks return `anyhow::Result<()>`. `App::try_frame` / `try_frame_with_update` / `try_frame_paused` return errors with phase context. Any callback error stops the rest of that frame, clears displayed-root eligibility, cancels UI capture/hover and marks the App faulted. Later ordinary frames drain old input and return an error without retrying the failed Scene. The host can explicitly call `replace_scene` to replace the failed top or `reset_scene` to abandon the whole stack; a recovery frame drains old input. Push/pop cannot recover a faulted App, and explicit exit is still allowed. An error from any event arm stops scheduling just like update/layout/render errors. Error context still identifies the notification phase (`Scene input/result/enter/pause/resume`) rather than hiding it behind a generic event error. A selected transition is not committed if the old pause fails; failure after pop/installation does not roll back already dropped Scenes or business side effects. Failed results are not retried; reset/drop releases any remaining pending values. Faulted-frame draining and UI cancellation are lifecycle cleanup, not a press-ownership filter on a normal Scene raw batch. This does not restore a partially rendered framebuffer or recover panics.
+Scene callbacks return `CallbackResult<()>` (`Result<(), mue_macroquad::BoxError>`), so application-owned `thiserror` errors can propagate with `?`. Callback failures are represented by `CallbackError` and retain their scheduling phase and source. `SceneRender::draw` and Scene layout invariants use `SceneError`; transition picture/backend/material failures use `TransitionError`. `App::try_frame` / `try_frame_with_update` / `try_frame_paused` return `mue_macroquad::Result<()>` with `AppError` as its error type. `AppError` wraps the domain errors. A `SceneError` propagated from `SceneRender::draw` through a render callback appears as the source of a `CallbackError`.
+
+Any callback error stops the rest of that frame, clears displayed-root eligibility, cancels UI capture/hover and marks the App faulted. Later ordinary frames drain old input and return `Error::Faulted` until the host requests recovery. The host can explicitly call `replace_scene` to replace the failed top or `reset_scene` to abandon the whole stack; a recovery frame drains old input. Push/pop cannot recover a faulted App. The host can also drop it; its fallible lifecycle callbacks do not run during destruction. A faulted frame without recovery drains input but does not drive ordinary timeouts or tasks, including while suspended. An error from any event arm stops scheduling just like update/layout/render errors. Error context still identifies the notification phase (`Scene input/result/enter/pause/resume`) rather than hiding it behind a generic event error. A selected transition is not committed if the old pause fails; failure after pop/installation does not roll back already dropped Scenes or business side effects. Failed results are not retried; reset/drop releases any remaining pending values. Faulted-frame draining and UI cancellation are lifecycle cleanup, not a press-ownership filter on a normal Scene raw batch. This does not restore a partially rendered framebuffer or recover panics.
 
 `frame`, `frame_with_update` and `frame_paused` retain convenience signatures and panic on a returned Scene error. Fallible applications should use the `try_` variants. Existing Node hook/layout panics still follow the project's fatal-panic policy.

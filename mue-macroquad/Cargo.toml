@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-doctest = false
+doctest = true
 
 [dependencies]
 bitflags = "2.11.0"
