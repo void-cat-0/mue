@@ -7,18 +7,19 @@ use crate::{
     artwork::{self, Anchor, Surface},
     catalog::Song,
     input::{DetailsAction, LibraryAction},
+    localization::ReadTranslations,
     settings::ReadSettings,
     ui::{settings_status, themed_button},
 };
-use anyhow::Result;
 use mue_components::{ScrollOptions, flexbox, scroll_area, text};
 use mue_core::{
     effect::computed,
     scope::{OwnedScope, provide},
     signal::{Access, Signal, signal},
 };
+use mue_i18n::{FluentArgs, tl};
 use mue_macroquad::{
-    RootInput, SceneRender, SceneRoot,
+    Result, RootInput, SceneRender, SceneRoot,
     layout::use_layout,
     math::{Rect, Vector},
     node::{IntoNode, Node, NodeRef},
@@ -42,6 +43,7 @@ impl LibraryView {
     pub fn new(
         songs: &[Song],
         settings: ReadSettings,
+        translations: ReadTranslations,
         commands: Rc<Cell<Option<LibraryAction>>>,
     ) -> Self {
         let owner = OwnedScope::new();
@@ -52,11 +54,29 @@ impl LibraryView {
         let clip = Rc::new(Cell::new(Rect::default()));
         let (root, header, offset, selected) = owner.run(|| {
             provide(settings);
+            provide(translations.clone());
             let palette = settings.theme.map(|theme| theme.palette());
             let offset = signal(Vector::ZERO);
             let selected = signal(None::<usize>);
+            let count = songs.len();
+            // Build once in this live consumer scope. Locale and selection update this same Prop.
+            let summary = tl!(translations.library, "summary",
+                "count" => count,
+                "selected" => selected.get().map_or(0, |index| index + 1),
+            );
             let rows = songs.iter().enumerate().map(|(index, song)| {
                 let image = artwork_card(song, index, commands.clone(), card_geometry[index].clone(), clip.clone());
+                let description = translations.common.text(song.description_key);
+                let artist = song.artist;
+                let artist_label = tl!(translations.common, "artist-description",
+                    "artist" => artist,
+                    // A reactive Rc<str> becomes an owned Fluent argument on every evaluation.
+                    "description" => description.get_clone().to_string(),
+                );
+                let (bpm, difficulty, level) = (song.bpm, song.difficulty, song.level);
+                let level_label = tl!(translations.common, "track-level",
+                    "bpm" => bpm, "difficulty" => difficulty, "level" => level,
+                );
                 let background = computed(move |_| {
                     let colors = palette.get();
                     Brush::Solid(if selected.get() == Some(index) {
@@ -71,6 +91,7 @@ impl LibraryView {
                         align-items: center; padding: 16px; gap: 28px; border-radius: 22px;
                     })
                     .background(background)
+                    .font_family("Noto Sans CJK SC")
                     // Rows are prebuilt before the scroll root; bind their own foreground.
                     .color(palette.map(|colors| Brush::Solid(colors.foreground)))
                     .children((image, flexbox()
@@ -78,31 +99,31 @@ impl LibraryView {
                         .children((
                             text(format!("{:02}  {}", index + 1, song.title)).font_size(28.)
                                 .color(palette.map(|colors| Brush::Solid(colors.foreground))),
-                            text(song.artist).color(palette.map(|colors| Brush::Solid(colors.muted))).font_size(17.),
-                            text(song.level).color(palette.map(|colors| Brush::Solid(colors.foreground))).font_size(16.),
-                            text("Click the artwork to open details").color(palette.map(|colors| Brush::Solid(colors.muted))).font_size(14.),
+                            text(artist_label).color(palette.map(|colors| Brush::Solid(colors.muted))).font_size(17.),
+                            text(level_label).color(palette.map(|colors| Brush::Solid(colors.foreground))).font_size(16.),
+                            text(tl!(translations.library, "open-artwork")).color(palette.map(|colors| Brush::Solid(colors.muted))).font_size(14.),
                         ))))
                     .into_node()
             }).collect::<Vec<_>>();
             let root = scroll_area().size_full().offset(offset)
                 .options(ScrollOptions { momentum: false, mouse_drag: true, ..Default::default() })
                 .content_style(Style::new().gap(16.).padding((8.,)).flex_column())
-                .font_family("Noto Sans").color(palette.map(|colors| Brush::Solid(colors.foreground))).children(rows).into_node();
+                .font_family("Noto Sans CJK SC").color(palette.map(|colors| Brush::Solid(colors.foreground))).children(rows).into_node();
             let header = flexbox().style(mue_macroquad::style! {
                 width: 100%; height: 100%; flex-direction: column; gap: 9px;
-                font-family: "Noto Sans";
+                font-family: "Noto Sans CJK SC";
             }).color(palette.map(|colors| Brush::Solid(colors.foreground))).children((
                 flexbox().w_full().items_center().justify_between().children((
-                    text("SONG LIBRARY").font_size(34.).line_height(42.)
+                    text(tl!(translations.library, "title")).font_size(34.).line_height(42.)
                         .color(palette.map(|colors| Brush::Solid(colors.foreground))),
-                    themed_button("Settings  [S]", {
+                    themed_button(tl!(translations.common, "open-settings"), {
                         let commands = commands.clone();
                         move || commands.set(Some(LibraryAction::Settings))
                     }),
                 )),
-                text("Artwork expansion / retained list state").font_size(16.).line_height(21.).color(palette.map(|colors| Brush::Solid(colors.muted))),
+                text(summary).font_size(16.).line_height(21.).color(palette.map(|colors| Brush::Solid(colors.muted))),
                 settings_status(),
-                text("Wheel / drag / arrows: scroll    1-3: open visible artwork    Esc: back    Q: exit")
+                text(tl!(translations.library, "shortcuts"))
                     .font_size(13.).line_height(18.).color(palette.map(|colors| Brush::Solid(colors.muted))),
             )).into_node();
             (root, header, offset, selected)
@@ -211,16 +232,30 @@ impl DetailsView {
     pub fn new(
         song: &Song,
         settings: ReadSettings,
+        translations: ReadTranslations,
         commands: Rc<Cell<Option<DetailsAction>>>,
     ) -> Self {
         let owner = OwnedScope::new();
         let root = owner.run(|| {
             provide(settings);
+            provide(translations.clone());
             let palette = settings.theme.map(|theme| theme.palette());
+            let description = translations.common.text(song.description_key);
+            let artist = song.artist;
+            let artist_label = tl!(translations.common, "artist-description",
+                "artist" => artist, "description" => description.get_clone().to_string(),
+            );
+            let (bpm, difficulty, level) = (song.bpm, song.difficulty, song.level);
+            let level_label = tl!(translations.common, "track-level",
+                "bpm" => bpm, "difficulty" => difficulty, "level" => level,
+            );
+            // The Chinese catalog intentionally omits this nonessential tip. Bind retains
+            // the complete result, including resolved_locale; project text in this scope.
+            let artwork_tip = translations.details.bind("artwork-tip", FluentArgs::new);
             flexbox()
                 .style(mue_macroquad::style! {
                     width: 100%; height: 100%; flex-direction: column; justify-content: center;
-                    padding: 48px; font-family: "Noto Sans";
+                    padding: 48px; font-family: "Noto Sans CJK SC";
                 })
                 .color(palette.map(|colors| Brush::Solid(colors.foreground)))
                 .children(
@@ -231,36 +266,36 @@ impl DetailsView {
                         })
                         .background(palette.map(|colors| Brush::Solid(colors.panel)))
                         .children((
-                            text("TRACK DETAILS")
+                            text(tl!(translations.details, "title"))
                                 .font_size(15.)
                                 .color(palette.map(|colors| Brush::Solid(colors.muted))),
                             text(song.title)
                                 .font_size(46.)
                                 .color(palette.map(|colors| Brush::Solid(colors.foreground))),
-                            text(song.artist)
+                            text(artist_label)
                                 .font_size(23.)
                                 .color(palette.map(|colors| Brush::Solid(colors.foreground))),
-                            text(song.level)
+                            text(level_label)
                                 .font_size(18.)
                                 .color(palette.map(|colors| Brush::Solid(colors.foreground))),
-                            text(
-                                "Return to the same song card, with the original list position.
-The artwork is reused throughout the transition.",
-                            )
-                            .font_size(17.)
-                            .color(palette.map(|colors| Brush::Solid(colors.foreground))),
+                            text(tl!(translations.details, "return-description"))
+                                .font_size(17.)
+                                .color(palette.map(|colors| Brush::Solid(colors.foreground))),
+                            text(artwork_tip.map(|translation| translation.text))
+                                .font_size(14.)
+                                .color(palette.map(|colors| Brush::Solid(colors.muted))),
                             settings_status(),
                             flexbox().gap(16.).children((
-                                themed_button("Back to song library", {
+                                themed_button(tl!(translations.details, "back-library"), {
                                     let commands = commands.clone();
                                     move || commands.set(Some(DetailsAction::Back))
                                 }),
-                                themed_button("Settings  [S]", {
+                                themed_button(tl!(translations.common, "open-settings"), {
                                     let commands = commands.clone();
                                     move || commands.set(Some(DetailsAction::Settings))
                                 }),
                             )),
-                            text("Esc: return    S: settings    Q: exit")
+                            text(tl!(translations.details, "shortcuts"))
                                 .font_size(14.)
                                 .color(palette.map(|colors| Brush::Solid(colors.muted))),
                         )),

@@ -32,7 +32,7 @@ Ready requires an explicit Start. Starting does not advance the timeline in that
 
 Results keep the same Rc Session, Rc Prepared and GPU texture. Retry explicitly starts another attempt without decoding or uploading again. The returned result owns only business data and remains independent of those resources after PlayFlow is dropped.
 
-User pause and Scene lifecycle pause remain distinct. Pause/Resume notifications change lifecycle eligibility without clearing a user's pause. Time advancement uses only the normal `SceneFrame.dt`; App's host-resume zero-delta rule and the model's first-resume rule are preserved. The example's outer host runs only the ordinary App loop, with no simulated pause or verification script.
+User pause and Scene lifecycle pause remain distinct. `Pause` stops the session immediately. `Resume` makes it eligible to run; the session starts running again only in its next ordinary, presentation-eligible update and only if the user has not paused it. An outgoing Scene can therefore receive `Resume` and input without restarting its session. The first start/resume update still discards its elapsed delta. This example models the timing; it does not play audio.
 
 ## Presentation and Scene transitions
 

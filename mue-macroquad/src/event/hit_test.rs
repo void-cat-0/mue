@@ -19,6 +19,7 @@ pub type HitTestFn = Rc<dyn Fn(NodeRef, Vector, &mut HitTestResult)>;
 pub struct HitTestResult {
     path: IndexSet<NodeRef>,
     frames: Vec<(NodeRef, Rc<[NodeRef]>)>,
+    ran_custom: bool,
 }
 
 impl HitTestResult {
@@ -32,9 +33,15 @@ impl HitTestResult {
 }
 
 pub fn hit_test(node: NodeRef, pos: Vector) -> IndexSet<NodeRef> {
+    hit_test_with_cache(node, pos).0
+}
+
+/// Return the path and whether it can be reused at the same position in this
+/// input batch. Custom hit tests may depend on mutable external state.
+pub(crate) fn hit_test_with_cache(node: NodeRef, pos: Vector) -> (IndexSet<NodeRef>, bool) {
     let mut result = HitTestResult::default();
-    hit_test_into(node, pos, &mut result);
-    result.path
+    visit(node, pos, &mut result);
+    (result.path, !result.ran_custom)
 }
 
 /// Whether `pos` hits a node that wants pointer input.
@@ -71,11 +78,15 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
     {
         return false;
     }
+    visit(node, pos, result)
+}
+
+fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
     let snapshot = Runtime::with(|rt| {
         let nodes = rt.nodes.borrow();
         let n = nodes.get(node.id)?;
         Some((
-            n.effective_transform(),
+            n.transform(),
             n.layout.rect,
             n.clip,
             n.clip_radius,
@@ -87,6 +98,7 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
     let Some((transform, rect, clip, clip_radius, clip_sector, children, custom)) = snapshot else {
         return false;
     };
+    let transform = transform.resolve();
     if !transform.is_finite() || transform.determinant().abs() < f32::EPSILON {
         return false;
     }
@@ -109,28 +121,26 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
     } else {
         children.get_clone_untracked()
     };
-    result.frames.push((node, children.clone()));
-    if let Some(custom) = custom {
+    let hit = if let Some(custom) = custom {
+        result.frames.push((node, children));
         custom(node, pos, result);
+        result.frames.pop();
+        result.ran_custom = true;
+        !result.path.is_empty()
     } else {
-        // Layout preparation has baked scroll offsets into children's canvas rects.
-        for &child in children.iter().rev() {
-            if hit_test_into(child, pos, result) {
-                break;
-            }
-        }
-        // Layoutless containers remain traversable, but are not infinite blockers.
-        if !rect.is_null() && rect.get_untracked().contains(&pos) {
-            result.hit_self(node);
-        }
-    }
-    result.frames.pop();
-    if !result.path.is_empty() {
+        // Preserve the parent list for custom callbacks deeper in this subtree.
+        result.frames.push((node, children.clone()));
+        let child_hit = children
+            .iter()
+            .rev()
+            .any(|&child| visit(child, pos, result));
+        result.frames.pop();
+        child_hit || (!rect.is_null() && rect.get_untracked().contains(&pos))
+    };
+    if hit {
         result.path.insert(node);
-        true
-    } else {
-        false
     }
+    hit
 }
 
 pub fn set_hit_test_fn(hit_test: HitTestFn) {

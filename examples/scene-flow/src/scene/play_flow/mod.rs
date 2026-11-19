@@ -5,11 +5,10 @@ use crate::{
     input::PlayFlowKeys,
     ui,
 };
-use anyhow::Result;
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
+    CallbackResult, RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -220,7 +219,7 @@ impl Drop for PlayFlow {
 }
 
 impl Scene for PlayFlow {
-    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         match event {
             SceneEvent::Pause => {
                 self.lifecycle_paused = true;
@@ -229,14 +228,7 @@ impl Scene for PlayFlow {
                     session.pause();
                 }
             }
-            SceneEvent::Resume => {
-                self.lifecycle_paused = false;
-                if !self.user_paused
-                    && let Some(session) = &self.session
-                {
-                    session.resume();
-                }
-            }
+            SceneEvent::Resume => self.lifecycle_paused = false,
             SceneEvent::Input(input) => {
                 self.keys.read(input);
                 // Back may revoke loading even while the Scene crossfade is active.
@@ -267,7 +259,7 @@ impl Scene for PlayFlow {
         Ok(())
     }
 
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.observe_context(ctx);
         let action = self.action.replace(Action::None);
         if self.lifecycle_paused {
@@ -300,11 +292,8 @@ impl Scene for PlayFlow {
                 }
                 Action::TogglePause if self.phase == Phase::Running => {
                     self.user_paused = !self.user_paused;
-                    let session = self.session.as_ref().unwrap();
                     if self.user_paused {
-                        session.pause();
-                    } else {
-                        session.resume();
+                        self.session.as_ref().unwrap().pause();
                     }
                 }
                 Action::ExitAttempt if self.phase == Phase::Running => {
@@ -317,18 +306,18 @@ impl Scene for PlayFlow {
         if self.phase == Phase::Loading {
             self.accept_loading(ctx);
         }
-        if self.phase == Phase::Running
-            && self.is_presented(ctx)
-            && let Some(result) = self.session.as_ref().unwrap().update(ctx.frame.dt)
-        {
-            self.result = Some(result);
-            self.set_phase(Phase::Results);
+        if self.phase == Phase::Running && !self.user_paused && self.is_presented(ctx) {
+            // Resume may be followed by Pause without a business update.
+            if let Some(result) = self.session.as_ref().unwrap().update_running(ctx.frame.dt) {
+                self.result = Some(result);
+                self.set_phase(Phase::Results);
+            }
         }
         self.refresh_view();
         Ok(())
     }
 
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         let input = if self.input_enabled {
             RootInput::Interactive
         } else {
@@ -338,7 +327,7 @@ impl Scene for PlayFlow {
         Ok(())
     }
 
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         ui::paint_base(render);
         let v = render.frame.viewport;
         if let Some(texture) = &self.texture {

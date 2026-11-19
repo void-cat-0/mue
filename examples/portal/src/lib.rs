@@ -271,6 +271,7 @@ fn ui(
                         align-items: center;
                     })
                     .shadow(Shadow::new(18., 16.))
+                    .shadow_cache(true)
                     .children((
                         heading(title).style(mue_macroquad::style! {
                             font-family: {font.clone()};

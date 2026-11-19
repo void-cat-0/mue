@@ -9,17 +9,16 @@ use mue_core::{batch, signal::Access};
 use std::rc::Rc;
 use taffy::{AvailableSpace, Size};
 
-/// Read-only evidence that a prepared tree still has its published geometry.
-/// Empty snapshots are current; callers validate root liveness separately.
+/// Geometry actually published during preparation, before any later root is run.
 #[derive(Default)]
 pub(crate) struct GeometrySnapshot {
-    root: Option<NodeRef>,
     published: Vec<PublishedGeometry>,
-    layout_roots: Vec<(taffy::NodeId, bool)>,
+    layout_roots: Vec<taffy::NodeId>,
 }
 
 struct PublishedGeometry {
     node: NodeRef,
+    parent: Option<NodeRef>,
     rect: Option<Rect>,
     offset: Vector,
     children: Rc<[NodeRef]>,
@@ -54,10 +53,18 @@ impl NodeRef {
     /// Like [`Self::prepare_layout`], call outside an enclosing `mue_core::batch`
     /// so layout hooks and rect observers can converge before this returns.
     pub fn prepare_layout_in(&self, bounds: Rect) {
+        self.prepare_layout_snapshot(bounds, &mut GeometrySnapshot::default());
+    }
+
+    pub(crate) fn prepare_layout_snapshot(
+        &self,
+        bounds: Rect,
+        snapshot: &mut GeometrySnapshot,
+    ) -> bool {
         let available_size = bounds.size();
         for _ in 0..64 {
             if !self.is_live() {
-                return;
+                return false;
             }
             self.resolve_font_sizes();
             let layout_roots = self.layout_roots();
@@ -81,31 +88,25 @@ impl NodeRef {
                 }
                 changed = self.sync_layout();
             });
-            let dirty = || {
-                Runtime::with(|rt| {
-                    self.layout_roots()
-                        .iter()
-                        .any(|&id| rt.taffy.borrow().dirty(id).unwrap())
-                })
-            };
-            if changed || dirty() {
+            if changed || !layout_is_clean(&self.layout_roots()) {
                 continue;
             }
 
-            let mut published = Vec::new();
+            snapshot.published.clear();
             let mut complete = false;
-            batch(|| complete = self.publish_geometry(bounds.min(), &mut published));
+            batch(|| complete = self.publish_geometry(None, bounds.min(), &mut snapshot.published));
             if !self.is_live() {
-                return;
+                return false;
             }
             if !complete {
                 continue;
             }
-            // Rect observers run when the batch flushes. They can change Taffy
-            // inputs, child lists or offsets; offsets alone do not dirty Taffy.
             self.resolve_font_sizes();
-            if published.iter().all(PublishedGeometry::is_current) && !dirty() {
-                return;
+            if snapshot.published.iter().all(PublishedGeometry::is_current) {
+                self.collect_layout_roots(&mut snapshot.layout_roots);
+                if layout_is_clean(&snapshot.layout_roots) {
+                    return true;
+                }
             }
         }
         panic!("layout dependencies did not stabilize before rendering");
@@ -116,6 +117,12 @@ impl NodeRef {
     }
 
     fn layout_roots(&self) -> Vec<taffy::NodeId> {
+        let mut roots = Vec::new();
+        self.collect_layout_roots(&mut roots);
+        roots
+    }
+
+    fn collect_layout_roots(&self, roots: &mut Vec<taffy::NodeId>) {
         fn collect(node: NodeRef, roots: &mut Vec<taffy::NodeId>) {
             let state = Runtime::with(|rt| {
                 let nodes = rt.nodes.borrow();
@@ -133,9 +140,8 @@ impl NodeRef {
                 }
             }
         }
-        let mut roots = Vec::new();
-        collect(*self, &mut roots);
-        roots
+        roots.clear();
+        collect(*self, roots);
     }
 
     fn layout_tree_is_dirty(&self) -> bool {
@@ -153,7 +159,12 @@ impl NodeRef {
         })
     }
 
-    fn publish_geometry(&self, mut origin: Vector, published: &mut Vec<PublishedGeometry>) -> bool {
+    fn publish_geometry(
+        &self,
+        parent: Option<NodeRef>,
+        mut origin: Vector,
+        published: &mut Vec<PublishedGeometry>,
+    ) -> bool {
         // A layout hook can mount a new subtree. Never run its geometry hooks
         // against uncomputed zero sizes: return to measurement first.
         if self.layout_tree_is_dirty() {
@@ -195,105 +206,51 @@ impl NodeRef {
         }
         published.push(PublishedGeometry {
             node: *self,
+            parent,
             rect: geometry.map(|(_, rect)| rect),
             offset,
             children: children.clone(),
         });
         for child in children.iter() {
-            if !child.publish_geometry(origin - offset, published) {
+            if !child.publish_geometry(Some(*self), origin - offset, published) {
                 return false;
             }
         }
         true
     }
+}
 
-    /// Freeze the live tree in parent-first order without invoking frame hooks.
-    /// Keep repeated handles so App can reject overlapping scene trees.
-    pub(crate) fn frame_nodes(&self) -> Vec<NodeRef> {
-        fn collect(node: NodeRef, nodes: &mut Vec<NodeRef>) {
-            let children =
-                Runtime::with(|rt| rt.nodes.borrow().get(node.id).map(|node| *node.children));
-            let Some(children) = children else {
-                return;
-            };
-            let children = child_list(children);
-            if !node.is_live() {
-                return;
-            }
-            nodes.push(node);
-            for &child in children.iter() {
-                collect(child, nodes);
-            }
-        }
-        let mut nodes = Vec::new();
-        collect(*self, &mut nodes);
-        nodes.retain(NodeRef::is_live);
-        nodes
-    }
-
-    /// Capture published rects, offsets, child lists and Taffy dirtiness without
-    /// computing layout or invoking layout hooks. A dead root has an empty snapshot.
-    pub(crate) fn prepared_geometry(&self) -> GeometrySnapshot {
-        if !self.is_live() {
-            return GeometrySnapshot::default();
-        }
-        let published = self
-            .frame_nodes()
-            .into_iter()
-            .filter_map(PublishedGeometry::capture)
-            .collect();
-        if !self.is_live() {
-            return GeometrySnapshot::default();
-        }
-        let layout_roots = self
-            .layout_roots()
-            .into_iter()
-            .map(|id| (id, Runtime::with(|rt| rt.taffy.borrow().dirty(id).unwrap())))
-            .collect();
-        GeometrySnapshot {
-            root: Some(*self),
-            published,
-            layout_roots,
-        }
-    }
+fn layout_is_clean(roots: &[taffy::NodeId]) -> bool {
+    Runtime::with(|rt| {
+        let taffy = rt.taffy.borrow();
+        roots
+            .iter()
+            .all(|&id| taffy.dirty(id).is_ok_and(|dirty| !dirty))
+    })
 }
 
 impl GeometrySnapshot {
-    /// Whether this tree is still clean and matches the captured publication.
-    pub(crate) fn is_current(&self) -> bool {
-        let Some(root) = self.root else {
-            return true;
-        };
+    pub(crate) fn nodes(&self) -> impl Iterator<Item = NodeRef> + '_ {
+        self.published.iter().map(|geometry| geometry.node)
+    }
+
+    pub(crate) fn edges(&self) -> impl Iterator<Item = (NodeRef, Option<NodeRef>)> + '_ {
+        self.published
+            .iter()
+            .map(|geometry| (geometry.node, geometry.parent))
+    }
+
+    /// Compare the published values before checking Taffy's dirtiness: reactive
+    /// reads can run observers and dirty the tree.
+    pub(crate) fn is_current(&self, root: NodeRef) -> bool {
         root.is_live()
             && self.published.iter().all(PublishedGeometry::is_current)
-            && root
-                .layout_roots()
-                .into_iter()
-                .eq(self.layout_roots.iter().map(|&(id, _)| id))
-            && Runtime::with(|rt| {
-                let taffy = rt.taffy.borrow();
-                self.layout_roots
-                    .iter()
-                    .all(|&(id, dirty)| !dirty && taffy.dirty(id).is_ok_and(|dirty| !dirty))
-            })
+            && root.layout_roots() == self.layout_roots
+            && layout_is_clean(&self.layout_roots)
     }
 }
 
 impl PublishedGeometry {
-    fn capture(node: NodeRef) -> Option<Self> {
-        let (rect, offset, children) = Runtime::with(|rt| {
-            let nodes = rt.nodes.borrow();
-            let node = nodes.get(node.id)?;
-            Some((node.layout.rect, node.child_offset, *node.children))
-        })?;
-        Some(Self {
-            node,
-            rect: rect.try_get_untracked(),
-            offset: offset.map_or(Vector::ZERO, |value| value.get_untracked()),
-            children: child_list(children),
-        })
-    }
-
     fn is_current(&self) -> bool {
         let state = Runtime::with(|rt| {
             let nodes = rt.nodes.borrow();

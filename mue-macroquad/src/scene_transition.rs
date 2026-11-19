@@ -10,9 +10,16 @@
 //! picture-viewport restriction and start in the default camera. Composite and
 //! capture draws must keep the supplied target camera active. All draws must
 //! balance their model-matrix stack; raw miniquad passes are not supported inside
-//! these boundaries. The host enters with the default camera and no raw pass.
-//! App/cache boundaries flush and restore the default camera, rather than
-//! preserving an arbitrary caller camera or raw pass.
+//! these boundaries. The host enters with the default camera, no active model
+//! transform and no raw pass.
+//! App/cache boundaries flush and restore the default camera and the caller's
+//! logical material, mode, scissor and viewport, not arbitrary backend state.
+//! Keep materials used in queued draws alive through the boundary flush. On
+//! ordinary Scene draws, do not leave a Scene-owned material selected after
+//! returning: that Scene may be dropped before the next drawing. App picture
+//! passes start with all channels enabled, and effect boundaries restore them
+//! on return. Within a callback or ordinary host draw, submit an all-channel
+//! pipeline before clearing after a custom OpenGL color-write mask.
 
 mod clock;
 mod picture;
@@ -20,7 +27,7 @@ mod picture;
 pub(crate) use clock::PhaseClock;
 pub(crate) use picture::PictureCache;
 
-use anyhow::{Result, bail};
+use crate::CallbackResult;
 use macroquad::texture::Texture2D;
 
 use crate::{math::Rect, transition::Transition};
@@ -67,8 +74,8 @@ pub struct ScenePictures<'a> {
     pub to: &'a Texture2D,
 }
 
-type CompositeDraw = dyn for<'a> FnMut(TransitionFrame, ScenePictures<'a>) -> Result<()>;
-type OverlayDraw = dyn FnMut(TransitionFrame) -> Result<()>;
+type CompositeDraw = dyn for<'a> FnMut(TransitionFrame, ScenePictures<'a>) -> CallbackResult<()>;
+type OverlayDraw = dyn FnMut(TransitionFrame) -> CallbackResult<()>;
 
 /// An owned draw callback and timing, not a Scene or a lifecycle controller.
 pub struct SceneTransition {
@@ -96,7 +103,7 @@ impl SceneTransition {
     /// callback should likewise be initialized lazily during drawing.
     pub fn composite(
         curve: Transition,
-        draw: impl for<'a> FnMut(TransitionFrame, ScenePictures<'a>) -> Result<()> + 'static,
+        draw: impl for<'a> FnMut(TransitionFrame, ScenePictures<'a>) -> CallbackResult<()> + 'static,
     ) -> Self {
         Self {
             timing: TransitionTiming::AfterSwitch(curve),
@@ -108,7 +115,7 @@ impl SceneTransition {
     /// `AroundSwitch` presents the exit endpoint before App commits the switch.
     pub fn overlay(
         timing: TransitionTiming,
-        draw: impl FnMut(TransitionFrame) -> Result<()> + 'static,
+        draw: impl FnMut(TransitionFrame) -> CallbackResult<()> + 'static,
     ) -> Self {
         Self {
             timing,
@@ -122,13 +129,5 @@ impl SceneTransition {
 
     pub(crate) fn is_composite(&self) -> bool {
         !matches!(self.draw, Draw::Overlay(_))
-    }
-
-    // PictureCache supplies the camera/state boundary.
-    pub(crate) fn draw_overlay(&mut self, frame: TransitionFrame) -> Result<()> {
-        match &mut self.draw {
-            Draw::Overlay(draw) => draw(frame),
-            _ => bail!("a composite transition requires Scene pictures"),
-        }
     }
 }

@@ -1,6 +1,5 @@
 //! Exclusive picture passes. This cache owns no Scene and no transition clock.
 
-use anyhow::{Context, Result, ensure};
 use macroquad::{
     material::{Material, MaterialParams, gl_use_default_material, gl_use_material, load_material},
     miniquad::{
@@ -9,30 +8,21 @@ use macroquad::{
     },
     prelude::{
         BLACK, Camera2D, DrawMode, DrawTextureParams, FilterMode, RenderTarget, Texture2D, WHITE,
-        clear_background, draw_rectangle, draw_texture_ex, render_target, set_camera,
-        set_default_camera, vec2,
+        draw_rectangle, draw_texture_ex, render_target, set_camera, set_default_camera, vec2,
     },
     window::{get_internal_gl, screen_dpi_scale},
 };
 
-use crate::{math::Rect, render::RenderStateGuard};
+use crate::{CallbackError, Result, TransitionError, math::Rect, render::RenderStateGuard};
 
 use super::{Draw, ScenePictures, SceneTransition, TransitionFrame};
 
-/// Source, live and last successfully presented composite are separate targets.
-/// All begin/finish boundaries require exclusive use of macroquad drawing.
-/// Capture callbacks keep the supplied target camera and a balanced model stack.
+type TransitionResult<T> = std::result::Result<T, TransitionError>;
+
+/// Owns only pictures and their reusable materials, never an open pass.
 pub(crate) struct PictureCache {
-    key: Option<PictureKey>,
     targets: Option<Targets>,
-    copy_material: Option<Material>,
-    opaque_material: Option<Material>,
-    crossfade_material: Option<Material>,
-    boundary: Option<DrawBoundary>,
-    drawing: Option<Capture>,
-    source_ready: bool,
-    live_ready: bool,
-    presented_ready: bool,
+    materials: Option<PictureMaterials>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,298 +32,240 @@ struct PictureKey {
 }
 
 struct Targets {
-    from: RenderTarget,
-    to: RenderTarget,
-    presented: RenderTarget,
+    key: PictureKey,
+    source: Option<RenderTarget>,
+    live: RenderTarget,
+    output: Option<OutputTarget>,
 }
 
-impl Targets {
-    fn new(pixels: (u32, u32)) -> Self {
-        let make = || {
-            let target = render_target(pixels.0, pixels.1);
-            target.texture.set_filter(FilterMode::Linear);
-            target
-        };
-        Self {
-            from: make(),
-            to: make(),
-            presented: make(),
+enum OutputTarget {
+    Scratch(RenderTarget),
+    Presented(RenderTarget),
+}
+
+impl OutputTarget {
+    fn into_target(self) -> RenderTarget {
+        match self {
+            Self::Scratch(target) | Self::Presented(target) => target,
         }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Capture {
-    Source,
-    Live,
+struct PictureMaterials {
+    copy: Material,
+    opaque: Material,
+    crossfade: Option<Material>,
 }
 
 impl PictureCache {
     /// No textures, shader compilation, window query, or GL state access.
     pub(crate) fn new() -> Self {
         Self {
-            key: None,
             targets: None,
-            copy_material: None,
-            opaque_material: None,
-            crossfade_material: None,
-            boundary: None,
-            drawing: None,
-            source_ready: false,
-            live_ready: false,
-            presented_ready: false,
+            materials: None,
         }
     }
 
-    pub(crate) fn needs_source(&self, viewport: Rect) -> Result<bool> {
-        Ok(self.key != Some(self.picture_key(viewport)?) || !self.source_ready)
+    pub(crate) fn needs_source(&self, viewport: Rect) -> TransitionResult<bool> {
+        let key = PictureKey::new(viewport)?;
+        Ok(self
+            .targets
+            .as_ref()
+            .is_none_or(|targets| targets.key != key || targets.source.is_none()))
     }
 
-    /// App renders the departing Scene once in this pass, without a Scene/Node
-    /// update, before releasing its owner.
-    pub(crate) fn begin_source(&mut self, viewport: Rect) -> Result<()> {
-        self.ensure_idle()?;
-        self.prepare_targets(viewport)?;
-        self.source_ready = false;
-        self.live_ready = false;
-        self.presented_ready = false;
-        self.drawing = Some(Capture::Source);
-        self.boundary = Some(DrawBoundary::target(
-            &self.targets.as_ref().unwrap().from,
-            viewport,
-        ));
-        // A complete Scene picture always has an opaque base. The camera change
-        // flushed pending work before this immediate clear.
-        clear_background(BLACK);
-        Ok(())
+    /// Capture the departing Scene before App releases its owner. The target
+    /// is only published after a successful draw and its final flush.
+    pub(crate) fn capture_source<T>(
+        &mut self,
+        viewport: Rect,
+        draw: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let (targets, materials) = self.prepare(viewport)?;
+        let target = targets
+            .source
+            .take()
+            .unwrap_or_else(|| picture_target(targets.key.pixels));
+        targets.output = targets
+            .output
+            .take()
+            .map(|output| OutputTarget::Scratch(output.into_target()));
+        let result = draw_picture(&target, viewport, &materials.opaque, draw)?;
+        targets.source = Some(target);
+        Ok(result)
     }
 
-    pub(crate) fn finish_source(&mut self) {
-        if self.drawing == Some(Capture::Source) {
-            self.make_opaque(self.key.unwrap().viewport);
-            self.finish();
-            self.source_ready = true;
-        }
-    }
-
-    /// App draws the current Scene/UI once into the live target each frame.
-    pub(crate) fn begin_live(&mut self, viewport: Rect) -> Result<()> {
-        self.ensure_idle()?;
-        self.prepare_targets(viewport)?;
-        self.live_ready = false;
-        self.drawing = Some(Capture::Live);
-        self.boundary = Some(DrawBoundary::target(
-            &self.targets.as_ref().unwrap().to,
-            viewport,
-        ));
-        clear_background(BLACK);
-        Ok(())
-    }
-
-    pub(crate) fn finish_live(&mut self) {
-        if self.drawing == Some(Capture::Live) {
-            self.make_opaque(self.key.unwrap().viewport);
-            self.finish();
-            self.live_ready = true;
-        }
-    }
-
-    /// Compose into the third target, flush, then copy it to the default pass.
-    /// Returning Ok acknowledges actual submission; only then may App call the
-    /// phase clock's `did_present`. Errors never expose a partial composite.
-    pub(crate) fn compose(
+    /// Capture live, compose into a separate target, then submit the screen copy.
+    /// App can acknowledge the frame only on success. A failed composite does
+    /// not publish scratch pixels or overwrite the screen with them.
+    pub(crate) fn draw_composite<T>(
         &mut self,
         frame: TransitionFrame,
         transition: &mut SceneTransition,
-    ) -> Result<()> {
-        self.ensure_idle()?;
-        ensure!(
-            transition.is_composite(),
-            "an overlay does not require picture composition"
-        );
-        ensure!(
-            self.live_ready,
-            "composition requires a freshly finished live picture"
-        );
-        if self.key != Some(self.picture_key(frame.viewport)?) {
-            self.invalidate();
-            anyhow::bail!("the viewport changed between live drawing and composition");
+        draw_live: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let viewport = frame.viewport;
+        let (targets, materials) = self.prepare(viewport)?;
+        let drawn = draw_picture(&targets.live, viewport, &materials.opaque, draw_live)?;
+        if targets.key != PictureKey::new(viewport)? {
+            return Err(TransitionError::ChangedViewport.into());
         }
-        self.live_ready = false;
-        // The output is about to be overwritten, so even a failed callback must
-        // not let a later interruption freeze this partially drawn scratch.
-        self.presented_ready = false;
-        let targets = self.targets.as_ref().unwrap();
+
+        // Resize cannot reconstruct a released Scene. Use live for both inputs
+        // in that case, never the output. App's transition clock is unaffected.
+        let output = targets.output.take().map_or_else(
+            || picture_target(targets.key.pixels),
+            OutputTarget::into_target,
+        );
         let pictures = ScenePictures {
-            from: if self.source_ready {
-                &targets.from.texture
-            } else {
-                // Resize cannot reconstruct a released Scene. Keep scheduling
-                // time and use live for both inputs, never sample the output.
-                &targets.to.texture
-            },
-            to: &targets.to.texture,
+            from: &targets.source.as_ref().unwrap_or(&targets.live).texture,
+            to: &targets.live.texture,
         };
-        let boundary = DrawBoundary::target(&targets.presented, frame.viewport);
-        clear_background(BLACK);
-        match &mut transition.draw {
-            Draw::Crossfade => {
-                // A fresh request needs a fresh clock, not a fresh GPU pipeline.
-                if self.crossfade_material.is_none() {
-                    self.crossfade_material = Some(make_crossfade_material()?);
+        draw_picture(&output, viewport, &materials.opaque, || {
+            match &mut transition.draw {
+                Draw::Crossfade => {
+                    // A new request needs a fresh clock, not a fresh pipeline.
+                    if materials.crossfade.is_none() {
+                        materials.crossfade = Some(make_crossfade_material()?);
+                    }
+                    crossfade(materials.crossfade.as_ref().unwrap(), frame, pictures);
                 }
-                crossfade(self.crossfade_material.as_ref().unwrap(), frame, pictures);
+                Draw::Composite(draw) => draw(frame, pictures)
+                    .map_err(|error| CallbackError::new("transition composite", error))?,
+                Draw::Overlay(_) => unreachable!("overlay passed to draw_composite"),
             }
-            Draw::Composite(draw) => draw(frame, pictures)?,
-            Draw::Overlay(_) => unreachable!("composite kind checked above"),
+            Ok(())
+        })?;
+
+        {
+            let _boundary = DrawBoundary::default_camera();
+            gl_use_material(&materials.copy);
+            blit(&output.texture, viewport);
         }
-        // Custom blending may reduce alpha even over the opaque base. Frozen
-        // composites must obey the same complete-picture contract as Scene draws.
-        self.make_opaque(frame.viewport);
-        // This camera change submits all custom composition before sampling it.
-        set_default_camera();
-        reset_draw_state();
-        gl_use_material(self.copy_material.as_ref().unwrap());
-        blit(&targets.presented.texture, frame.viewport);
-        // Drop flushes the screen copy, closes retained work and restores only
-        // RenderStateGuard's material/mode/scissor/viewport responsibilities.
-        drop(boundary);
-        self.presented_ready = true;
-        Ok(())
+        targets.output = Some(OutputTarget::Presented(output));
+        Ok(drawn)
     }
 
     /// Normal overlays use the default camera but allocate no picture resources.
     pub(crate) fn draw_overlay(
-        &mut self,
         frame: TransitionFrame,
         transition: &mut SceneTransition,
-    ) -> Result<()> {
-        self.ensure_idle()?;
-        ensure!(
-            !transition.is_composite(),
-            "a composite requires Scene pictures"
-        );
-        let boundary = DrawBoundary::default_camera();
-        let result = transition.draw_overlay(frame);
-        drop(boundary); // Flush/restore on Ok and Err before App acknowledges.
+    ) -> std::result::Result<(), CallbackError> {
+        let Draw::Overlay(draw) = &mut transition.draw else {
+            unreachable!("composite passed to draw_overlay");
+        };
+        let _boundary = DrawBoundary::default_camera();
+        let result = draw(frame).map_err(|error| CallbackError::new("transition overlay", error));
+        queue_color_write_reset();
         result
     }
 
     /// Reuse only the last successfully displayed composite on interruption.
     /// Swapping ownership needs no copy, readback, Scene reference or clock reset.
     /// An overlay is not captured, so no arbitrary overlay continuity is promised.
-    pub(crate) fn freeze_presented(&mut self, viewport: Rect) -> Result<bool> {
-        self.ensure_idle()?;
+    pub(crate) fn freeze_presented(&mut self, viewport: Rect) -> bool {
         // Reusing old pixels is optional; a temporarily unavailable surface only
         // invalidates the cache. Actual capture still validates drawable sizes.
-        let Ok(key) = self.picture_key(viewport) else {
+        let Ok(key) = PictureKey::new(viewport) else {
             self.invalidate();
-            return Ok(false);
+            return false;
         };
-        if self.key != Some(key) {
+        let Some(targets) = self.targets.as_mut().filter(|targets| targets.key == key) else {
             self.invalidate();
-            return Ok(false);
+            return false;
+        };
+        if let Some(OutputTarget::Presented(presented)) = targets
+            .output
+            .take_if(|output| matches!(output, OutputTarget::Presented(_)))
+        {
+            targets.output = targets.source.replace(presented).map(OutputTarget::Scratch);
         }
-        if !self.presented_ready {
-            // Repeated interruptions before a new drawing keep the same source.
-            return Ok(self.source_ready);
-        }
-        if let Some(targets) = self.targets.as_mut() {
-            std::mem::swap(&mut targets.from, &mut targets.presented);
-        }
-        self.source_ready = true;
-        self.live_ready = false;
-        // A second unpresented interruption must not swap the unused scratch.
-        self.presented_ready = false;
-        Ok(true)
+        // Repeated interruptions before a new drawing keep the same source.
+        targets.source.is_some()
     }
 
-    /// Close pending normal Scene draws on an error before App faults/drops an
-    /// effect. Ordinary Scene drawing is not owned by a picture boundary, so an
-    /// early return may otherwise leave immediate or retained work queued.
-    ///
-    /// This restores the default camera, not an arbitrary caller raw pass or
-    /// material snapshot. Captures still finish/abort their RenderStateGuard
-    /// boundary separately. The strict no-raw-pass/balanced-model-stack contract
-    /// applies here too.
-    pub(crate) fn cleanup_scene_error(&mut self) {
+    /// Flush pending ordinary Scene draws on error before their owner can drop.
+    /// This resets to the default camera and material. Captures close their own
+    /// scopes instead. The same no-raw-pass/balanced-model-stack contract applies.
+    pub(crate) fn cleanup_scene_error() {
         set_default_camera();
+        queue_color_write_reset();
         unsafe { get_internal_gl() }.flush();
-        // Do not leave a selected Scene-owned pipeline behind after its
-        // owner is dropped by explicit recovery. Old queued draws ran first.
-        reset_draw_state();
-    }
-
-    fn make_opaque(&self, viewport: Rect) {
-        // Preserve RGB. Default alpha blending also blends the alpha channel,
-        // so a BLACK clear alone cannot make these sampled pictures opaque.
-        unsafe { get_internal_gl() }.flush();
-        reset_draw_state();
-        gl_use_material(self.opaque_material.as_ref().unwrap());
-        draw_rectangle(viewport.x, viewport.y, viewport.w, viewport.h, WHITE);
-    }
-
-    /// Abort an unfinished capture and flush/restore its owned camera boundary.
-    /// Idempotent and GPU-free when the cache has not opened a draw boundary.
-    /// Call `finish_source`/`finish_live` only to commit a successful capture.
-    pub(crate) fn finish(&mut self) {
-        self.drawing = None;
-        drop(self.boundary.take());
     }
 
     /// Discard pictures only. The phase clock belongs to App and is untouched.
     pub(crate) fn invalidate(&mut self) {
-        self.finish();
-        self.key = None;
         self.targets = None;
-        self.source_ready = false;
-        self.live_ready = false;
-        self.presented_ready = false;
     }
 
-    fn ensure_idle(&self) -> Result<()> {
-        ensure!(
-            self.drawing.is_none(),
-            "finish the active picture capture before drawing again"
-        );
-        Ok(())
-    }
-
-    fn picture_key(&self, viewport: Rect) -> Result<PictureKey> {
-        let dpi = screen_dpi_scale();
-        Ok(PictureKey {
-            viewport,
-            pixels: target_pixels(viewport, dpi)?,
-        })
-    }
-
-    fn prepare_targets(&mut self, viewport: Rect) -> Result<()> {
-        let key = self.picture_key(viewport)?;
-        if self.key != Some(key) {
+    fn prepare(
+        &mut self,
+        viewport: Rect,
+    ) -> TransitionResult<(&mut Targets, &mut PictureMaterials)> {
+        let key = PictureKey::new(viewport)?;
+        if self
+            .targets
+            .as_ref()
+            .is_some_and(|targets| targets.key != key)
+        {
             self.invalidate();
-            self.key = Some(key);
         }
-        // Verify backend/compile before allocating any picture. Metal is an
-        // explicit error, not a GLSL shader panic on the vendor Metal path.
-        if self.copy_material.is_none() {
-            self.copy_material = Some(make_copy_material()?);
+        // Verify backend and compile materials before allocating any targets.
+        if self.materials.is_none() {
+            self.materials = Some(PictureMaterials {
+                copy: make_copy_material()?,
+                opaque: make_opaque_material()?,
+                crossfade: None,
+            });
         }
-        if self.opaque_material.is_none() {
-            self.opaque_material = Some(make_opaque_material()?);
-        }
-        if self.targets.is_none() {
-            self.targets = Some(Targets::new(key.pixels));
-        }
-        Ok(())
+        let targets = self.targets.get_or_insert_with(|| Targets {
+            key,
+            source: None,
+            live: picture_target(key.pixels),
+            output: None,
+        });
+        Ok((targets, self.materials.as_mut().unwrap()))
     }
 }
 
-// If App returns early or unwinds during a capture, the boundary still submits
-// pending draws and leaves the default camera before restoring its four states.
-impl Drop for PictureCache {
-    fn drop(&mut self) {
-        self.finish();
+impl PictureKey {
+    fn new(viewport: Rect) -> TransitionResult<Self> {
+        Ok(Self {
+            viewport,
+            pixels: target_pixels(viewport, screen_dpi_scale())?,
+        })
     }
+}
+
+fn picture_target((width, height): (u32, u32)) -> RenderTarget {
+    let target = render_target(width, height);
+    target.texture.set_filter(FilterMode::Linear);
+    target
+}
+
+fn draw_picture<T>(
+    target: &RenderTarget,
+    viewport: Rect,
+    opaque: &Material,
+    draw: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let _boundary = DrawBoundary::target(target, viewport);
+    // GL clears inherit the last applied color mask. An opaque default-material
+    // draw applies the all-channel mask through miniquad instead. Submit it now
+    // so the Scene can immediately clear its target with the expected mask.
+    draw_rectangle(viewport.x, viewport.y, viewport.w, viewport.h, BLACK);
+    unsafe { get_internal_gl() }.flush();
+    let result = draw();
+    if result.is_ok() {
+        // Preserve RGB, but force alpha back to one if custom blending reduced it.
+        unsafe { get_internal_gl() }.flush();
+        reset_draw_state();
+        gl_use_material(opaque);
+        draw_rectangle(viewport.x, viewport.y, viewport.w, viewport.h, WHITE);
+    } else {
+        queue_color_write_reset();
+    }
+    result // The boundary flushes before releasing the target borrow.
 }
 
 /// Camera/pass ownership is intentionally separate from RenderStateGuard.
@@ -372,6 +304,13 @@ impl Drop for DrawBoundary {
     }
 }
 
+// Apply the all-channel default pipeline without covering pixels. A raw
+// glColorMask call would desynchronize miniquad's cached mask.
+fn queue_color_write_reset() {
+    reset_draw_state();
+    draw_rectangle(0., 0., 0., 0., BLACK);
+}
+
 fn reset_draw_state() {
     gl_use_default_material();
     let gl = unsafe { get_internal_gl() }.quad_gl;
@@ -380,28 +319,26 @@ fn reset_draw_state() {
     gl.draw_mode(DrawMode::Triangles);
 }
 
-fn target_pixels(viewport: Rect, dpi: f32) -> Result<(u32, u32)> {
-    ensure!(
-        viewport.x == 0. && viewport.y == 0.,
-        "Scene pictures require an origin-zero logical window viewport"
-    );
-    ensure!(
-        viewport.w.is_finite()
-            && viewport.h.is_finite()
-            && viewport.w > 0.
-            && viewport.h > 0.
-            && dpi.is_finite()
-            && dpi > 0.,
-        "Scene pictures require finite positive dimensions and DPI"
-    );
+fn target_pixels(viewport: Rect, dpi: f32) -> TransitionResult<(u32, u32)> {
+    if viewport.x != 0. || viewport.y != 0. {
+        return Err(TransitionError::NonzeroViewportOrigin);
+    }
+    if !(viewport.w.is_finite()
+        && viewport.h.is_finite()
+        && viewport.w > 0.
+        && viewport.h > 0.
+        && dpi.is_finite()
+        && dpi > 0.)
+    {
+        return Err(TransitionError::InvalidPictureDimensions);
+    }
     // Use f64 for the product/range check so i32::MAX is not rounded up to an
     // unrepresentable i32 by an f32 boundary conversion. Subpixel targets are 1.
     let width = (f64::from(viewport.w) * f64::from(dpi)).round().max(1.);
     let height = (f64::from(viewport.h) * f64::from(dpi)).round().max(1.);
-    ensure!(
-        width <= f64::from(i32::MAX) && height <= f64::from(i32::MAX),
-        "Scene picture target dimensions overflow"
-    );
+    if !(width <= f64::from(i32::MAX) && height <= f64::from(i32::MAX)) {
+        return Err(TransitionError::PictureDimensionsOverflow);
+    }
     Ok((width as u32, height as u32))
 }
 
@@ -419,15 +356,14 @@ fn blit(texture: &Texture2D, viewport: Rect) {
     );
 }
 
-fn require_opengl() -> Result<()> {
-    ensure!(
-        unsafe { get_internal_gl() }.quad_context.info().backend == Backend::OpenGl,
-        "Scene picture transitions currently require OpenGL; Metal is unsupported (use an overlay)"
-    );
+fn require_opengl() -> TransitionResult<()> {
+    if unsafe { get_internal_gl() }.quad_context.info().backend != Backend::OpenGl {
+        return Err(TransitionError::UnsupportedBackend);
+    }
     Ok(())
 }
 
-fn make_copy_material() -> Result<Material> {
+fn make_copy_material() -> TransitionResult<Material> {
     require_opengl()?;
     // Overwrite RGBA and force alpha=1: default alpha blending would multiply
     // cached alpha again and darken later copies/frozen interrupted composites.
@@ -438,10 +374,13 @@ fn make_copy_material() -> Result<Material> {
         },
         MaterialParams::default(),
     )
-    .context("compile Scene picture copy material")
+    .map_err(|source| TransitionError::Material {
+        operation: "compile Scene picture copy material",
+        source,
+    })
 }
 
-fn make_opaque_material() -> Result<Material> {
+fn make_opaque_material() -> TransitionResult<Material> {
     load_material(
         ShaderSource::Glsl {
             vertex: VERTEX,
@@ -458,10 +397,10 @@ fn make_opaque_material() -> Result<Material> {
             ..Default::default()
         },
     )
-    .context("compile Scene picture opaque material")
+    .map_err(|source| TransitionError::Material { operation: "compile Scene picture opaque material", source })
 }
 
-fn make_crossfade_material() -> Result<Material> {
+fn make_crossfade_material() -> TransitionResult<Material> {
     require_opengl()?;
     load_material(
         ShaderSource::Glsl {
@@ -474,7 +413,10 @@ fn make_crossfade_material() -> Result<Material> {
             ..Default::default()
         },
     )
-    .context("compile Scene crossfade material")
+    .map_err(|source| TransitionError::Material {
+        operation: "compile Scene crossfade material",
+        source,
+    })
 }
 
 fn crossfade(material: &Material, frame: TransitionFrame, pictures: ScenePictures<'_>) {

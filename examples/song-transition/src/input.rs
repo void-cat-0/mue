@@ -21,6 +21,7 @@ pub enum DetailsAction {
 pub enum SettingsAction {
     CycleTheme,
     ToggleMotion,
+    CycleLocale,
     Back,
     Quit,
 }
@@ -72,6 +73,7 @@ fn settings_key(key: KeyCode) -> Option<SettingsAction> {
     match key {
         KeyCode::T => Some(SettingsAction::CycleTheme),
         KeyCode::M => Some(SettingsAction::ToggleMotion),
+        KeyCode::L => Some(SettingsAction::CycleLocale),
         KeyCode::Escape => Some(SettingsAction::Back),
         KeyCode::Q => Some(SettingsAction::Quit),
         _ => None,

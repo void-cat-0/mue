@@ -1,11 +1,10 @@
-//! Each Scene owns its palette, return effect, animation and pending input.
+//! Each Scene owns its palette, return effect and animation.
 use crate::{
     effects::Effect,
     input::{self, Action},
 };
-use anyhow::Result;
 use macroquad::prelude::*;
-use mue_macroquad::{Scene, SceneContext, SceneEvent, SceneRender};
+use mue_macroquad::{CallbackResult, Scene, SceneContext, SceneEvent, SceneRender};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Palette {
@@ -37,7 +36,6 @@ pub(crate) struct ColorScene {
     // No return effect means this instance is the root.
     back_effect: Option<Effect>,
     active_time: f32,
-    action: Action,
 }
 
 impl ColorScene {
@@ -46,7 +44,6 @@ impl ColorScene {
             palette: Palette::Blue,
             back_effect: None,
             active_time: 0.,
-            action: Action::None,
         }
     }
 
@@ -55,23 +52,17 @@ impl ColorScene {
             palette: self.palette.next(),
             back_effect: Some(effect),
             active_time: 0.,
-            action: Action::None,
         }
     }
 }
 
 impl Scene for ColorScene {
-    fn event(&mut self, event: SceneEvent<'_>, _: &mut SceneContext<'_>) -> Result<()> {
-        if let SceneEvent::Input(batch) = event {
-            self.action = input::action(batch);
-        }
-        Ok(())
-    }
-
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
-        // App advances only the top Scene with the normal host frame delta.
-        self.active_time += ctx.frame.dt;
-        match std::mem::take(&mut self.action) {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
+        let SceneEvent::Input(batch) = event else {
+            return Ok(());
+        };
+        // This may be the outgoing Scene's last Input, with no update before commit.
+        match input::action(batch) {
             Action::Open(effect) => {
                 ctx.push(self.child(effect)).transition(effect.transition());
             }
@@ -90,7 +81,12 @@ impl Scene for ColorScene {
         Ok(())
     }
 
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
+        self.active_time += ctx.frame.dt;
+        Ok(())
+    }
+
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         // Outgoing picture captures use this same draw-only path.
         let v = render.frame.viewport;
         draw_rectangle(v.x, v.y, v.w, v.h, self.palette.color());

@@ -6,14 +6,14 @@ use crate::{
     catalog::Catalog,
     effects::{self, ReturnTarget},
     input::{self, LibraryAction},
+    localization::ReadTranslations,
     settings::ReadSettings,
     view::LibraryView,
 };
-use anyhow::Result;
 use macroquad::prelude::draw_rectangle;
 use mue_core::signal::Access;
 use mue_macroquad::{
-    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
+    CallbackResult, RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -21,6 +21,7 @@ pub struct LibraryScene {
     view: LibraryView,
     catalog: Rc<Catalog>,
     settings: ReadSettings,
+    translations: ReadTranslations,
     open_settings: SettingsFactory,
     commands: Rc<Cell<Option<LibraryAction>>>,
     input_enabled: bool,
@@ -30,14 +31,21 @@ impl LibraryScene {
     pub fn new(
         catalog: Rc<Catalog>,
         settings: ReadSettings,
+        translations: ReadTranslations,
         open_settings: SettingsFactory,
     ) -> Self {
         let commands = Rc::new(Cell::new(None));
-        let view = LibraryView::new(catalog.songs(), settings, commands.clone());
+        let view = LibraryView::new(
+            catalog.songs(),
+            settings,
+            translations.clone(),
+            commands.clone(),
+        );
         Self {
             view,
             catalog,
             settings,
+            translations,
             open_settings,
             commands,
             input_enabled: false,
@@ -57,6 +65,7 @@ impl LibraryScene {
             index,
             song.clone(),
             self.settings,
+            self.translations.clone(),
             self.open_settings.clone(),
         ));
         if self.settings.animations_enabled() {
@@ -66,19 +75,25 @@ impl LibraryScene {
         }
     }
 }
+#[derive(Debug, thiserror::Error)]
+#[error("unexpected details result")]
+struct UnexpectedDetailsResult;
+
 impl Scene for LibraryScene {
-    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.input_enabled = !ctx.is_transitioning();
         match event {
-            SceneEvent::Input(batch) => {
-                if let Some(action) = input::library(batch) {
-                    self.commands.set(Some(action));
+            SceneEvent::Input(batch) => match input::library(batch) {
+                Some(LibraryAction::Quit) => {
+                    ctx.exit().without_transition();
                 }
-            }
+                Some(action) => self.commands.set(Some(action)),
+                None => {}
+            },
             SceneEvent::Returned(result) => {
                 let result = result
                     .downcast::<DetailsReturn>()
-                    .map_err(|_| anyhow::anyhow!("unexpected details result"))?;
+                    .map_err(|_| UnexpectedDetailsResult)?;
                 self.view.select(result.index);
                 self.returning = result.target.map(|target| (result.index, target));
             }
@@ -90,16 +105,12 @@ impl Scene for LibraryScene {
         }
         Ok(())
     }
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.input_enabled = !ctx.is_transitioning();
         if !ctx.is_transitioning() {
             self.returning = None;
         }
         let action = self.commands.take();
-        if action == Some(LibraryAction::Quit) {
-            ctx.exit().without_transition();
-            return Ok(());
-        }
         if ctx.is_transitioning() {
             return Ok(());
         }
@@ -117,7 +128,7 @@ impl Scene for LibraryScene {
         }
         Ok(())
     }
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         let input = if self.input_enabled {
             RootInput::Interactive
         } else {
@@ -126,7 +137,7 @@ impl Scene for LibraryScene {
         self.view.layout(frame.viewport, input, roots);
         Ok(())
     }
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         let v = render.frame.viewport;
         draw_rectangle(
             v.x,

@@ -15,10 +15,11 @@ pub enum Theme {
 }
 
 impl Theme {
-    pub fn label(self) -> &'static str {
+    /// Stable Fluent selector value; user-facing labels belong in the locale resources.
+    pub fn translation_key(self) -> &'static str {
         match self {
-            Self::Dark => "Dark",
-            Self::Light => "Light",
+            Self::Dark => "dark",
+            Self::Light => "light",
         }
     }
 

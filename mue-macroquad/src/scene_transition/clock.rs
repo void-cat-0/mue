@@ -1,5 +1,3 @@
-use anyhow::{Result, ensure};
-
 use crate::{math::Rect, transition::Transition};
 
 use super::{TransitionFrame, TransitionPhase, TransitionTiming};
@@ -14,7 +12,6 @@ pub(crate) struct PhaseClock {
     elapsed: f32,
     first_present: bool,
     endpoint_presented: bool,
-    pending: Option<TransitionFrame>,
 }
 
 impl PhaseClock {
@@ -28,7 +25,6 @@ impl PhaseClock {
             elapsed: 0.,
             first_present: true,
             endpoint_presented: false,
-            pending: None,
         }
     }
 
@@ -39,7 +35,7 @@ impl PhaseClock {
     /// Repeated proposals before acknowledgement do not cumulatively advance.
     /// Invalid/nonpositive durations are instantaneous, just like `Instant`.
     #[must_use]
-    pub(crate) fn frame(&mut self, dt: f32, viewport: Rect) -> TransitionFrame {
+    pub(crate) fn frame(&self, dt: f32, viewport: Rect) -> TransitionFrame {
         let curve = self.curve();
         let duration = curve.duration();
         let instant = !duration.is_finite() || duration <= 0.;
@@ -63,24 +59,21 @@ impl PhaseClock {
         } else {
             (elapsed / duration).clamp(0., 1.)
         };
-        let frame = TransitionFrame {
+        TransitionFrame {
             phase: self.phase,
             linear_progress,
             progress: curve.sample(linear_progress),
             dt,
             viewport,
             elapsed,
-        };
-        self.pending = Some(frame);
-        frame
+        }
     }
 
-    pub(crate) fn did_present(&mut self) {
-        if let Some(frame) = self.pending.take() {
-            self.elapsed = frame.elapsed;
-            self.first_present = false;
-            self.endpoint_presented |= frame.linear_progress >= 1.;
-        }
+    pub(crate) fn did_present(&mut self, frame: TransitionFrame) {
+        debug_assert_eq!(frame.phase, self.phase);
+        self.elapsed = frame.elapsed;
+        self.first_present = false;
+        self.endpoint_presented = frame.linear_progress >= 1.;
     }
 
     pub(crate) fn ready_to_switch(&self) -> bool {
@@ -89,17 +82,12 @@ impl PhaseClock {
 
     /// Call only after the exit endpoint was presented and App committed the
     /// Scene switch. A terminal switch may instead just discard this clock.
-    pub(crate) fn after_switch(&mut self) -> Result<()> {
-        ensure!(
-            self.ready_to_switch(),
-            "the exit endpoint must be presented before switching transition phases"
-        );
+    pub(crate) fn after_switch(&mut self) {
+        debug_assert!(self.ready_to_switch());
         self.phase = TransitionPhase::AfterSwitch;
         self.elapsed = 0.;
         self.first_present = true;
         self.endpoint_presented = false;
-        self.pending = None;
-        Ok(())
     }
 
     pub(crate) fn is_finished(&self) -> bool {

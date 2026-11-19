@@ -71,7 +71,7 @@ void main() {
 // Keep the sharp interior cutout analytic, so bilinear filtering cannot leak
 // a cached shadow into a transparent panel. Only the expensive soft integral
 // is sampled. These equations match roundedBoxShadow before its y shift.
-const SAMPLE_FRAGMENT: &str = concat!(
+const SAMPLE_FRAGMENT_PREFIX: &str = concat!(
     r#"#version 100
 precision highp float;
 varying highp vec2 v_pos;
@@ -83,17 +83,19 @@ uniform highp mat4 inverse_model;
 uniform sampler2D Texture;
 "#,
     include_str!("functions.glsl"),
-    r#"
+    "\n",
+);
+
+const SAMPLE_FRAGMENT_SUFFIX: &str = r#"
 void main() {
     vec2 point = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
     float factor = roundedBoxCutout(rect.xy, rect.zw, point, radius);
     vec2 uv = (point - rect.xy - mask_bounds.xy) / mask_bounds.zw;
     uv.y = 1.0 - uv.y;
     float alpha = texture2D(Texture, uv).a * factor;
-    gl_FragColor = vec4(color.rgb, alpha * color.a);
+    gl_FragColor = vec4(color.rgb, alpha * color.a * combined_clip_mask(v_pos));
 }
-"#
-);
+"#;
 
 /// Cumulative diagnostics for the render thread's bounded mask pool.
 /// Bytes include all allocated RGBA8 slots, even invalid 1x1 slots; driver
@@ -238,12 +240,31 @@ impl ShadowMaskState {
                 texture
             };
             state.resident = true;
-            let material = &pool
-                .resources
-                .get()
-                .and_then(Option::as_ref)
-                .unwrap()
-                .sampler;
+            let resources = pool.resources.get().and_then(Option::as_ref).unwrap();
+            let clip_depth = crate::clip::active_clip_depth();
+            let material = if clip_depth == 0 {
+                resources.sampler.clone()
+            } else {
+                let mut samplers = resources.clip_samplers.borrow_mut();
+                let sampler = samplers.entry(clip_depth).or_insert_with(|| {
+                    let mut uniforms = vec![
+                        UniformDesc::new("rect", UniformType::Float4),
+                        UniformDesc::new("mask_bounds", UniformType::Float4),
+                        UniformDesc::new("radius", UniformType::Float1),
+                        UniformDesc::new("color", UniformType::Float4),
+                        UniformDesc::new("inverse_model", UniformType::Mat4),
+                    ];
+                    uniforms.extend(crate::clip::clip_uniforms(clip_depth));
+                    let mut fragment = String::from(SAMPLE_FRAGMENT_PREFIX);
+                    fragment.push_str(&crate::clip::clip_shader_helpers(clip_depth));
+                    fragment.push_str(SAMPLE_FRAGMENT_SUFFIX);
+                    UiMaterial::new(&fragment, uniforms, Vec::new()).ok()
+                });
+                let Some(sampler) = sampler.as_ref() else {
+                    return false;
+                };
+                sampler.clone()
+            };
             let reach = shadow.elevation * 3.;
             let expanded = Rect::new(
                 rect.x - reach,
@@ -255,6 +276,7 @@ impl ShadowMaskState {
             // before being resized/reused. It is never handed to callers.
             let texture = Texture2D::from_miniquad_texture(texture);
             material.with(|| {
+                crate::clip::apply_active_clip_uniforms(&material, None);
                 material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
                 let bounds = key.bounds();
                 material.set_uniform("mask_bounds", vec4(bounds.x, bounds.y, bounds.w, bounds.h));
@@ -873,6 +895,7 @@ fn resize(ctx: &mut dyn RenderingBackend, slot: &mut Slot, pixels: (u32, u32)) -
 
 struct Resources {
     sampler: UiMaterial,
+    clip_samplers: RefCell<std::collections::HashMap<usize, Option<UiMaterial>>>,
     baker: Baker,
     max_side: u32,
 }
@@ -883,24 +906,24 @@ impl Resources {
         if !gl_ok() || limit < 3 {
             return None;
         }
-        let sampler = UiMaterial::new(
-            SAMPLE_FRAGMENT,
-            vec![
-                UniformDesc::new("rect", UniformType::Float4),
-                UniformDesc::new("mask_bounds", UniformType::Float4),
-                UniformDesc::new("radius", UniformType::Float1),
-                UniformDesc::new("color", UniformType::Float4),
-                UniformDesc::new("inverse_model", UniformType::Mat4),
-            ],
-            Vec::new(),
-        )
-        .ok()?;
+        let sampler_uniforms = vec![
+            UniformDesc::new("rect", UniformType::Float4),
+            UniformDesc::new("mask_bounds", UniformType::Float4),
+            UniformDesc::new("radius", UniformType::Float1),
+            UniformDesc::new("color", UniformType::Float4),
+            UniformDesc::new("inverse_model", UniformType::Mat4),
+        ];
+        let mut sampler_fragment = String::from(SAMPLE_FRAGMENT_PREFIX);
+        sampler_fragment.push_str(&crate::clip::clip_shader_helpers(0));
+        sampler_fragment.push_str(SAMPLE_FRAGMENT_SUFFIX);
+        let sampler = UiMaterial::new(&sampler_fragment, sampler_uniforms, Vec::new()).ok()?;
         if !gl_ok() {
             return None;
         }
         let baker = Baker::new(unsafe { get_internal_gl() }.quad_context)?;
         Some(Self {
             sampler,
+            clip_samplers: RefCell::new(std::collections::HashMap::new()),
             baker,
             max_side: (limit as u32).min(MAX_SIDE),
         })

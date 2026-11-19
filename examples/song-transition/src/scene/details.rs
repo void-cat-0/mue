@@ -4,12 +4,12 @@ use crate::{
     catalog::Song,
     effects::{self, ReturnTarget},
     input::{self, DetailsAction},
+    localization::ReadTranslations,
     settings::ReadSettings,
     view::DetailsView,
 };
-use anyhow::Result;
 use mue_macroquad::{
-    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
+    CallbackResult, RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -32,10 +32,11 @@ impl DetailsScene {
         index: usize,
         song: Song,
         settings: ReadSettings,
+        translations: ReadTranslations,
         open_settings: SettingsFactory,
     ) -> Self {
         let commands = Rc::new(Cell::new(None));
-        let view = DetailsView::new(&song, settings, commands.clone());
+        let view = DetailsView::new(&song, settings, translations, commands.clone());
         Self {
             index,
             song,
@@ -48,14 +49,16 @@ impl DetailsScene {
     }
 }
 impl Scene for DetailsScene {
-    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.input_enabled = !ctx.is_transitioning();
         match event {
-            SceneEvent::Input(batch) => {
-                if let Some(action) = input::details(batch) {
-                    self.commands.set(Some(action));
+            SceneEvent::Input(batch) => match input::details(batch) {
+                Some(DetailsAction::Quit) => {
+                    ctx.exit().without_transition();
                 }
-            }
+                Some(action) => self.commands.set(Some(action)),
+                None => {}
+            },
             SceneEvent::Pause => {
                 self.input_enabled = false;
                 self.commands.take();
@@ -64,12 +67,9 @@ impl Scene for DetailsScene {
         }
         Ok(())
     }
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.input_enabled = !ctx.is_transitioning();
         match self.commands.take() {
-            Some(DetailsAction::Quit) => {
-                ctx.exit().without_transition();
-            }
             Some(DetailsAction::Back) if !ctx.is_transitioning() => {
                 self.input_enabled = false;
                 let target = self
@@ -94,7 +94,7 @@ impl Scene for DetailsScene {
         }
         Ok(())
     }
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         roots.push(
             SceneRoot::new(self.view.root(), frame.viewport).input(if self.input_enabled {
                 RootInput::Interactive
@@ -104,12 +104,13 @@ impl Scene for DetailsScene {
         );
         Ok(())
     }
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         artwork::draw(
             &self.song.artwork,
             Surface::fullscreen(render.frame.viewport, self.song.artwork.aspect()),
             1.,
         );
-        render.draw(self.view.root())
+        render.draw(self.view.root())?;
+        Ok(())
     }
 }

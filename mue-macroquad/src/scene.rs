@@ -1,11 +1,11 @@
 //! Scenes own application content; App owns frame scheduling.
 use crate::{
+    CallbackResult, SceneError,
     input::InputBatch,
     math::Rect,
     node::{Node, NodeRef},
     scene_transition::{SceneTransition, TransitionFrame},
 };
-use anyhow::{Result, ensure};
 use std::any::Any;
 
 /// How a displayed root participates in pointer routing.
@@ -70,7 +70,9 @@ pub enum SceneEvent<'a> {
     Pause,
     /// An entered instance becomes runnable again, after pending return values.
     /// Coverage and host suspension must both have ended. This does not clear a
-    /// Scene's internal game-pause state automatically.
+    /// Scene's internal game-pause state automatically. A switch may skip the
+    /// resumed Scene's ordinary update; restart external playback from that
+    /// update rather than this notification.
     Resume,
     /// The complete original raw batch, after automatic Node UI dispatch and
     /// before global tasks and the Scene's ordinary update. UI does not consume
@@ -197,20 +199,20 @@ pub trait Scene {
     /// notifications (and drops owned return values). All events keep their
     /// scheduling boundaries: Input before global work/update, Returned before
     /// Resume/Enter, and no Enter/Resume/Returned while the host is suspended.
-    fn event(&mut self, _event: SceneEvent<'_>, _ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, _event: SceneEvent<'_>, _ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         Ok(())
     }
     /// Advance ordinary frame-driven business. Not called on a covered Scene or
     /// the newly activated top in a switching frame; notifications are not updates.
-    fn update(&mut self, _ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, _ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         Ok(())
     }
     /// Submit independent roots. Do not draw or advance time here.
     /// App may call this again after node updates change root membership.
-    fn layout(&mut self, _frame: &SceneFrame, _roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, _frame: &SceneFrame, _roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         Ok(())
     }
-    fn render(&mut self, _render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, _render: &mut SceneRender<'_>) -> CallbackResult<()> {
         Ok(())
     }
 }
@@ -237,22 +239,18 @@ impl SceneRender<'_> {
         self.transition_source
     }
 
-    pub fn draw(&mut self, node: NodeRef) -> Result<()> {
+    pub fn draw(&mut self, node: NodeRef) -> std::result::Result<(), SceneError> {
         let root = self
             .prepared
             .iter()
             .find(|root| root.node == node)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Scene tried to draw a root it did not submit for layout")
-            })?;
-        ensure!(
-            !self.drawn.iter().any(|root| root.node == node),
-            "Scene root drawn more than once in one frame"
-        );
-        ensure!(
-            crate::runtime::Runtime::with(|rt| rt.nodes.borrow().contains_key(node.id)),
-            "Scene tried to draw a disposed root"
-        );
+            .ok_or(SceneError::UndeclaredDrawRoot)?;
+        if self.drawn.iter().any(|root| root.node == node) {
+            return Err(SceneError::DuplicateDrawRoot);
+        }
+        if !crate::runtime::Runtime::with(|rt| rt.nodes.borrow().contains_key(node.id)) {
+            return Err(SceneError::DisposedDrawRoot);
+        }
         node.render();
         self.drawn.push(*root);
         Ok(())
@@ -263,11 +261,12 @@ pub(crate) struct NodeScene {
     pub root: Node,
 }
 impl Scene for NodeScene {
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         roots.push(SceneRoot::new(*self.root, frame.viewport));
         Ok(())
     }
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
-        render.draw(*self.root)
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
+        render.draw(*self.root)?;
+        Ok(())
     }
 }

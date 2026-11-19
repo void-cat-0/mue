@@ -3,10 +3,9 @@ mod color_scene;
 mod effects;
 mod input;
 
-use anyhow::Result;
 use color_scene::ColorScene;
 use macroquad::{prelude::Conf, window::next_frame};
-use mue_macroquad::App;
+use mue_macroquad::{App, Result};
 
 fn window_config() -> Conf {
     Conf {

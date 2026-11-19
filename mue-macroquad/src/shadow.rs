@@ -9,8 +9,6 @@ mod mask;
 pub(crate) use mask::ShadowMaskState;
 pub use mask::{ShadowMaskCacheStats, clear_shadow_mask_cache, shadow_mask_cache_stats};
 
-use std::cell::OnceCell;
-
 use macroquad::math::vec4;
 use mue_core::prop::PropValue;
 
@@ -92,39 +90,41 @@ impl From<bool> for ShadowCache {
     }
 }
 
-const SHADOW_FRAGMENT: &str = concat!(
+const SHADOW_FRAGMENT_PREFIX: &str = concat!(
     r#"#version 100
 precision highp float;
 
 varying highp vec2 v_pos;
-
 uniform highp vec4 rect;
 uniform highp float elevation;
 uniform highp float radius;
 uniform highp vec4 color;
 uniform highp mat4 inverse_model;
-
 "#,
     include_str!("shadow/functions.glsl"),
-    r#"
+    "\n",
+);
+
+const SHADOW_FRAGMENT_SUFFIX: &str = r#"
 void main() {
     vec2 local = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
     float alpha = roundedBoxShadow(rect.xy, rect.zw, local, elevation, radius);
-    gl_FragColor = vec4(color.rgb, alpha * color.a);
+    gl_FragColor = vec4(color.rgb, alpha * color.a * combined_clip_mask(v_pos));
 }
-"#
-);
+"#;
 
 thread_local! {
-    static SHADOW_MATERIAL: OnceCell<UiMaterial> = const { OnceCell::new() };
+    static SHADOW_MATERIALS: std::cell::RefCell<Vec<Option<UiMaterial>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-fn shadow_material() -> UiMaterial {
-    SHADOW_MATERIAL.with(|cell| {
-        cell.get_or_init(|| {
-            UiMaterial::new(
-                SHADOW_FRAGMENT,
-                vec![
+fn shadow_material(depth: usize) -> UiMaterial {
+    SHADOW_MATERIALS.with_borrow_mut(|materials| {
+        if materials.len() <= depth {
+            materials.resize_with(depth + 1, || None);
+        }
+        materials[depth]
+            .get_or_insert_with(|| {
+                let uniforms = [
                     macroquad::miniquad::UniformDesc::new(
                         "rect",
                         macroquad::miniquad::UniformType::Float4,
@@ -145,12 +145,15 @@ fn shadow_material() -> UiMaterial {
                         "inverse_model",
                         macroquad::miniquad::UniformType::Mat4,
                     ),
-                ],
-                Vec::new(),
-            )
-            .expect("shadow material")
-        })
-        .clone()
+                ];
+                let mut uniforms = uniforms.to_vec();
+                uniforms.extend(crate::clip::clip_uniforms(depth));
+                let mut fragment = String::from(SHADOW_FRAGMENT_PREFIX);
+                fragment.push_str(&crate::clip::clip_shader_helpers(depth));
+                fragment.push_str(SHADOW_FRAGMENT_SUFFIX);
+                UiMaterial::new(&fragment, uniforms, Vec::new()).expect("shadow material")
+            })
+            .clone()
     })
 }
 
@@ -187,6 +190,7 @@ pub(crate) fn draw_shadow(
         return;
     }
 
+    let clip_depth = crate::clip::active_clip_depth();
     if cache == ShadowCache::Disabled {
         mask.reset();
     } else if mask.draw(paint, rect, shadow, transform, inverse, cache) {
@@ -201,8 +205,9 @@ pub(crate) fn draw_shadow(
         rect.h + 2. * reach,
     );
 
-    let material = shadow_material();
+    let material = shadow_material(clip_depth);
     material.with(|| {
+        crate::clip::apply_active_clip_uniforms(&material, None);
         material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
         material.set_uniform("elevation", elevation);
         material.set_uniform("radius", radius);

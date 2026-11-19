@@ -18,6 +18,7 @@
 - **Scene 调度**：Scene 拥有 Node 和 gameplay 资源、组织交错绘制；App 保留场景栈，只调度栈顶的输入、多根布局与每帧更新。支持 push/pop、结果回传、覆盖/宿主暂停恢复、栈顶替换和全栈退出，见 [Scenes](docs/scenes.md)。
 - **Scene 过渡**：切换请求可链式配置内置 crossfade、自定义画面合成或无需截图的 overlay；统一驱动切换前后时间轴、终点呈现与打断清理，见 [Scene transitions](docs/scene-transitions.md)。
 - **独立输入契约**：Node 按已显示内容整批预命中并维持 UI capture；当前 Scene 收到完整原始输入，包括 UI 命中及跨 Scene 持续 Move/Up，不做 UI/gameplay 按压归属过滤。
+- **Fluent i18n**：可选 `mue-i18n` 提供命名空间资源、English fallback、强只读 Translator，以及随语言和参数更新的文本绑定与 `tl!`；不重建 Node/Scene，不安装框架全局服务。见 [i18n](docs/i18n.md)。
 
 ## 工作区结构
 
@@ -27,6 +28,7 @@
 | `mue-macros` | `#[component]` / `#[node]` 属性过程宏与 style 风格的 `style!`。 |
 | `mue-macroquad` | 渲染与应用运行时：Node 生命周期、布局准备/绘制、事件、手势、字体、shader，以及 `App` / `Scene` 场景栈与顶层调度。 |
 | `mue-components` | 布局、排版与图形组件，包括滚动区域、图片、形状、圆和文档；重导出组件宏与 `style!`。 |
+| [mue-i18n](<docs/i18n.md>) | 可选 Fluent 本地化：资源目录、语言选择、English fallback、响应式翻译与 `tl!`。仅依赖 reactive core，不依赖 renderer/components。 |
 | `examples/basics` | 响应式样式、图片、字体（Space Mono 400/700）示例。 |
 | `examples/events` | 简单的点击、长按、hover、滚轮与 `set_timeout` 示例。 |
 | `examples/gestures` | 八个等大可视化面板：点击、长按、hover、滚轮、拖动、滑动、双指缩放与旋转。 |
@@ -43,7 +45,7 @@
 | [scenes](examples/scenes/README.md) | 常规游戏/结果场景组织、HUD 与暂停 UI、多根交错绘制、push/pop 结果与状态返回。 |
 | [scene-flow](examples/scene-flow/README.md) | 详情、可取消/失败加载、CPU→GPU 移交、显式启动、结束/重试/返回，以及公共 Scene 淡入淡出。 |
 | [scene-transitions](examples/scene-transitions/README.md) | 可交互的内置 crossfade、自定义 slide 合成与两阶段覆盖动画，场景和效果分模块组织。 |
-| [song-transition](<examples/song-transition/README.md>) | 曲绘展开/缩回与保留列表状态；应用级资源/全局 signals、设置 Scene、明暗主题和减少动态效果。 |
+| [song-transition](<examples/song-transition/README.md>) | 曲绘展开/缩回与保留列表状态；应用级资源/全局 signals、设置 Scene、明暗主题、减少动态效果与 English/简体中文 Fluent 切换。 |
 | [portal](docs/examples.md) | 外部 renderer 的纹理合成、局部暂停输入策略与 UI overlay。 |
 | [input-timing](examples/input-timing/README.md) | 1–2 FPS 的已显示几何与下一布局命中对照。 |
 
@@ -155,7 +157,7 @@ async fn the_main() {
 
 `App::new(root)` 保留单棵 UI 树的便捷入口；组合 gameplay、自定义绘制或多个 UI 根时，使用 `App::with_scene(scene)`。Scene 持有 Node 与业务资源，统一 `event` 响应 Enter/Pause/Resume/Input/Returned 通知，`update` 推进业务，通过 `layout` 提交借用根及逻辑 bounds，通过 `SceneRender::draw` 在完整 UI 绘制入口之间穿插自定义绘制。根的实际绘制顺序决定下一批 Node 输入顺序，提交但未绘制的根不接新 Node 输入。
 
-当前普通帧顺序为：Node 整批预命中 → 必要的 event(Returned/Enter/Resume) → Node pointer/hover/wheel 派发 → 当前 event(Input) 收完整原始批次 → transition/timeout/tasks 与 host/Scene update → App 多根几何准备 → 一次 Node 更新 → 再稳定几何 → Scene 绘制 → 纹理清理。Scene 应用用 `try_frame()` 接收 `anyhow::Result` 错误；`frame()` 等便利方法在错误时 panic。
+当前普通帧顺序为：Node 整批预命中 → 必要的 event(Returned/Enter/Resume) → Node pointer/hover/wheel 派发 → 当前 event(Input) 收完整原始批次 → transition/timeout/tasks 与 host/Scene update → App 多根几何准备 → 一次 Node 更新 → 再稳定几何 → Scene 绘制 → 纹理清理。Scene 回调使用 `mue_macroquad::CallbackResult`。`try_frame()` 使用 `AppError` 聚合 `SceneError`、`TransitionError` 和 `CallbackError`，并保留原始错误链。`frame()` 等便利方法在错误时 panic。
 
 Node capture 只保证一次 UI 操作的目标稳定，不决定 gameplay 输入归属。UI 命中、模态层内事件及没有本 Scene Down 的持续 Move/Up 都可见于原始批次，顺序、物理坐标和原触摸时间戳不变。切换时取消旧 UI capture，但不把后续接触屏蔽到抬起：旧批次不重放给新 Scene，后续 Move/Up 直接交新 Scene，是否参与判定由游戏决定。`RootInput::None/Interactive/Modal` 只控制 Node 根之间的路由。
 

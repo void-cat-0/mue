@@ -4,12 +4,9 @@
 //! mask while the subtree draws. Retained geometry is used only while the current
 //! material has a matching retained shader; otherwise nodes draw immediate geometry.
 
-use std::cell::OnceCell;
+use std::cell::RefCell;
 
-use macroquad::{
-    math::{vec2, vec4},
-    retained::RetainedMaterial,
-};
+use macroquad::{math::vec4, retained::RetainedMaterial};
 use mue_core::prop::PropValue;
 
 use crate::{
@@ -20,118 +17,145 @@ use crate::{
 
 const TAU: f32 = std::f32::consts::TAU;
 
-const CLIP_FRAGMENT: &str = r#"#version 100
+const CLIP_FRAGMENT_PREFIX: &str = r#"#version 100
 precision highp float;
 
 varying highp vec2 v_pos;
 varying lowp vec2 v_uv;
 varying lowp vec4 v_color;
-
-uniform highp vec4 rect;
-uniform highp float radius;
-uniform highp mat4 inverse_model;
 uniform sampler2D Texture;
+"#;
 
+const CLIP_FRAGMENT_SUFFIX: &str = r#"
 void main() {
-    vec2 local = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
-    vec2 half_size = (rect.zw - rect.xy) * 0.5;
-    vec2 center = rect.xy + half_size;
-    vec2 q = abs(local - center) - half_size + vec2(radius);
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-    float mask = 1.0 - smoothstep(-0.5, 0.5, d);
     vec4 tex = texture2D(Texture, v_uv);
     gl_FragColor = tex * v_color;
-    gl_FragColor.a *= mask;
+    gl_FragColor.a *= combined_clip_mask(v_pos);
 }
 "#;
 
+#[derive(Clone, Copy)]
+struct ClipMask {
+    data: [f32; 4],
+    shape: [f32; 4],
+    inverse: macroquad::math::Mat4,
+}
+
+#[derive(Clone)]
+struct ClipMaterials {
+    immediate: UiMaterial,
+    retained: Option<RetainedMaterial>,
+}
+
 thread_local! {
-    static CLIP_MATERIAL: OnceCell<UiMaterial> = const { OnceCell::new() };
-    static RETAINED_CLIP: OnceCell<Option<RetainedMaterial>> = const { OnceCell::new() };
-    static RETAINED_SECTOR: OnceCell<Option<RetainedMaterial>> = const { OnceCell::new() };
+    static CLIP_STACK: RefCell<Vec<ClipMask>> = const { RefCell::new(Vec::new()) };
+    static CLIP_MATERIALS: RefCell<Vec<Option<ClipMaterials>>> = const { RefCell::new(Vec::new()) };
 }
 
-fn retained_clip_material() -> Option<RetainedMaterial> {
-    RETAINED_CLIP.with(|cell| {
-        cell.get_or_init(|| {
-            RetainedMaterial::new(
-                CLIP_FRAGMENT,
-                &[
-                    macroquad::miniquad::UniformDesc::new(
-                        "rect",
-                        macroquad::miniquad::UniformType::Float4,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "radius",
-                        macroquad::miniquad::UniformType::Float1,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "inverse_model",
-                        macroquad::miniquad::UniformType::Mat4,
-                    ),
-                ],
-                &[],
-            )
-        })
-        .clone()
+pub(crate) fn active_clip_depth() -> usize {
+    CLIP_STACK.with_borrow(|stack| stack.len())
+}
+
+pub(crate) fn clip_uniforms(depth: usize) -> Vec<macroquad::miniquad::UniformDesc> {
+    let mut uniforms = Vec::with_capacity(depth * 3);
+    for index in 0..depth {
+        uniforms.push(macroquad::miniquad::UniformDesc::new(
+            &format!("clip_shape_{index}"),
+            macroquad::miniquad::UniformType::Float4,
+        ));
+        uniforms.push(macroquad::miniquad::UniformDesc::new(
+            &format!("clip_data_{index}"),
+            macroquad::miniquad::UniformType::Float4,
+        ));
+        uniforms.push(macroquad::miniquad::UniformDesc::new(
+            &format!("clip_inverse_{index}"),
+            macroquad::miniquad::UniformType::Mat4,
+        ));
+    }
+    uniforms
+}
+
+pub(crate) fn clip_shader_helpers(depth: usize) -> String {
+    let mut source = String::from("const float CLIP_TAU = 6.28318530718;\n");
+    for index in 0..depth {
+        source.push_str(&format!(
+            "uniform highp vec4 clip_shape_{index};\nuniform highp vec4 clip_data_{index};\nuniform highp mat4 clip_inverse_{index};\n"
+        ));
+    }
+    source.push_str("float combined_clip_mask(vec2 global_pos) {\n    float combined = 1.0;\n");
+    for index in 0..depth {
+        source.push_str(&format!(
+            "    vec2 local_{index} = (clip_inverse_{index} * vec4(global_pos, 0.0, 1.0)).xy;\n    float mask_{index};\n    if (clip_shape_{index}.x < 0.5) {{\n        vec2 half_size = (clip_data_{index}.zw - clip_data_{index}.xy) * 0.5;\n        vec2 center = clip_data_{index}.xy + half_size;\n        vec2 q = abs(local_{index} - center) - half_size + vec2(clip_shape_{index}.y);\n        float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - clip_shape_{index}.y;\n        mask_{index} = 1.0 - smoothstep(-0.5, 0.5, d);\n    }} else {{\n        float a = atan(local_{index}.y - clip_data_{index}.y, local_{index}.x - clip_data_{index}.x);\n        float span = mod(clip_shape_{index}.z - clip_shape_{index}.y, CLIP_TAU);\n        float rel = mod(a - clip_shape_{index}.y, CLIP_TAU);\n        float edge = min(rel, span - rel);\n        mask_{index} = clip_shape_{index}.w > 0.0 ? smoothstep(0.0, clip_shape_{index}.w, edge) : step(0.0, edge);\n    }}\n    combined *= mask_{index};\n"
+        ));
+    }
+    source.push_str("    return combined;\n}\n");
+    source
+}
+
+pub(crate) fn apply_active_clip_uniforms(
+    immediate: &UiMaterial,
+    retained: Option<&RetainedMaterial>,
+) {
+    CLIP_STACK.with_borrow(|stack| {
+        for (index, clip) in stack.iter().enumerate() {
+            let shape_name = format!("clip_shape_{index}");
+            let data_name = format!("clip_data_{index}");
+            let inverse_name = format!("clip_inverse_{index}");
+            let shape = vec4(clip.shape[0], clip.shape[1], clip.shape[2], clip.shape[3]);
+            let data = vec4(clip.data[0], clip.data[1], clip.data[2], clip.data[3]);
+            immediate.set_uniform(&shape_name, shape);
+            immediate.set_uniform(&data_name, data);
+            immediate.set_uniform(&inverse_name, clip.inverse);
+            if let Some(retained) = retained {
+                retained.set_vec4(&shape_name, shape);
+                retained.set_vec4(&data_name, data);
+                retained.set_mat4(&inverse_name, clip.inverse);
+            }
+        }
+    });
+}
+
+fn clip_material(depth: usize) -> ClipMaterials {
+    CLIP_MATERIALS.with_borrow_mut(|materials| {
+        if materials.len() < depth {
+            materials.resize_with(depth, || None);
+        }
+        materials[depth - 1]
+            .get_or_insert_with(|| {
+                let uniforms = clip_uniforms(depth);
+                let mut fragment = String::from(CLIP_FRAGMENT_PREFIX);
+                fragment.push_str(&clip_shader_helpers(depth));
+                fragment.push_str(CLIP_FRAGMENT_SUFFIX);
+                let retained = RetainedMaterial::new(&fragment, &uniforms, &[]);
+                let immediate =
+                    UiMaterial::new(&fragment, uniforms, Vec::new()).expect("clip material");
+                ClipMaterials {
+                    immediate,
+                    retained,
+                }
+            })
+            .clone()
     })
 }
 
-fn retained_sector_material() -> Option<RetainedMaterial> {
-    RETAINED_SECTOR.with(|cell| {
-        cell.get_or_init(|| {
-            RetainedMaterial::new(
-                SECTOR_FRAGMENT,
-                &[
-                    macroquad::miniquad::UniformDesc::new(
-                        "center",
-                        macroquad::miniquad::UniformType::Float2,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "angle",
-                        macroquad::miniquad::UniformType::Float2,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "feather",
-                        macroquad::miniquad::UniformType::Float1,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "inverse_model",
-                        macroquad::miniquad::UniformType::Mat4,
-                    ),
-                ],
-                &[],
-            )
-        })
-        .clone()
-    })
+struct ClipStackGuard;
+
+impl Drop for ClipStackGuard {
+    fn drop(&mut self) {
+        CLIP_STACK.with_borrow_mut(|stack| {
+            stack.pop();
+        });
+    }
 }
 
-fn clip_material() -> UiMaterial {
-    CLIP_MATERIAL.with(|cell| {
-        cell.get_or_init(|| {
-            UiMaterial::new(
-                CLIP_FRAGMENT,
-                vec![
-                    macroquad::miniquad::UniformDesc::new(
-                        "rect",
-                        macroquad::miniquad::UniformType::Float4,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "radius",
-                        macroquad::miniquad::UniformType::Float1,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "inverse_model",
-                        macroquad::miniquad::UniformType::Mat4,
-                    ),
-                ],
-                Vec::new(),
-            )
-            .expect("clip material")
-        })
-        .clone()
-    })
+fn with_clip_mask<R>(clip: ClipMask, draw: impl FnOnce() -> R) -> R {
+    CLIP_STACK.with_borrow_mut(|stack| stack.push(clip));
+    let _stack_guard = ClipStackGuard;
+    let depth = active_clip_depth();
+    let materials = clip_material(depth);
+    let retained = materials.retained.clone();
+    apply_active_clip_uniforms(&materials.immediate, retained.as_ref());
+    materials.immediate.with_retained(retained, draw)
 }
 
 /// Draw a subtree clipped to a rounded rect.
@@ -154,18 +178,14 @@ pub(crate) fn with_clip_radius<R>(rect: Rect, radius: f32, draw: impl FnOnce() -
         return draw();
     }
 
-    let material = clip_material();
-    let retained = retained_clip_material().inspect(|retained| {
-        retained.set_vec4("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
-        retained.set_f32("radius", radius);
-        retained.set_mat4("inverse_model", model_matrix(inverse));
-    });
-    material.with_retained(retained, || {
-        material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
-        material.set_uniform("radius", radius);
-        material.set_uniform("inverse_model", model_matrix(inverse));
-        draw()
-    })
+    with_clip_mask(
+        ClipMask {
+            data: [rect.x, rect.y, rect.right(), rect.bottom()],
+            shape: [0., radius, 0., 0.],
+            inverse: model_matrix(inverse),
+        },
+        draw,
+    )
 }
 
 /// An angular sector clip.
@@ -275,76 +295,6 @@ fn contains_sector(rect: Rect, sector: Sector, point: Vector) -> bool {
     edge > 0.
 }
 
-const SECTOR_FRAGMENT: &str = r#"#version 100
-precision highp float;
-
-varying highp vec2 v_pos;
-varying lowp vec2 v_uv;
-varying lowp vec4 v_color;
-
-uniform highp vec2 center;
-uniform highp vec2 angle;
-uniform highp float feather;
-uniform highp mat4 inverse_model;
-uniform sampler2D Texture;
-
-const float TAU = 6.28318530718;
-
-void main() {
-    vec2 local = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
-    float a = atan(local.y - center.y, local.x - center.x);
-    float span = mod(angle.y - angle.x, TAU);
-    float rel = mod(a - angle.x, TAU);
-    float edge = min(rel, span - rel);
-    float mask = 0.0;
-    if (span > 0.0) {
-        if (feather > 0.0) {
-            mask = smoothstep(0.0, feather, edge);
-        } else {
-            mask = step(0.0, edge);
-        }
-    }
-    vec4 tex = texture2D(Texture, v_uv);
-    gl_FragColor = tex * v_color;
-    gl_FragColor.a *= mask;
-}
-"#;
-
-thread_local! {
-    static SECTOR_MATERIAL: OnceCell<UiMaterial> = const { OnceCell::new() };
-}
-
-fn sector_material() -> UiMaterial {
-    SECTOR_MATERIAL.with(|cell| {
-        cell.get_or_init(|| {
-            UiMaterial::new(
-                SECTOR_FRAGMENT,
-                vec![
-                    macroquad::miniquad::UniformDesc::new(
-                        "center",
-                        macroquad::miniquad::UniformType::Float2,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "angle",
-                        macroquad::miniquad::UniformType::Float2,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "feather",
-                        macroquad::miniquad::UniformType::Float1,
-                    ),
-                    macroquad::miniquad::UniformDesc::new(
-                        "inverse_model",
-                        macroquad::miniquad::UniformType::Mat4,
-                    ),
-                ],
-                Vec::new(),
-            )
-            .expect("sector material")
-        })
-        .clone()
-    })
-}
-
 /// Draw a subtree clipped to an angular sector.
 ///
 /// rect is the node's layout rect; center is relative to its origin. The shader
@@ -365,18 +315,12 @@ pub(crate) fn with_clip_sector<R>(rect: Rect, sector: Sector, draw: impl FnOnce(
     let span = sector.span();
     let feather = sector.feather.clamp(0., span * 0.5);
 
-    let material = sector_material();
-    let retained = retained_sector_material().inspect(|retained| {
-        retained.set_vec2("center", vec2(center.x, center.y));
-        retained.set_vec2("angle", vec2(sector.start, sector.end));
-        retained.set_f32("feather", feather);
-        retained.set_mat4("inverse_model", model_matrix(inverse));
-    });
-    material.with_retained(retained, || {
-        material.set_uniform("center", vec2(center.x, center.y));
-        material.set_uniform("angle", vec2(sector.start, sector.end));
-        material.set_uniform("feather", feather);
-        material.set_uniform("inverse_model", model_matrix(inverse));
-        draw()
-    })
+    with_clip_mask(
+        ClipMask {
+            data: [center.x, center.y, 0., 0.],
+            shape: [1., sector.start, sector.end, feather],
+            inverse: model_matrix(inverse),
+        },
+        draw,
+    )
 }

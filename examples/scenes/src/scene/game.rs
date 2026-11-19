@@ -1,11 +1,10 @@
 use std::{cell::Cell, rc::Rc};
 
-use anyhow::{Result, bail};
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot, math::Rect,
-    node::Node,
+    CallbackResult, RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
+    math::Rect, node::Node,
 };
 
 use super::ResultsScene;
@@ -44,8 +43,12 @@ impl GameScene {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("GameScene expected a GameResult from ResultsScene")]
+struct UnexpectedGameResult;
+
 impl Scene for GameScene {
-    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         match event {
             // App sends Enter once. Construction already owns the model and UI;
             // exposing this Scene again must not rebuild or restart either one.
@@ -86,10 +89,9 @@ impl Scene for GameScene {
                 }
             }
             SceneEvent::Returned(result) => {
-                let result = match result.downcast::<GameResult>() {
-                    Ok(result) => *result,
-                    Err(_) => bail!("GameScene expected a GameResult from ResultsScene"),
-                };
+                let result = *result
+                    .downcast::<GameResult>()
+                    .map_err(|_| UnexpectedGameResult)?;
                 // App delivers Returned before Resume. The parent owns this policy;
                 // ResultsScene cannot mutate the game through a shared object.
                 self.model.apply_result(result);
@@ -101,7 +103,7 @@ impl Scene for GameScene {
         Ok(())
     }
 
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         match self.action.replace(GameAction::None) {
             GameAction::TogglePause => self.model.toggle_pause(),
             GameAction::Resume => self.model.resume(),
@@ -126,7 +128,7 @@ impl Scene for GameScene {
         Ok(())
     }
 
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         // Pure submission: App can call layout twice. No timers, updates, or draws.
         roots.push(SceneRoot::new(
             *self.hud,
@@ -144,7 +146,7 @@ impl Scene for GameScene {
         Ok(())
     }
 
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         let view = render.frame.viewport;
         // Draw inside App's camera/pass, including a captured transition layer.
         draw_rectangle(

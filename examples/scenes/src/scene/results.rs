@@ -1,10 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
-use anyhow::Result;
 use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot, node::Node,
+    CallbackResult, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot, node::Node,
 };
 
 use crate::{
@@ -34,7 +33,7 @@ impl ResultsScene {
 }
 
 impl Scene for ResultsScene {
-    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         match event {
             SceneEvent::Enter => {} // App sends this once for this owner.
             SceneEvent::Pause => {
@@ -53,7 +52,7 @@ impl Scene for ResultsScene {
         Ok(())
     }
 
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         match self.action.replace(ResultsAction::None) {
             ResultsAction::Return => {
                 ctx.pop_with_result(GameResult::Return);
@@ -69,12 +68,12 @@ impl Scene for ResultsScene {
         Ok(())
     }
 
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         roots.push(SceneRoot::new(*self.root, frame.viewport));
         Ok(())
     }
 
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         let view = render.frame.viewport;
         draw_rectangle(view.x, view.y, view.w, view.h, BLACK);
         render.draw(*self.root)?;

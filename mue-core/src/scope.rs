@@ -1,4 +1,5 @@
 use std::{
+    any::{Any, TypeId},
     cell::RefCell,
     future::Future,
     marker::PhantomData,
@@ -8,8 +9,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use slotmap::{Key, SlotMap, new_key_type};
-use type_map::TypeMap;
+use rustc_hash::FxHashMap;
+use slotmap::{Key, new_key_type};
 
 use crate::{
     Disposable,
@@ -34,7 +35,7 @@ pub(crate) struct ScopeInner {
 
     parent: Scope,
     context_parent: Scope,
-    context: TypeMap,
+    context: FxHashMap<TypeId, Rc<dyn Any>>,
 
     #[cfg(debug_assertions)]
     #[allow(dead_code)]
@@ -51,7 +52,7 @@ impl ScopeInner {
 
             parent: Scope::null(),
             context_parent: Scope::null(),
-            context: TypeMap::new(),
+            context: FxHashMap::default(),
 
             #[cfg(debug_assertions)]
             location,
@@ -396,7 +397,11 @@ impl Scope {
         }
         Runtime::with(|rt| {
             rt.assert_scope_not_disposing(self.id);
-            rt.scopes.borrow_mut()[self.id].context.insert::<T>(value);
+            let old = rt.scopes.borrow_mut()[self.id]
+                .context
+                .insert(TypeId::of::<T>(), Rc::new(value));
+            // The old value's destructor may read or write the scope again.
+            drop(old);
         });
     }
 
@@ -422,36 +427,47 @@ impl Scope {
         });
     }
 
-    fn inject_with<T: 'static>(self, scopes: &SlotMap<ScopeId, ScopeInner>) -> Option<&T> {
+    fn context<T: 'static>(self, rt: &Runtime) -> Option<Rc<T>> {
+        let key = TypeId::of::<T>();
+        let scopes = rt.scopes.borrow();
         let mut scope = self;
         while !scope.is_null() {
-            let Some(inner) = scopes.get(scope.id) else {
-                break;
-            };
-            if let Some(context) = inner.context.get::<T>() {
-                return Some(context);
+            let inner = scopes.get(scope.id)?;
+            if let Some(context) = inner.context.get(&key) {
+                // Keep only this value alive while user code runs.
+                return Some(
+                    Rc::clone(context)
+                        .downcast::<T>()
+                        .expect("scope context type must match its key"),
+                );
             }
             scope = inner.context_parent;
         }
         None
     }
 
+    /// Provide a value computed from a snapshot of the current or inherited value.
+    /// The callback can read and change contexts. Its return value replaces
+    /// any value for this type in this scope when it completes. If it disposes
+    /// this scope, the returned value is dropped instead.
     pub fn provide_with<T: 'static>(&self, f: impl FnOnce(Option<&T>) -> T) {
         if self.is_null() {
             return;
         }
         Runtime::with(|rt| {
             rt.assert_scope_not_disposing(self.id);
-            let mut scopes = rt.scopes.borrow_mut();
-            let value = f(self.inject_with::<T>(&scopes));
-            scopes[self.id].context.insert::<T>(value);
+            let previous = self.context::<T>(rt);
+            let value = f(previous.as_deref());
+            if rt.scopes.borrow().contains_key(self.id) {
+                self.provide(value);
+            }
         });
     }
 
     pub fn inject<T: Clone + 'static>(&self) -> Option<T> {
         Runtime::with(|rt| {
-            let scopes = rt.scopes.borrow();
-            self.inject_with(&scopes).cloned()
+            self.context::<T>(rt)
+                .map(|context| context.as_ref().clone())
         })
     }
 }
@@ -653,6 +669,105 @@ mod test {
         assert_eq!(value.get(), 1);
         drop(inherited);
         assert!(value.is_disposed());
+    }
+
+    #[test]
+    fn context_entries_are_keyed_by_the_provided_type() {
+        let parent = OwnedScope::new();
+        let shared = Rc::new(7u32);
+        parent.provide(3u32);
+        parent.provide(Rc::clone(&shared));
+
+        let child = parent.run(OwnedScope::new_inherited);
+        child.provide(5u32);
+
+        assert_eq!(parent.inject::<u32>(), Some(3));
+        assert_eq!(child.inject::<u32>(), Some(5));
+        assert!(Rc::ptr_eq(&child.inject::<Rc<u32>>().unwrap(), &shared));
+    }
+
+    #[test]
+    fn provide_with_can_read_another_inherited_context() {
+        let parent = OwnedScope::new();
+        parent.provide(4u16);
+        parent.provide(9u32);
+        let child = parent.run(OwnedScope::new_inherited);
+        child.provide_with(|old: Option<&u32>| {
+            *old.unwrap() + u32::from(child.inject::<u16>().unwrap())
+        });
+
+        assert_eq!(child.inject::<u32>(), Some(13));
+        assert_eq!(parent.inject::<u32>(), Some(9));
+    }
+
+    #[test]
+    fn inject_clones_outside_the_scope_arena() {
+        struct ContextValue {
+            owner: Scope,
+            value: u32,
+        }
+
+        impl Clone for ContextValue {
+            fn clone(&self) -> Self {
+                self.owner.provide(self.value + 1);
+                Self {
+                    owner: self.owner,
+                    value: self.owner.inject::<u32>().unwrap(),
+                }
+            }
+        }
+
+        let owner = OwnedScope::new();
+        owner.provide(ContextValue {
+            owner: owner.scope(),
+            value: 9,
+        });
+        assert_eq!(owner.inject::<ContextValue>().unwrap().value, 10);
+        assert_eq!(owner.inject::<u32>(), Some(10));
+    }
+
+    #[test]
+    fn overriding_context_drops_the_old_value_outside_the_scope_arena() {
+        struct ContextDrop(Option<Box<dyn FnOnce()>>);
+
+        impl Drop for ContextDrop {
+            fn drop(&mut self) {
+                if let Some(on_drop) = self.0.take() {
+                    on_drop();
+                }
+            }
+        }
+
+        let owner = OwnedScope::new();
+        let scope = owner.scope();
+        scope.provide(0u32);
+        for with_callback in [false, true] {
+            scope.provide(ContextDrop(Some(Box::new(move || {
+                scope.provide(scope.inject::<u32>().unwrap() + 1);
+            }))));
+            if with_callback {
+                scope.provide_with(|old: Option<&ContextDrop>| {
+                    assert!(old.unwrap().0.is_some());
+                    ContextDrop(None)
+                });
+            } else {
+                scope.provide(ContextDrop(None));
+            }
+        }
+        assert_eq!(scope.inject::<u32>(), Some(2));
+    }
+
+    #[test]
+    fn provide_with_keeps_snapshot_but_does_not_recreate_a_disposed_scope() {
+        let scope = OwnedScope::new().into_scope();
+        scope.provide(String::from("previous"));
+        scope.provide_with(|old: Option<&String>| {
+            scope.dispose();
+            assert_eq!(old.map(String::as_str), Some("previous"));
+            String::from("new")
+        });
+        assert!(!scope.is_alive());
+        assert_eq!(scope.inject::<String>(), None);
     }
 
     #[test]

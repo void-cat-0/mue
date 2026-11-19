@@ -4,13 +4,20 @@ mod model;
 mod scene;
 mod ui;
 
-use anyhow::Result;
 use macroquad::prelude::*;
 use mue_macroquad::{App, font};
 
 use scene::GameScene;
 
-async fn run() -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+enum RunError {
+    #[error("failed to initialize fonts: {0}")]
+    Fonts(#[from] font::FontsAlreadyInitialized),
+    #[error(transparent)]
+    Frame(#[from] mue_macroquad::AppError),
+}
+
+async fn run() -> Result<(), RunError> {
     // Initialize before creating UI. No system font lookup or runtime assets.
     let mut db = font::fontdb::Database::new();
     db.load_font_data(

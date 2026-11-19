@@ -15,7 +15,8 @@ cargo run -p scene-transitions --offline
 - **Q** exits the whole App immediately, without a transition.
 
 The window shows the controls and a moving marker. Each new child owns a fresh
-animation clock, pending action, palette and return effect. Covered Scenes keep
+animation clock, palette and return effect. Input queues navigation immediately,
+including on the frame that commits a two-phase switch. Covered Scenes keep
 their state but do not receive ordinary updates, so their marker pauses until
 returning. Animation uses the normal Scene frame delta, not a scripted clock.
 No external font, chart or image assets are required.

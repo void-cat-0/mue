@@ -1,6 +1,7 @@
 mod app;
 pub mod clip;
 pub mod color;
+mod error;
 pub mod event;
 pub mod font;
 pub mod gesture;
@@ -25,6 +26,9 @@ mod viewport;
 
 pub use app::App;
 pub use clip::Sector;
+pub use error::{
+    AppError, BoxedError, CallbackError, CallbackResult, Result, SceneError, TransitionError,
+};
 pub use material::{UiMaterial, UniformValue, with_material};
 pub use render::RenderStateGuard;
 pub use scene::{

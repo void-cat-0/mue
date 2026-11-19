@@ -1,7 +1,8 @@
 //! Small application components resolve read-only context only during construction.
-use crate::settings::ReadSettings;
+use crate::{localization::ReadTranslations, settings::ReadSettings};
 use mue_components::{button, text};
-use mue_core::{effect::computed, prop::Prop, scope::inject, signal::Access};
+use mue_core::{prop::Prop, scope::inject, signal::Access};
+use mue_i18n::tl;
 use mue_macroquad::{
     node::{BuildNode, Node, NodeContext},
     shader::Brush,
@@ -58,17 +59,15 @@ pub fn settings_status() -> SettingsStatus {
 impl BuildNode for SettingsStatus {
     fn build(self, ctx: NodeContext) -> Node {
         let settings = inject::<ReadSettings>().expect("view must provide read-only settings");
-        let label = computed(move |_| {
-            Rc::<str>::from(format!(
-                "{} theme  /  Artwork motion: {}",
-                settings.theme.get().label(),
-                if settings.reduce_motion.get() {
-                    "off"
-                } else {
-                    "on"
-                },
-            ))
-        });
+        let translations =
+            inject::<ReadTranslations>().expect("view must provide read-only translations");
+        let locale = translations.locale;
+        // This component build is a live consumer scope. Providers only read existing handles.
+        let label = tl!(translations.common, "settings-status",
+            "theme" => settings.theme.get().translation_key(),
+            "motion" => if settings.reduce_motion.get() { "off" } else { "on" },
+            "locale" => locale.get_clone().to_string(),
+        );
         text(label)
             .font_size(14.)
             .line_height(20.)

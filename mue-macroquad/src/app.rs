@@ -1,8 +1,9 @@
 use crate::{
+    AppError, CallbackError, CallbackResult, Result, SceneError,
     event::pointer::PointerManager,
     input::InputBatch,
     math::{Rect, Vector},
-    node::{IntoNode, NodeRef},
+    node::{GeometrySnapshot, IntoNode, NodeRef},
     runtime::{Runtime, TimeoutKey, get_time},
     scene::{
         NodeScene, Scene, SceneCommand, SceneContext, SceneEvent, SceneFrame, SceneRender,
@@ -14,7 +15,6 @@ use crate::{
     },
     transition,
 };
-use anyhow::{Context, Result, bail, ensure};
 use mue_core::{batch, task};
 use ordered_float::NotNan;
 use std::{
@@ -64,7 +64,7 @@ struct ActiveTransition {
 }
 impl ActiveTransition {
     fn new(effect: SceneTransition, pending: Option<SceneCommand>, viewport: Rect) -> Self {
-        let mut clock = PhaseClock::new(effect.timing());
+        let clock = PhaseClock::new(effect.timing());
         let sample = clock.frame(0., viewport);
         Self {
             effect,
@@ -89,11 +89,13 @@ pub struct App {
     state: AppState,
     // Coverage is determined by stack position; host suspension is independent.
     host_paused: bool,
+    last_frame_time: Option<f64>,
     command: Option<SceneRequestData>,
     active_transition: Option<ActiveTransition>,
     default_transition: Option<Box<dyn FnMut() -> SceneTransition>>,
     pictures: PictureCache,
     displayed: Vec<SceneRoot>,
+    layout: SceneLayout,
     pointer_manager: PointerManager,
 }
 
@@ -107,21 +109,41 @@ impl Drop for App {
     }
 }
 
-fn batched_result(f: impl FnOnce() -> Result<()>) -> Result<()> {
+fn batched_result(
+    phase: &'static str,
+    f: impl FnOnce() -> CallbackResult<()>,
+) -> std::result::Result<(), CallbackError> {
     let mut result = Ok(());
-    batch(|| result = f());
+    batch(|| result = f().map_err(|error| CallbackError::new(phase, error)));
     result
+}
+
+fn window_viewport() -> Rect {
+    Rect::new(
+        0.,
+        0.,
+        macroquad::window::screen_width(),
+        macroquad::window::screen_height(),
+    )
+}
+
+fn drawable(viewport: Rect) -> bool {
+    viewport.size().is_finite() && viewport.w > 0. && viewport.h > 0.
 }
 
 impl App {
     fn initialize_host() -> Rect {
         crate::set_task_wake_callback(Some(Arc::new(miniquad::window::schedule_update)));
-        let viewport = crate::viewport::Viewport {
-            width: macroquad::window::screen_width(),
-            height: macroquad::window::screen_height(),
-        };
-        crate::viewport::set(viewport);
-        Rect::new(0., 0., viewport.width, viewport.height)
+        let viewport = window_viewport();
+        Self::publish_viewport(viewport);
+        viewport
+    }
+
+    fn publish_viewport(viewport: Rect) {
+        crate::viewport::set(crate::viewport::Viewport {
+            width: viewport.w,
+            height: viewport.h,
+        });
     }
 
     /// Build and retain one Node tree as a Scene.
@@ -130,33 +152,31 @@ impl App {
         let root = root_node.into_node();
         root.resolve_font_sizes();
         let root_ref = *root;
-        Self {
-            scenes: vec![SceneEntry::new(Box::new(NodeScene { root }))],
-            state: AppState::Active,
-            host_paused: false,
-            command: None,
-            active_transition: None,
-            default_transition: None,
-            pictures: PictureCache::new(),
-            // Preserve explicit custom hit bounds before the first Node layout.
-            displayed: vec![SceneRoot::new(root_ref, viewport)],
-            pointer_manager: PointerManager::new(),
-        }
+        let mut app = Self::from_scene(NodeScene { root });
+        // Preserve explicit custom hit bounds before the first Node layout.
+        app.displayed.push(SceneRoot::new(root_ref, viewport));
+        app
     }
 
     /// Own a Scene. Its SceneEvent::Enter notification runs once on its first normal frame.
     /// Scene UI starts receiving new input after its first successful drawing.
     pub fn with_scene(scene: impl Scene + 'static) -> Self {
         Self::initialize_host();
+        Self::from_scene(scene)
+    }
+
+    fn from_scene(scene: impl Scene + 'static) -> Self {
         Self {
             scenes: vec![SceneEntry::new(Box::new(scene))],
             state: AppState::Active,
             host_paused: false,
+            last_frame_time: None,
             command: None,
             active_transition: None,
             default_transition: None,
             pictures: PictureCache::new(),
             displayed: Vec::new(),
+            layout: SceneLayout::default(),
             pointer_manager: PointerManager::new(),
         }
     }
@@ -247,38 +267,28 @@ impl App {
 
     pub fn try_frame_with_update(&mut self, update: impl FnOnce()) -> Result<()> {
         let input = self.pointer_manager.prepare_input();
+        let time = macroquad::time::get_time();
         let frame = SceneFrame {
-            dt: macroquad::time::get_frame_time(),
-            time: macroquad::time::get_time(),
-            viewport: Rect::new(
-                0.,
-                0.,
-                macroquad::window::screen_width(),
-                macroquad::window::screen_height(),
-            ),
+            // Macroquad reports the preceding frame's interval. Sample at the App
+            // boundary so suspension cannot cause a delayed jump one frame later.
+            dt: self
+                .last_frame_time
+                .replace(time)
+                .map_or_else(macroquad::time::get_frame_time, |previous| {
+                    (time - previous).max(0.) as f32
+                }),
+            time,
+            viewport: window_viewport(),
         };
-        let result = self.run_checked_frame(input, frame, update, |app, frame| {
-            batch(|| {
-                crate::viewport::set(crate::viewport::Viewport {
-                    width: frame.viewport.w,
-                    height: frame.viewport.h,
-                });
-                transition::advance(frame.dt);
-            });
-            app.drive_tasks();
-        });
-        crate::texture::flush_pending_texture_deletions();
+        let result = self.run_frame(input, frame, update);
+        let result = self.finish_frame(result);
+        if drawable(frame.viewport) {
+            crate::texture::flush_pending_texture_deletions();
+        }
         result
     }
 
-    fn run_checked_frame(
-        &mut self,
-        input: InputBatch,
-        frame: SceneFrame,
-        update: impl FnOnce(),
-        globals: impl FnOnce(&mut Self, SceneFrame),
-    ) -> Result<()> {
-        let result = self.run_frame(input, frame, update, globals);
+    fn finish_frame(&mut self, result: Result<()>) -> Result<()> {
         if result.is_err() {
             self.fault();
         }
@@ -288,111 +298,113 @@ impl App {
     fn run_frame(
         &mut self,
         input: InputBatch,
-        frame: SceneFrame,
+        mut frame: SceneFrame,
         update: impl FnOnce(),
-        globals: impl FnOnce(&mut Self, SceneFrame),
     ) -> Result<()> {
-        // Keep the application's clock/delta intact for global work. A resumed
-        // Scene must not integrate the suspended interval in its first frame.
-        let mut scene_frame = frame;
-        if self.host_paused
-            || self
-                .scenes
-                .last()
-                .is_some_and(|entry| entry.state == SceneState::Paused)
-        {
-            scene_frame.dt = 0.;
+        // Freeze frame-driven animations on recovery, not the timeout/task clock.
+        if mem::take(&mut self.host_paused) {
+            frame.dt = 0.;
         }
-        self.host_paused = false;
+        let can_present = drawable(frame.viewport);
         self.retire_transition();
-        let mut switched = false;
-        if self.state != AppState::Active {
-            // Fault/exit recovery never replays the drained batch. Push/pop
-            // cannot resume a failed instance; replacement/reset/exit are explicit.
+        let switched = if self.state != AppState::Active {
+            // Recovery never replays the drained batch, nor resumes a failed Scene.
             self.check_stopped_command(self.command.as_ref().map(|request| &request.command))?;
-            if self.command.is_none() {
+            let Some(request) = self.command.take() else {
                 return Ok(());
-            }
-            switched = self.install_command(scene_frame)?;
+            };
+            self.select_request(request, frame, None)?
         } else {
             // Freeze Node targets before results, lifecycle or input callbacks
             // write signals. Node capture and Scene raw input are independent.
             let plan = self.pointer_manager.plan_roots(&self.displayed, &input);
-            self.activate(scene_frame)?;
+            self.activate(frame)?;
             self.pointer_manager
                 .dispatch_roots(plan, &self.displayed, &input);
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
-                frame: scene_frame,
+                frame,
                 transition: self
                     .active_transition
                     .as_ref()
                     .map(|transition| transition.sample),
                 command: &mut self.command,
             };
-            batched_result(|| entry.scene.event(SceneEvent::Input(&input), &mut ctx))
-                .context("Scene input")?;
-        }
+            batched_result("input", || {
+                entry.scene.event(SceneEvent::Input(&input), &mut ctx)
+            })?;
+            false
+        };
         if self.state == AppState::Exited {
             return Ok(());
         }
-        globals(self, frame);
+        batch(|| {
+            Self::publish_viewport(frame.viewport);
+            transition::advance(frame.dt);
+        });
+        self.pointer_manager.reconcile_roots(&self.displayed);
+        self.drive_tasks();
         batch(update);
-        if self.command.is_none()
-            && !switched
-            && !self
+        let switch_ready = can_present
+            && self
                 .active_transition
                 .as_ref()
-                .is_some_and(ActiveTransition::ready_to_switch)
-        {
+                .is_some_and(ActiveTransition::ready_to_switch);
+        if self.command.is_none() && !switched && !switch_ready {
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
-                frame: scene_frame,
+                frame,
                 transition: self
                     .active_transition
                     .as_ref()
                     .map(|transition| transition.sample),
                 command: &mut self.command,
             };
-            batched_result(|| entry.scene.update(&mut ctx)).context("Scene update")?;
+            batched_result("update", || entry.scene.update(&mut ctx))?;
         }
-        if self.command.is_some() && !switched {
-            switched = self.install_command(scene_frame)?;
-        }
-        if !switched && self.command.is_none() {
-            switched = self.advance_switch_boundary(scene_frame)?;
-        }
-        if self.state == AppState::Exited {
+        let switched = if switched {
+            true
+        } else if let Some(request) = self.command.take() {
+            self.select_request(request, frame, None)?
+        } else {
+            switch_ready && self.advance_switch_boundary(frame)?
+        };
+        if self.state == AppState::Exited || !can_present {
             return Ok(());
         }
         if switched {
             // The new top may draw now, but receives neither the old input batch
             // nor a Scene update. Its one Node update must not advance time either.
-            scene_frame.dt = 0.;
+            frame.dt = 0.;
         }
-        self.render_scene(scene_frame)
+        self.render_scene(frame)
     }
 
-    fn prepare_scene(&mut self, frame: SceneFrame, update_nodes: bool) -> Result<Vec<SceneRoot>> {
-        let mut roots = self.collect_roots(frame)?;
-        let nodes = Self::prepare_roots(&roots)?;
+    fn prepare_scene(&mut self, frame: SceneFrame, update_nodes: bool) -> Result<()> {
+        let scene = self.scenes.last_mut().unwrap().scene.as_mut();
+        self.layout.collect(scene, &frame)?;
+        self.layout.prepare()?;
         if update_nodes {
-            // Reuse the final validated forest. Capture-only rendering never ticks it.
             batch(|| {
                 Runtime::with(|rt| {
-                    for node in nodes {
+                    for node in self
+                        .layout
+                        .snapshots
+                        .iter()
+                        .flat_map(GeometrySnapshot::nodes)
+                    {
                         rt.invoke_hook(node.id, |hooks| &mut hooks.update, &frame.dt);
                     }
                 })
             });
-            roots = self.collect_roots(frame)?;
-            Self::prepare_roots(&roots)?;
+            self.layout.collect(scene, &frame)?;
+            self.layout.prepare()?;
         }
-        Ok(roots)
+        Ok(())
     }
 
     fn draw_scene(
-        &mut self,
+        scene: &mut dyn Scene,
         frame: SceneFrame,
         roots: &[SceneRoot],
         transition: Option<TransitionFrame>,
@@ -405,67 +417,58 @@ impl App {
             transition,
             transition_source,
         };
-        let result = self.scenes.last_mut().unwrap().scene.render(&mut render);
-        if result.is_err() {
-            self.pictures.cleanup_scene_error();
-        }
-        result.context("Scene render")?;
+        scene
+            .render(&mut render)
+            .map_err(|error| CallbackError::new("render", error))?;
         Ok(render.drawn)
     }
 
     fn render_scene(&mut self, frame: SceneFrame) -> Result<()> {
-        let roots = self.prepare_scene(frame, true)?;
-        let sample = self
-            .active_transition
-            .as_mut()
-            .map(|transition| transition.clock.frame(frame.dt, frame.viewport));
-        let composite = self
-            .active_transition
-            .as_ref()
-            .is_some_and(|transition| transition.effect.is_composite());
-        let drawn = if composite {
-            self.pictures.begin_live(frame.viewport)?;
-            let drawn = self.draw_scene(frame, &roots, sample, false);
-            if drawn.is_ok() {
-                self.pictures.finish_live();
-            } else {
-                self.pictures.finish();
-            }
-            drawn?
-        } else {
-            self.draw_scene(frame, &roots, sample, false)?
+        self.prepare_scene(frame, true)?;
+        let roots = &self.layout.roots;
+        let scene = self.scenes.last_mut().unwrap().scene.as_mut();
+        let draw_normal = |scene, sample| {
+            Self::draw_scene(scene, frame, roots, sample, false)
+                .inspect_err(|_| PictureCache::cleanup_scene_error())
         };
-        if let Some(sample) = sample {
-            let active = self.active_transition.as_mut().unwrap();
-            if composite {
+        self.displayed = if let Some(active) = &mut self.active_transition {
+            let sample = active.clock.frame(frame.dt, frame.viewport);
+            let drawn = if active.effect.is_composite() {
                 self.pictures
-                    .compose(sample, &mut active.effect)
-                    .context("Scene transition composite")?;
+                    .draw_composite(sample, &mut active.effect, || {
+                        Self::draw_scene(scene, frame, roots, Some(sample), false)
+                    })?
             } else {
-                self.pictures
-                    .draw_overlay(sample, &mut active.effect)
-                    .context("Scene transition overlay")?;
-            }
-            // A terminal sample is acknowledged only after all drawing/flushes succeed.
-            active.clock.did_present();
+                let drawn = draw_normal(scene, Some(sample))?;
+                PictureCache::draw_overlay(sample, &mut active.effect)?;
+                drawn
+            };
+            active.clock.did_present(sample);
             active.sample = sample;
-        }
-        self.displayed = drawn;
+            drawn
+        } else {
+            draw_normal(scene, None)?
+        };
+        self.pointer_manager
+            .mark_undisplayed_captures(&self.displayed, |parent, child| {
+                self.layout
+                    .forest
+                    .nodes
+                    .get(&child)
+                    .is_some_and(|location| location.parent == Some(parent))
+            });
         Ok(())
     }
 
     fn capture_source(&mut self, mut frame: SceneFrame) -> Result<()> {
         frame.dt = 0.;
-        let roots = self.prepare_scene(frame, false)?;
-        self.pictures.begin_source(frame.viewport)?;
-        let drawn = self.draw_scene(frame, &roots, None, true);
-        if drawn.is_ok() {
-            self.pictures.finish_source();
-        } else {
-            self.pictures.finish();
-        }
+        self.prepare_scene(frame, false)?;
+        let roots = &self.layout.roots;
+        let scene = self.scenes.last_mut().unwrap().scene.as_mut();
         // Current retained picture, not last-screen pixels. No input eligibility or updates.
-        drawn.map(|_| ())
+        self.pictures.capture_source(frame.viewport, || {
+            Self::draw_scene(scene, frame, roots, None, true).map(|_| ())
+        })
     }
 
     fn activate(&mut self, frame: SceneFrame) -> Result<()> {
@@ -484,19 +487,18 @@ impl App {
         // Pop return values belong to the retained receiver, even if that receiver
         // was covered again before the host resumed. Consume each exactly once.
         while let Some(result) = entry.pending_results.pop_front() {
-            batched_result(|| entry.scene.event(SceneEvent::Returned(result), &mut ctx))
-                .context("Scene result")?;
+            batched_result("result", || {
+                entry.scene.event(SceneEvent::Returned(result), &mut ctx)
+            })?;
         }
         match entry.state {
             SceneState::New => {
                 entry.state = SceneState::Running;
-                batched_result(|| entry.scene.event(SceneEvent::Enter, &mut ctx))
-                    .context("Scene enter")?;
+                batched_result("enter", || entry.scene.event(SceneEvent::Enter, &mut ctx))?;
             }
             SceneState::Paused => {
                 entry.state = SceneState::Running;
-                batched_result(|| entry.scene.event(SceneEvent::Resume, &mut ctx))
-                    .context("Scene resume")?;
+                batched_result("resume", || entry.scene.event(SceneEvent::Resume, &mut ctx))?;
             }
             SceneState::Running => {}
         }
@@ -524,21 +526,19 @@ impl App {
                     .as_ref()
                     .map(|transition| transition.sample),
             };
-            batched_result(|| entry.scene.event(SceneEvent::Pause, &mut ctx))
-                .context("Scene pause")?;
+            batched_result("pause", || entry.scene.event(SceneEvent::Pause, &mut ctx))?;
         }
         Ok(command)
     }
 
     fn check_stopped_command(&self, command: Option<&SceneCommand>) -> Result<()> {
-        if self.state == AppState::Faulted {
-            ensure!(
-                matches!(
-                    command,
-                    Some(SceneCommand::Replace(_) | SceneCommand::Reset(_) | SceneCommand::Exit)
-                ),
-                "Scene is faulted; replace or reset it explicitly before continuing"
-            );
+        if self.state == AppState::Faulted
+            && !matches!(
+                command,
+                Some(SceneCommand::Replace(_) | SceneCommand::Reset(_))
+            )
+        {
+            return Err(AppError::Faulted);
         }
         Ok(())
     }
@@ -563,31 +563,37 @@ impl App {
             || matches!(command, SceneCommand::Pop(_)) && self.scenes.len() <= 1
     }
 
-    fn install_command(&mut self, frame: SceneFrame) -> Result<bool> {
-        let Some(request) = self.command.take() else {
-            return Ok(false);
-        };
-        self.select_request(request, frame)
+    fn commit_instant(
+        &mut self,
+        request: SceneRequestData,
+        frame: SceneFrame,
+        suspended_pause_request: Option<SceneRequestData>,
+    ) -> Result<bool> {
+        let SceneRequestData {
+            transition,
+            command,
+        } = request;
+        drop(transition);
+        self.cancel_transition();
+        self.commit_command(command, frame, suspended_pause_request)?;
+        Ok(true)
     }
 
-    fn select_request(&mut self, mut request: SceneRequestData, frame: SceneFrame) -> Result<bool> {
-        // Keep the visual and destination aggregated across fallible capture work:
-        // error unwinding must drop the visual before any handles it may reference.
+    fn select_request(
+        &mut self,
+        mut request: SceneRequestData,
+        frame: SceneFrame,
+        suspended_pause_request: Option<SceneRequestData>,
+    ) -> Result<bool> {
+        // Keep the effect and command together across fallible capture so visual
+        // closures drop before any destination/result handles they may reference.
         let entered_source = self.state == AppState::Active
             && self
                 .scenes
                 .last()
                 .is_some_and(|entry| entry.state != SceneState::New);
         if !entered_source {
-            // Recovery/never-entered sources have no valid outgoing picture. Commit
-            // instantly, even while suspended, without manufacturing Enter/Pause.
-            drop(mem::replace(
-                &mut request.transition,
-                TransitionChoice::Instant,
-            ));
-            self.cancel_transition();
-            self.commit_command(request.command, frame)?;
-            return Ok(true);
+            return self.commit_instant(request, frame, suspended_pause_request);
         }
         if matches!(request.transition, TransitionChoice::Default) {
             request.transition = self
@@ -598,41 +604,29 @@ impl App {
                 });
         }
         let TransitionChoice::Custom(effect) = &request.transition else {
-            self.cancel_transition();
-            self.commit_command(request.command, frame)?;
-            return Ok(true);
+            return self.commit_instant(request, frame, suspended_pause_request);
         };
         let timing = effect.timing();
         if matches!(timing, TransitionTiming::AfterSwitch(_))
             && self.command_exits(&request.command)
         {
             // No entering Scene exists. An AroundSwitch exit can still animate this.
-            drop(mem::replace(
-                &mut request.transition,
-                TransitionChoice::Instant,
-            ));
-            self.cancel_transition();
-            self.commit_command(request.command, frame)?;
-            return Ok(true);
+            return self.commit_instant(request, frame, suspended_pause_request);
         }
-        // Only a new composite needs the old picture. Cancellation and overlays
-        // must not validate a suspended host's unavailable picture viewport.
+        let waits_for_presentation = self.host_paused
+            || !drawable(frame.viewport)
+            || matches!(timing, TransitionTiming::AroundSwitch { .. });
         let reuse_picture = effect.is_composite()
             && self
                 .active_transition
                 .as_ref()
                 .is_some_and(|active| active.effect.is_composite())
-            && self.pictures.freeze_presented(frame.viewport)?;
+            && self.pictures.freeze_presented(frame.viewport);
         drop(self.active_transition.take());
         if !reuse_picture {
             self.pictures.invalidate();
         }
-        if matches!(timing, TransitionTiming::AfterSwitch(_))
-            && !self.host_paused
-            && effect.is_composite()
-            && !reuse_picture
-            && self.pictures.needs_source(frame.viewport)?
-        {
+        if !waits_for_presentation && effect.is_composite() && !reuse_picture {
             self.capture_source(frame)?;
         }
         let SceneRequestData {
@@ -640,101 +634,83 @@ impl App {
             command,
         } = request
         else {
-            unreachable!("request effect was resolved above");
+            unreachable!("request effect was resolved above")
         };
-        let wait = matches!(timing, TransitionTiming::AroundSwitch { .. }) || self.host_paused;
-        self.active_transition = Some(ActiveTransition::new(effect, Some(command), frame.viewport));
-        if wait {
+        if waits_for_presentation {
+            self.active_transition =
+                Some(ActiveTransition::new(effect, Some(command), frame.viewport));
+            // The source is still owned. A newer request from Pause is allowed
+            // to interrupt this waiting effect at the next frame's boundary.
+            if let Some(request) = suspended_pause_request {
+                self.command = Some(request);
+            }
             return Ok(false);
         }
-        let command = self
-            .active_transition
-            .as_mut()
-            .unwrap()
-            .pending
-            .take()
-            .unwrap();
-        self.commit_command(command, frame)?;
+        self.active_transition = Some(ActiveTransition::new(effect, None, frame.viewport));
+        self.commit_command(command, frame, suspended_pause_request)?;
         Ok(true)
     }
 
     fn advance_switch_boundary(&mut self, frame: SceneFrame) -> Result<bool> {
-        let Some(active) = self.active_transition.as_ref() else {
-            return Ok(false);
-        };
-        if self.host_paused || !active.ready_to_switch() {
-            return Ok(false);
-        }
+        let active = self.active_transition.as_ref().expect("ready transition");
         if active.clock.phase() == TransitionPhase::AfterSwitch
             && active.effect.is_composite()
             && self.pictures.needs_source(frame.viewport)?
         {
-            let can_draw_source = self
-                .scenes
-                .last()
-                .is_some_and(|entry| entry.state != SceneState::New);
-            if can_draw_source {
-                self.capture_source(frame)?;
-            }
+            self.capture_source(frame)?;
         }
         let active = self.active_transition.as_mut().unwrap();
         let command = active
             .pending
             .take()
-            .expect("outgoing transition owns its request");
+            .expect("ready transition owns a command");
         if self.command_exits(&command) {
             self.cancel_transition();
         } else {
             let active = self.active_transition.as_mut().unwrap();
             if active.clock.phase() == TransitionPhase::BeforeSwitch {
-                active.clock.after_switch()?;
+                active.clock.after_switch();
             }
             active.sample = active.clock.frame(0., frame.viewport);
         }
-        self.commit_command(command, frame)?;
+        self.commit_command(command, frame, None)?;
         Ok(true)
     }
 
-    fn commit_command(&mut self, command: SceneCommand, mut frame: SceneFrame) -> Result<()> {
-        // Take the selected command before user callbacks. Requests made during
-        // pause/result/enter/resume are a separate command for the next frame;
-        // they cannot recursively mutate the stack at this boundary.
-        self.pointer_manager.cancel_input();
-        self.displayed.clear();
+    fn commit_command(
+        &mut self,
+        command: SceneCommand,
+        mut frame: SceneFrame,
+        suspended_pause_request: Option<SceneRequestData>,
+    ) -> Result<()> {
+        // The chosen command is no longer in the request slot. Boundary callbacks
+        // can only queue requests for a subsequent frame, never mutate the stack.
         frame.dt = 0.;
-        let pause_request = match self.pause_top(frame) {
-            Ok(request) => request,
-            Err(error) => {
-                // The selected destination is still local here. Drop its visual first.
-                self.cancel_transition();
-                drop(command);
-                return Err(error);
+        let pause_request = if self.host_paused {
+            suspended_pause_request
+        } else {
+            self.pointer_manager.cancel_input();
+            match self.pause_top(frame) {
+                Ok(request) => request,
+                Err(error) => {
+                    // The destination is local, so drop its visual first.
+                    self.cancel_transition();
+                    drop(command);
+                    return Err(error);
+                }
             }
         };
+        self.displayed.clear();
         if matches!(command, SceneCommand::Push(_)) {
             if let Some(request) = pause_request {
                 self.command = Some(request);
             }
         } else {
-            // Pop/replace/reset/exit remove the callback's owner permanently.
-            // Drop its requested values before that owner, without discarding
-            // unrelated host/task requests already queued during a paused frame.
             drop(pause_request);
         }
         match command {
-            SceneCommand::Push(scene) => {
-                self.scenes.push(SceneEntry::new(scene));
-            }
-            SceneCommand::Pop(result) => {
-                if self.scenes.len() <= 1 {
-                    // No receiver. Discard values/requests before any resources
-                    // their destructors may read, including a pause-queued child.
-                    drop(result);
-                    drop(self.command.take());
-                    self.drop_scenes();
-                    self.state = AppState::Exited;
-                    return Ok(());
-                }
+            SceneCommand::Push(scene) => self.scenes.push(SceneEntry::new(scene)),
+            SceneCommand::Pop(result) if self.scenes.len() > 1 => {
                 drop(self.scenes.pop());
                 if let Some(result) = result {
                     self.scenes
@@ -752,7 +728,10 @@ impl App {
                 self.drop_scenes();
                 self.scenes.push(SceneEntry::new(scene));
             }
-            SceneCommand::Exit => {
+            terminal @ (SceneCommand::Pop(_) | SceneCommand::Exit) => {
+                // A result without a receiver and other requests must drop
+                // before the Scene owners their destructors might reference.
+                drop(terminal);
                 drop(self.command.take());
                 self.drop_scenes();
                 self.state = AppState::Exited;
@@ -760,8 +739,7 @@ impl App {
             }
         }
         self.state = AppState::Active;
-        // While suspended, new instances and return values stay pending. A normal
-        // frame will deliver results before enter/resume, with no old input replay.
+        // While suspended, results and activation wait for the next normal frame.
         self.activate(frame)
     }
 
@@ -770,117 +748,6 @@ impl App {
         while let Some(entry) = self.scenes.pop() {
             drop(entry);
         }
-    }
-
-    fn collect_roots(&mut self, frame: SceneFrame) -> Result<Vec<SceneRoot>> {
-        let mut roots = Vec::new();
-        self.scenes
-            .last_mut()
-            .unwrap()
-            .scene
-            .layout(&frame, &mut roots)
-            .context("Scene layout roots")?;
-        Ok(roots)
-    }
-
-    fn validate_roots(roots: &[SceneRoot]) -> Result<Vec<NodeRef>> {
-        let mut seen = HashMap::new();
-        let mut nodes = Vec::new();
-        let mut pending = Vec::new();
-        for (root_index, root) in roots.iter().enumerate() {
-            ensure!(
-                root.bounds.min().is_finite()
-                    && root.bounds.size().is_finite()
-                    && root.bounds.w >= 0.
-                    && root.bounds.h >= 0.,
-                "invalid Scene root bounds"
-            );
-            let live = Runtime::with(|rt| rt.nodes.borrow().contains_key(root.node.id));
-            ensure!(live, "Scene submitted a disposed root");
-            if let Some(id) = root.node.layout_id() {
-                ensure!(
-                    Runtime::with(|rt| rt.taffy.borrow().parent(id).is_none()),
-                    "Scene must submit a tree root, not a Node attached to another layout"
-                );
-            }
-            pending.push(root.node);
-            while let Some(node) = pending.pop() {
-                let state =
-                    Runtime::with(|rt| rt.nodes.borrow().get(node.id).map(|node| *node.children));
-                let Some(children) = state else {
-                    continue;
-                };
-                // Check before descending: borrowed child lists can contain cycles.
-                ensure!(
-                    seen.insert(node, root_index).is_none(),
-                    "Scene roots overlap or contain a duplicate Node"
-                );
-                let children = children.try_get_clone_untracked();
-                // Reading a computed child list can dispose its own Node.
-                if !Runtime::with(|rt| rt.nodes.borrow().contains_key(node.id)) {
-                    continue;
-                }
-                nodes.push(node);
-                if let Some(children) = children {
-                    pending.extend(children.iter().rev().copied());
-                }
-            }
-        }
-        Runtime::with(|rt| {
-            // Child-list computations can dispose previously visited siblings.
-            // Inspect current layouts only after all such callbacks have returned.
-            let arena = rt.nodes.borrow();
-            nodes.retain(|node| arena.contains_key(node.id));
-            let taffy = rt.taffy.borrow();
-            for root in roots {
-                let node = arena
-                    .get(root.node.id)
-                    .ok_or_else(|| anyhow::anyhow!("Scene submitted a disposed root"))?;
-                ensure!(
-                    node.layout_id.is_none_or(|id| taffy.parent(id).is_none()),
-                    "Scene must submit a tree root, not a Node attached to another layout"
-                );
-            }
-            let layouts: HashMap<_, _> = nodes
-                .iter()
-                .filter_map(|node| arena[node.id].layout_id.map(|id| (id, seen[node])))
-                .collect();
-            // A layoutless wrapper must not hide a subtree attached outside its root.
-            for (layout, root_index) in &layouts {
-                ensure!(
-                    taffy
-                        .parent(*layout)
-                        .is_none_or(|parent| layouts.get(&parent) == Some(root_index)),
-                    "Scene must submit a tree root, not a Node attached to another layout"
-                );
-            }
-            Ok(nodes)
-        })
-    }
-
-    fn prepare_roots(roots: &[SceneRoot]) -> Result<Vec<NodeRef>> {
-        // Geometry observers may feed back into an earlier independent root.
-        Self::validate_roots(roots)?;
-        for _ in 0..64 {
-            let mut snapshots = Vec::new();
-            for root in roots {
-                root.node.prepare_layout_in(root.bounds);
-                snapshots.push(root.node.prepared_geometry());
-            }
-            Self::validate_roots(roots)?;
-            // A later root observer may change an earlier root's inherited font;
-            // resolve that binding before checking measurement dirtiness.
-            for root in roots {
-                root.node.resolve_font_sizes();
-            }
-            // Font observers and geometry reads can flush reactive changes too.
-            let current = snapshots.iter().all(|snapshot| snapshot.is_current());
-            let nodes = Self::validate_roots(roots)?;
-            if current {
-                return Ok(nodes);
-            }
-        }
-        bail!("Scene root geometry did not stabilize");
     }
 
     fn fault(&mut self) {
@@ -902,62 +769,36 @@ impl App {
         let frame = SceneFrame {
             dt: 0.,
             time: macroquad::time::get_time(),
-            viewport: Rect::new(
-                0.,
-                0.,
-                macroquad::window::screen_width(),
-                macroquad::window::screen_height(),
-            ),
+            viewport: window_viewport(),
         };
-        self.run_checked_paused_frame(frame, |app| app.drive_tasks())
+        let result = self.run_paused_frame(frame);
+        self.finish_frame(result)
     }
 
-    fn run_checked_paused_frame(
-        &mut self,
-        mut frame: SceneFrame,
-        globals: impl FnOnce(&mut Self),
-    ) -> Result<()> {
-        frame.dt = 0.;
+    fn run_paused_frame(&mut self, frame: SceneFrame) -> Result<()> {
         self.host_paused = true;
-        // Fix this frame's command before pause can queue another one. Lifecycle
-        // requests during this boundary must wait, even without normal rendering.
-        let mut selected = self.command.take();
-        // Retain displayed geometry, but revoke capture before the Pause callback.
-        self.pointer_manager.cancel_input();
-        let paused = self.pause_top(frame).map(|request| {
-            if matches!(
-                selected.as_ref().map(|request| &request.command),
-                None | Some(SceneCommand::Push(_))
-            ) {
-                if let Some(request) = request {
-                    self.command = Some(request);
-                }
-            } else {
-                // The selected operation permanently removes the paused source.
-                drop(request);
-            }
-        });
-        if paused.is_err() {
-            // A selected child/visual can borrow source handles. Drop before globals
-            // can recover/reset and release that source after a failed pause.
-            drop(selected.take());
-            self.fault();
-        }
-        // Non-GPU work still ticks exactly once, including a failed pause frame.
-        globals(self);
-        let result = paused.and_then(|()| {
-            self.check_stopped_command(selected.as_ref().map(|request| &request.command))?;
+        // Requests made by Pause belong to a later frame, unless the selected
+        // command actually removes their owner now.
+        self.check_stopped_command(self.command.as_ref().map(|request| &request.command))?;
+        let selected = self.command.take();
+        if self.state != AppState::Active {
+            // Recovery replaces the faulted owner before any ordinary work runs.
             if let Some(request) = selected {
-                // Animated requests wait for rendering; instantaneous commands retain
-                // the original suspended commit/results-deferred contract.
-                self.select_request(request, frame)?;
+                self.select_request(request, frame, None)?;
+                if self.state == AppState::Active {
+                    self.drive_tasks();
+                }
             }
-            Ok(())
-        });
-        if result.is_err() {
-            self.fault();
+            return Ok(());
         }
-        result
+        let pause_request = self.pause_top(frame)?;
+        self.drive_tasks();
+        if let Some(request) = selected {
+            self.select_request(request, frame, pause_request)?;
+        } else {
+            self.command = pause_request;
+        }
+        Ok(())
     }
 
     fn drive_tasks(&mut self) {
@@ -983,5 +824,166 @@ impl App {
             });
         });
         task::tick(32);
+    }
+}
+
+#[derive(Default)]
+struct SceneLayout {
+    roots: Vec<SceneRoot>,
+    snapshots: Vec<GeometrySnapshot>,
+    forest: SceneForest,
+}
+
+impl SceneLayout {
+    fn collect(&mut self, scene: &mut dyn Scene, frame: &SceneFrame) -> Result<()> {
+        self.roots.clear();
+        scene
+            .layout(frame, &mut self.roots)
+            .map_err(|error| CallbackError::new("layout", error))?;
+        for root in &self.roots {
+            if !(root.bounds.min().is_finite()
+                && root.bounds.size().is_finite()
+                && root.bounds.w >= 0.
+                && root.bounds.h >= 0.)
+            {
+                return Err(SceneError::InvalidRootBounds.into());
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare(&mut self) -> std::result::Result<(), SceneError> {
+        self.snapshots
+            .resize_with(self.roots.len(), GeometrySnapshot::default);
+        let snapshots = &mut self.snapshots;
+        for _ in 0..64 {
+            // Check tree structure before recursively preparing any root.
+            self.forest.visit(&self.roots)?;
+            for (root, snapshot) in self.roots.iter().zip(snapshots.iter_mut()) {
+                if !root.node.prepare_layout_snapshot(root.bounds, snapshot) {
+                    return Err(SceneError::DisposedRoot);
+                }
+            }
+            // A later root can invalidate an earlier root's font or geometry.
+            // Each root already checked its own publication before returning.
+            if self.roots.len() > 1 {
+                for root in &self.roots {
+                    root.node.resolve_font_sizes();
+                }
+                if !self
+                    .roots
+                    .iter()
+                    .zip(snapshots.iter())
+                    .all(|(root, snapshot)| snapshot.is_current(root.node))
+                {
+                    continue;
+                }
+            }
+            if self.forest.use_snapshots(&self.roots, snapshots)? {
+                return Ok(());
+            }
+        }
+        Err(SceneError::UnstableGeometry)
+    }
+}
+
+#[derive(Default)]
+struct SceneForest {
+    nodes: HashMap<NodeRef, NodeLocation>,
+    layouts: HashMap<taffy::NodeId, usize>,
+    pending: Vec<(NodeRef, Option<NodeRef>)>,
+}
+
+struct NodeLocation {
+    root: usize,
+    parent: Option<NodeRef>,
+}
+
+impl SceneForest {
+    fn add(
+        &mut self,
+        node: NodeRef,
+        parent: Option<NodeRef>,
+        root: usize,
+    ) -> std::result::Result<(), SceneError> {
+        if !(self
+            .nodes
+            .insert(node, NodeLocation { root, parent })
+            .is_none())
+        {
+            return Err(SceneError::DuplicateNode);
+        }
+        Ok(())
+    }
+
+    fn visit(&mut self, roots: &[SceneRoot]) -> std::result::Result<(), SceneError> {
+        self.nodes.clear();
+        self.pending.clear();
+        for (index, root) in roots.iter().enumerate() {
+            self.pending.push((root.node, None));
+            while let Some((node, parent)) = self.pending.pop() {
+                let children =
+                    Runtime::with(|rt| rt.nodes.borrow().get(node.id).map(|inner| *inner.children));
+                let Some(children) = children else { continue };
+                // Test identity before descending, including layoutless cycles.
+                self.add(node, parent, index)?;
+                if let Some(children) = children.try_get_clone_untracked() {
+                    self.pending
+                        .extend(children.iter().rev().map(|&child| (child, Some(node))));
+                }
+            }
+        }
+        self.validate_layouts(roots)?;
+        Ok(())
+    }
+
+    fn use_snapshots(
+        &mut self,
+        roots: &[SceneRoot],
+        snapshots: &[GeometrySnapshot],
+    ) -> std::result::Result<bool, SceneError> {
+        self.nodes.clear();
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            for (node, parent) in snapshot.edges() {
+                self.add(node, parent, index)?;
+            }
+        }
+        self.validate_layouts(roots)
+    }
+
+    /// No reactive reads here: verify final liveness and Taffy ownership after
+    /// callbacks, and report whether the snapshotted forest is still complete.
+    fn validate_layouts(&mut self, roots: &[SceneRoot]) -> std::result::Result<bool, SceneError> {
+        self.layouts.clear();
+        Runtime::with(|rt| {
+            let arena = rt.nodes.borrow();
+            let taffy = rt.taffy.borrow();
+            for root in roots {
+                let node = arena.get(root.node.id).ok_or(SceneError::DisposedRoot)?;
+                if !node.layout_id.is_none_or(|id| taffy.parent(id).is_none()) {
+                    return Err(SceneError::AttachedRoot);
+                }
+            }
+            let count = self.nodes.len();
+            self.nodes.retain(|node, location| {
+                let Some(inner) = arena.get(node.id) else {
+                    return false;
+                };
+                if let Some(id) = inner.layout_id {
+                    self.layouts.insert(id, location.root);
+                }
+                true
+            });
+            // A layoutless wrapper must not hide a subtree attached outside its root.
+            for (layout, owner) in &self.layouts {
+                if !(taffy
+                    .parent(*layout)
+                    .is_none_or(|parent| self.layouts.get(&parent) == Some(owner)))
+                {
+                    return Err(SceneError::AttachedRoot);
+                }
+            }
+            Ok(self.nodes.len() == count)
+        })
     }
 }

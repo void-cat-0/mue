@@ -439,23 +439,18 @@ impl Session {
         true
     }
 
-    pub fn resume(&self) -> bool {
+    /// Run a live attempt after the Scene has checked both pause conditions.
+    /// The first start/resume update never advances time. Natural end emits once.
+    pub fn update_running(&self, dt: f32) -> Option<AttemptResult> {
         let mut attempt = self.attempt.borrow_mut();
-        if attempt.state != SessionState::Paused {
-            return false;
-        }
-        attempt.state = SessionState::Running;
-        attempt.discard_next_dt = true;
-        true
-    }
-
-    /// dt belongs to ordinary foreground updates, not host wall time. First
-    /// start/resume update is dt0 even if a caller accidentally supplies a gap.
-    /// Ready, paused, and stopped attempts never advance. Natural end emits once.
-    pub fn update(&self, dt: f32) -> Option<AttemptResult> {
-        let mut attempt = self.attempt.borrow_mut();
-        if attempt.state != SessionState::Running {
-            return None;
+        match attempt.state {
+            SessionState::Paused => {
+                attempt.state = SessionState::Running;
+                attempt.discard_next_dt = false;
+                return None;
+            }
+            SessionState::Running => {}
+            _ => return None,
         }
         if attempt.discard_next_dt {
             attempt.discard_next_dt = false;

@@ -15,8 +15,15 @@ use macroquad::window::get_internal_gl;
 
 /// Snapshot of the immediate-draw state a channel may change.
 ///
-/// Restored on drop. Camera, render pass, and depth are intentionally not part
-/// of this snapshot; the channel restores those itself.
+/// Restored on drop on the render thread. The saved pipeline is a non-owning
+/// handle: keep its `Material` alive (and its pipeline registered) until after
+/// the guard is dropped and any draws using it have been flushed. This also
+/// applies to new materials queued inside the scope: the guard does not flush.
+///
+/// This restores logical `QuadGl` state, not the backend pipeline currently
+/// applied on the GPU. In particular, an OpenGL `clear_background` uses the
+/// last submitted pipeline's color-write mask, not the logically selected
+/// material. Camera, render pass, and depth are left to the caller.
 #[must_use = "the guard restores render state on drop"]
 pub struct RenderStateGuard {
     viewport: Option<(i32, i32, i32, i32)>,

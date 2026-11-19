@@ -2,6 +2,7 @@ pub(crate) mod build;
 mod frame;
 pub(crate) use build::HoverOwner;
 pub use build::{BuildNode, NodeContext};
+pub(crate) use frame::GeometrySnapshot;
 pub mod atlas;
 pub mod children;
 pub mod flexbox;
@@ -76,14 +77,21 @@ pub(crate) struct NodeInner {
     pub(crate) children: Owned<Children>,
 }
 
-impl NodeInner {
-    pub(crate) fn effective_transform(&self) -> Matrix {
-        let bounds = if self.layout.rect.is_null() {
+pub(crate) struct NodeTransform {
+    rect: ReadSignal<Rect>,
+    matrix: Prop<Matrix>,
+    list: Prop<Transform>,
+    origin: Prop<TransformOrigin>,
+}
+
+impl NodeTransform {
+    pub(crate) fn resolve(self) -> Matrix {
+        let bounds = if self.rect.is_null() {
             Rect::default()
         } else {
-            self.layout.rect.get()
+            self.rect.get()
         };
-        let transform_origin = self.transform_origin.get();
+        let transform_origin = self.origin.get();
         let origin = bounds.min()
             + crate::math::Vector::new(
                 match transform_origin.0 {
@@ -96,13 +104,24 @@ impl NodeInner {
                 },
             );
         let around_origin = Matrix::from_translation(origin)
-            * self.matrix_transform.get()
+            * self.matrix.get()
             * Matrix::from_translation(-origin);
-        around_origin
-            * self
-                .transform_list
-                .get_clone()
-                .resolve(bounds, self.transform_origin.get())
+        let list = match self.list {
+            Prop::Static(list) => list,
+            Prop::Dynamic(list) => list.get_clone(),
+        };
+        around_origin * list.resolve(bounds, transform_origin)
+    }
+}
+
+impl NodeInner {
+    pub(crate) fn transform(&self) -> NodeTransform {
+        NodeTransform {
+            rect: *self.layout.rect,
+            matrix: self.matrix_transform,
+            list: self.transform_list.clone(),
+            origin: self.transform_origin,
+        }
     }
 
     pub fn new(scope: Scope, children: Owned<Children>) -> Self {
@@ -184,24 +203,28 @@ impl NodeRef {
     }
 
     pub(crate) fn sync_layout(&self) -> bool {
-        let (sync, size, children) = Runtime::with(|rt| {
-            let node = rt.node(self.id);
-            let size = node
-                .layout_sync
-                .as_ref()
-                .and_then(|_| node.layout_id)
-                .map(|id| {
-                    let size = rt.taffy.borrow().layout(id).unwrap().size;
-                    Vector::new(size.width, size.height)
-                });
-            (node.layout_sync.clone(), size, *node.children)
+        let state = Runtime::with(|rt| {
+            let nodes = rt.nodes.borrow();
+            let node = nodes.get(self.id)?;
+            let size = node.layout_sync.as_ref().and(node.layout_id).map(|id| {
+                let size = rt.taffy.borrow().layout(id).unwrap().size;
+                Vector::new(size.width, size.height)
+            });
+            Some((node.layout_sync.clone(), size))
         });
+        let Some((sync, size)) = state else {
+            return false;
+        };
         let mut changed = match (sync, size) {
             (Some(sync), Some(size)) => sync(size),
             _ => false,
         };
-        for child in children.get_clone_untracked().iter() {
-            changed |= child.sync_layout();
+        let children =
+            Runtime::with(|rt| rt.nodes.borrow().get(self.id).map(|node| *node.children));
+        if let Some(children) = children.and_then(|children| children.try_get_clone_untracked()) {
+            for child in children.iter() {
+                changed |= child.sync_layout();
+            }
         }
         changed
     }
@@ -222,19 +245,22 @@ impl NodeRef {
 
     fn render_inner(&self) {
         Runtime::with(|rt| {
-            let node = rt.node(self.id);
-            let transform = node.effective_transform();
-            drop(node);
+            let transform = rt.node(self.id).transform();
+            let transform = transform.resolve();
             crate::paint::with_transform(transform, || {
                 rt.invoke_hook(self.id, |hooks| &mut hooks.render, &());
 
-                let node = rt.node(self.id);
-                let clip = node.clip.map(|rect| rect.get());
-                let clip_radius = node.clip_radius;
-                let clip_sector = node.clip_sector;
-                let layout_rect = node.layout.rect;
-                let children = *node.children;
-                drop(node);
+                let (clip, clip_radius, clip_sector, layout_rect, children) = {
+                    let node = rt.node(self.id);
+                    (
+                        node.clip,
+                        node.clip_radius,
+                        node.clip_sector,
+                        *node.layout.rect,
+                        *node.children,
+                    )
+                };
+                let clip = clip.map(|rect| rect.get());
                 let draw = || {
                     let draw_children = || {
                         if !children.is_null() {
@@ -280,10 +306,14 @@ pub fn use_font_size() -> ReadSignal<f32> {
 impl NodeRef {
     pub(crate) fn resolve_font_sizes(&self) {
         fn visit(node: NodeRef, parent: f32, root: Option<f32>) -> bool {
-            let (declaration, computed, children) = Runtime::with(|rt| {
-                let node = rt.node(node.id);
-                (node.font_size, node.computed_font_size, *node.children)
+            let state = Runtime::with(|rt| {
+                let nodes = rt.nodes.borrow();
+                let node = nodes.get(node.id)?;
+                Some((node.font_size, node.computed_font_size, *node.children))
             });
+            let Some((declaration, computed, children)) = state else {
+                return false;
+            };
             let size = declaration.map_or(parent, |value| {
                 value
                     .get()
@@ -320,9 +350,14 @@ fn dispose_inner(node: NodeInner) {
         scope.dispose();
     }
     let _ = Runtime::try_with(|rt| {
-        if let Some(layout_id) = node.layout_id {
-            let _ = rt.taffy.borrow_mut().remove(layout_id);
-        }
+        let measure = node.layout_id.and_then(|layout_id| {
+            let mut taffy = rt.taffy_mut();
+            let measure = crate::layout::take_measure(&mut taffy, layout_id);
+            taffy.remove(layout_id).unwrap();
+            measure
+        });
+        // Measure captures can own further Nodes.
+        drop(measure);
         let removed: Vec<_> = {
             let mut gestures = rt.gestures.borrow_mut();
             node.gestures

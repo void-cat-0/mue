@@ -1,5 +1,4 @@
 //! One image renderer shared by cards, details and the transition overlay.
-use anyhow::Result;
 use macroquad::prelude::{Color, FilterMode, Image, Texture2D};
 use mue_macroquad::{
     SharedTexture,
@@ -17,7 +16,7 @@ pub struct Artwork {
     pub texture: SharedTexture,
 }
 impl Artwork {
-    pub fn load(bytes: &[u8]) -> Result<Rc<Self>> {
+    pub fn load(bytes: &[u8]) -> Result<Rc<Self>, macroquad::Error> {
         let image = Image::from_file_with_format(bytes, None)?;
         let texture = Texture2D::from_image(&image);
         texture.set_filter(FilterMode::Linear);

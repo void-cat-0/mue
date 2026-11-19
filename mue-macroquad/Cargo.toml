@@ -10,7 +10,6 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-anyhow = "1.0"
 bitflags = "2.11.0"
 cosmic-text = { workspace = true }
 glam = "0.32.1"
@@ -26,3 +25,4 @@ paste = "1.0.15"
 slotmap = { workspace = true }
 smallvec = { workspace = true }
 taffy = { workspace = true }
+thiserror.workspace = true

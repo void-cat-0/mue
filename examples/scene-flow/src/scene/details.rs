@@ -1,9 +1,8 @@
 use super::{play_flow::PlayFlow, scene_fade};
 use crate::{flow::FlowResult, input::DetailsKeys, ui};
-use anyhow::Result;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
+    CallbackResult, RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -49,14 +48,18 @@ impl Details {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("details expected FlowResult")]
+struct UnexpectedFlowResult;
+
 impl Scene for Details {
-    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.observe_context(ctx);
         match event {
             SceneEvent::Returned(value) => {
                 let outcome = value
                     .downcast::<FlowResult>()
-                    .map_err(|_| anyhow::anyhow!("details expected FlowResult"))?;
+                    .map_err(|_| UnexpectedFlowResult)?;
                 self.view.summary.set(ui::result_summary(&outcome));
                 self.has_rendered = false;
                 self.input_enabled = false;
@@ -79,7 +82,7 @@ impl Scene for Details {
         Ok(())
     }
 
-    fn update(&mut self, ctx: &mut SceneContext<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.observe_context(ctx);
         let action = self.action.replace(Action::None);
         if !self.input_enabled {
@@ -101,7 +104,7 @@ impl Scene for Details {
         Ok(())
     }
 
-    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> Result<()> {
+    fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
         let input = if self.input_enabled {
             RootInput::Interactive
         } else {
@@ -111,7 +114,7 @@ impl Scene for Details {
         Ok(())
     }
 
-    fn render(&mut self, render: &mut SceneRender<'_>) -> Result<()> {
+    fn render(&mut self, render: &mut SceneRender<'_>) -> CallbackResult<()> {
         ui::paint_base(render);
         render.draw(*self.view.root)?;
         if !render.is_transition_source() {

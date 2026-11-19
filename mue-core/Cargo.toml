@@ -12,9 +12,9 @@ impl-cosmic-text = ["cosmic-text"]
 
 [dependencies]
 async-task = "4.7.1"
+rustc-hash = "2.1.3"
 slotmap = { workspace = true }
 smallvec = { workspace = true }
-type-map = "0.5.1"
 
 cosmic-text = { workspace = true, optional = true }
 taffy = { workspace = true, optional = true }

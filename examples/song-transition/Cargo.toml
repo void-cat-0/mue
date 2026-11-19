@@ -7,8 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anyhow = "1.0"
 macroquad.workspace = true
 mue-core.workspace = true
+mue-i18n.workspace = true
 mue-macroquad.workspace = true
 mue-components.workspace = true
+thiserror.workspace = true

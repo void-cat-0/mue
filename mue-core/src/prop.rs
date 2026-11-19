@@ -66,6 +66,26 @@ impl<T: Default> Default for Prop<T> {
 impl<T: 'static> Access for Prop<T> {
     type Value = T;
 
+    fn get(&self) -> T
+    where
+        T: Copy,
+    {
+        match self {
+            Self::Static(value) => *value,
+            Self::Dynamic(signal) => signal.get(),
+        }
+    }
+
+    fn get_untracked(&self) -> T
+    where
+        T: Copy,
+    {
+        match self {
+            Self::Static(value) => *value,
+            Self::Dynamic(signal) => signal.get_untracked(),
+        }
+    }
+
     fn track(&self) {
         match self {
             Self::Static(_) => {}

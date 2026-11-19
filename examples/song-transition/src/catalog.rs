@@ -2,13 +2,15 @@
 use std::rc::Rc;
 
 use crate::artwork::Artwork;
-use anyhow::Result;
 
 #[derive(Clone)]
 pub struct Song {
     pub title: &'static str,
     pub artist: &'static str,
-    pub level: &'static str,
+    pub description_key: &'static str,
+    pub bpm: u16,
+    pub difficulty: &'static str,
+    pub level: u8,
     pub artwork: Rc<Artwork>,
 }
 
@@ -22,40 +24,54 @@ impl Catalog {
         &self.songs
     }
 
-    pub fn load() -> Result<Self> {
+    pub fn load() -> Result<Self, macroquad::Error> {
         let artwork = [
             Artwork::load(include_bytes!("../assets/solstice.png"))?,
             Artwork::load(include_bytes!("../assets/afterglow.png"))?,
             Artwork::load(include_bytes!("../assets/tidal.png"))?,
         ];
         let songs = [
-            ("SOLSTICE", "Aster / melodic progressive", "154 BPM / IN 13"),
-            ("AFTERGLOW", "Northbound / future garage", "128 BPM / IN 12"),
-            ("TIDAL", "Mira / ambient drum & bass", "172 BPM / IN 14"),
+            ("SOLSTICE", "Aster", "genre-progressive", 154, "IN", 13),
+            ("AFTERGLOW", "Northbound", "genre-garage", 128, "IN", 12),
+            ("TIDAL", "Mira", "genre-drum-bass", 172, "IN", 14),
             (
                 "SOLSTICE - dusk edit",
-                "Aster / sunset sessions",
-                "154 BPM / HD 10",
+                "Aster",
+                "genre-sunset",
+                154,
+                "HD",
+                10,
             ),
             (
                 "AFTERGLOW - orbit edit",
-                "Northbound / night drive",
-                "128 BPM / HD 9",
+                "Northbound",
+                "genre-night-drive",
+                128,
+                "HD",
+                9,
             ),
             (
                 "TIDAL - shoreline edit",
-                "Mira / quiet currents",
-                "172 BPM / HD 11",
+                "Mira",
+                "genre-quiet-currents",
+                172,
+                "HD",
+                11,
             ),
         ]
         .into_iter()
         .enumerate()
-        .map(|(index, (title, artist, level))| Song {
-            title,
-            artist,
-            level,
-            artwork: artwork[index % artwork.len()].clone(),
-        })
+        .map(
+            |(index, (title, artist, description_key, bpm, difficulty, level))| Song {
+                title,
+                artist,
+                description_key,
+                bpm,
+                difficulty,
+                level,
+                artwork: artwork[index % artwork.len()].clone(),
+            },
+        )
         .collect();
         Ok(Self { songs })
     }
