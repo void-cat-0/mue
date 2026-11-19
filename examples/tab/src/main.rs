@@ -1,4 +1,4 @@
-//! 固定底部 Tab 栏示例。运行：cargo run -p tab
+//! 固定底部 Tab 栏示例。运行：cargo run --manifest-path examples/Cargo.toml --example tab
 //! State-driven page transitions, advanced by App::frame.
 use mue_components::*;
 

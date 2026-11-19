@@ -1,4 +1,4 @@
-//! Layout and typography gallery. Run with `cargo run -p nodes`.
+//! Layout and typography gallery. Run with `cargo run --manifest-path examples/Cargo.toml --example nodes`.
 use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;

@@ -3,7 +3,7 @@
 Run from the workspace root:
 
 ```bash
-cargo run -p scene-flow --offline
+cargo run --manifest-path examples/Cargo.toml --example scene-flow --offline
 ```
 
 An interactive **offline consumer** of the public Scene APIs: retained details → cancellable/fallible CPU loading → normal-update GPU upload → Ready → explicit Start → Running → Results → retry or original details. It is not a Phira chart parser, audio engine, judgement system or device-timing test.

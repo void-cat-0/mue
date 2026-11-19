@@ -48,21 +48,21 @@ The `mue::guide` module collects the application guides in Rustdoc. The same gui
 
 ## Examples
 
-Run a workspace example with Cargo, for example:
+Run an example from the standalone examples package with Cargo, for example:
 
 ```sh
-cargo run -p basics
-cargo run -p scenes
-cargo run -p scene-flow
-cargo run -p scene-transitions
-cargo run -p song-transition
+cargo run --manifest-path examples/Cargo.toml --example basics
+cargo run --manifest-path examples/Cargo.toml --example scenes
+cargo run --manifest-path examples/Cargo.toml --example scene-flow
+cargo run --manifest-path examples/Cargo.toml --example scene-transitions
+cargo run --manifest-path examples/Cargo.toml --example song-transition
 ```
 
 The examples in [examples/](examples/) are executable applications and integration references. Macroquad examples open a window and require a working graphics backend.
 
 ## Requirements
 
-Rust 1.90 or newer. See [Cargo.toml](Cargo.toml) for workspace dependencies and example packages.
+Rust 1.90 or newer. See [Cargo.toml](Cargo.toml) for workspace dependencies and [examples/Cargo.toml](examples/Cargo.toml) for the standalone examples package.
 
 ## License
 

@@ -5,7 +5,7 @@
 From the workspace root, launch the normal interactive application:
 
 ```bash
-cargo run -p scene-transitions --offline
+cargo run --manifest-path examples/Cargo.toml --example scene-transitions --offline
 ```
 
 - **1** pushes a new colored Scene with the built-in crossfade.

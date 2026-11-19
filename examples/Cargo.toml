@@ -1,0 +1,181 @@
+[package]
+name = "mue-examples"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[profile.release]
+debug = true
+
+[dependencies]
+cosmic-text = "0.18.2"
+macroquad = { git = "https://github.com/void-cat-0/macroquad", default-features = false }
+miniquad = { git = "https://github.com/void-cat-0/miniquad" }
+mue = { path = "../mue" }
+mue-components = { path = "../mue-components" }
+mue-core = { path = "../mue-core" }
+mue-i18n = { path = "../mue-i18n" }
+mue-macroquad = { path = "../mue-macroquad" }
+mue-macros = { path = "../mue-macros" }
+taffy = "0.9.2"
+thiserror = "2.0"
+
+[[example]]
+name = "animation"
+path = "animation/src/main.rs"
+doc = false
+
+[[example]]
+name = "atlas"
+path = "atlas/src/main.rs"
+doc = false
+
+[[example]]
+name = "basics"
+path = "basics/src/main.rs"
+doc = false
+
+[[example]]
+name = "color"
+path = "color/src/main.rs"
+doc = false
+
+[[example]]
+name = "document"
+path = "document/src/main.rs"
+doc = false
+
+[[example]]
+name = "events"
+path = "events/src/main.rs"
+doc = false
+
+[[example]]
+name = "gestures"
+path = "gestures/src/main.rs"
+doc = false
+
+[[example]]
+name = "input-router"
+path = "input-router/src/main.rs"
+doc = false
+
+[[example]]
+name = "input-timing"
+path = "input-timing/src/main.rs"
+doc = false
+
+[[example]]
+name = "map"
+path = "map/src/main.rs"
+doc = false
+
+[[example]]
+name = "material-probe"
+path = "material-probe/src/main.rs"
+doc = false
+
+[[example]]
+name = "nodes"
+path = "nodes/src/main.rs"
+doc = false
+
+[[example]]
+name = "pages"
+path = "pages/src/main.rs"
+doc = false
+
+[[example]]
+name = "pass-probe"
+path = "pass-probe/src/main.rs"
+doc = false
+
+[[example]]
+name = "playground"
+path = "playground/src/main.rs"
+doc = false
+
+[[example]]
+name = "portal"
+path = "portal/src/main.rs"
+doc = false
+
+[[example]]
+name = "scene-flow"
+path = "scene-flow/src/main.rs"
+doc = false
+
+[[example]]
+name = "scene-transitions"
+path = "scene-transitions/src/main.rs"
+doc = false
+
+[[example]]
+name = "scenes"
+path = "scenes/src/main.rs"
+doc = false
+
+[[example]]
+name = "song-transition"
+path = "song-transition/src/main.rs"
+doc = false
+
+[[example]]
+name = "style-example"
+path = "style/src/main.rs"
+doc = false
+
+[[example]]
+name = "tab"
+path = "tab/src/main.rs"
+doc = false
+
+[[example]]
+name = "theme"
+path = "theme/src/main.rs"
+doc = false
+
+[[example]]
+name = "tokens"
+path = "tokens/src/main.rs"
+doc = false
+
+# Android's miniquad host loads these five cdylibs directly.
+[[example]]
+name = "atlas-android"
+path = "atlas/src/lib.rs"
+crate-type = ["cdylib"]
+doc = false
+test = false
+
+[[example]]
+name = "events-android"
+path = "events/src/lib.rs"
+crate-type = ["cdylib"]
+doc = false
+test = false
+
+[[example]]
+name = "map-android"
+path = "map/src/lib.rs"
+crate-type = ["cdylib"]
+doc = false
+test = false
+
+[[example]]
+name = "playground-android"
+path = "playground/src/lib.rs"
+crate-type = ["cdylib"]
+doc = false
+test = false
+
+[[example]]
+name = "portal-android"
+path = "portal/src/lib.rs"
+crate-type = ["cdylib"]
+doc = false
+test = false

@@ -1,4 +1,4 @@
-//! Read-only rich paragraphs and Markdown. Run with `cargo run -p document`.
+//! Read-only rich paragraphs and Markdown. Run with `cargo run --manifest-path examples/Cargo.toml --example document`.
 use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;

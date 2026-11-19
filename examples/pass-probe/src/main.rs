@@ -4,7 +4,7 @@
 //! window shows the resulting UI and previews of the host and chart targets
 //! for direct visual inspection.
 //!
-//! Run with `DISPLAY=:0 cargo run -p pass-probe --offline`. Press Escape or
+//! Run with `DISPLAY=:0 cargo run --manifest-path examples/Cargo.toml --example pass-probe --offline`. Press Escape or
 //! close the window to quit. The retained sequence falls back to immediate
 //! rendering on backends without retained support.
 

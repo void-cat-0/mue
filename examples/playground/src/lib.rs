@@ -1,4 +1,4 @@
-//! An interactive exercise of node options. Run with `cargo run -p playground`.
+//! An interactive exercise of node options. Run with `cargo run --manifest-path examples/Cargo.toml --example playground`.
 use mue_components::*;
 mod assets;
 mod controls;

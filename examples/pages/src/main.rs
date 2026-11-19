@@ -1,4 +1,4 @@
-//! Switch ordered pages while retaining each page's local state. Run with `cargo run -p pages`.
+//! Switch ordered pages while retaining each page's local state. Run with `cargo run --manifest-path examples/Cargo.toml --example pages`.
 use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;

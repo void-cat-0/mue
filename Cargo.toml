@@ -6,32 +6,8 @@ members = [
     "mue-macroquad",
     "mue-components",
     "mue-i18n",
-
-    "examples/atlas",
-    "examples/basics",
-    "examples/events",
-    "examples/gestures",
-    "examples/map",
-    "examples/pages",
-    "examples/tab",
-    "examples/theme",
-    "examples/style",
-    "examples/color",
-    "examples/document",
-    "examples/animation",
-    "examples/nodes",
-    "examples/portal",
-    "examples/pass-probe",
-    "examples/material-probe",
-    "examples/input-router",
-    "examples/input-timing",
-    "examples/scenes",
-    "examples/scene-flow",
-    "examples/scene-transitions",
-    "examples/song-transition",
-    "examples/playground",
-    "examples/tokens",
 ]
+exclude = ["examples"]
 resolver = "2"
 
 [workspace.package]
@@ -49,7 +25,6 @@ smallvec = "1.13.2"
 taffy = "0.9.2"
 thiserror = "2.0"
 
-mue = { path = "mue" }
 mue-core = { path = "mue-core" }
 mue-macros = { path = "mue-macros" }
 mue-macroquad = { path = "mue-macroquad" }

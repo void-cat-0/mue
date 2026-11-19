@@ -3,7 +3,7 @@
 //! Shows custom clipping with transformed geometry, independent material
 //! uniforms, shadows, rounded and sector clips, and default-material drawing.
 //!
-//! Run with `cargo run -p material-probe --offline` and inspect the window.
+//! Run with `cargo run --manifest-path examples/Cargo.toml --example material-probe --offline` and inspect the window.
 //! Press Escape or close the window to quit.
 
 use macroquad::prelude::*;

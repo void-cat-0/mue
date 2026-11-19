@@ -1,8 +1,8 @@
 //! Interactive glyph atlas stress demo with embedded fonts.
 //!
-//! Run `cargo run -p atlas` for glyph-count controls and triangle-wave
+//! Run `cargo run --manifest-path examples/Cargo.toml --example atlas` for glyph-count controls and triangle-wave
 //! font-size animation. Customize the working set with
-//! `cargo run -p atlas -- --glyphs 4000 --max-size 28`.
+//! `cargo run --manifest-path examples/Cargo.toml --example atlas -- --glyphs 4000 --max-size 28`.
 //!
 //! The default maximum size is intentionally 56px. At that size, 4000 CJK
 //! glyphs are an intended overload case. Use a smaller maximum size to explore

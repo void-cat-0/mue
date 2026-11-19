@@ -1,5 +1,5 @@
 //! Reactive style animation with selectable transition curves.
-//! Run with `cargo run -p animation`.
+//! Run with `cargo run --manifest-path examples/Cargo.toml --example animation`.
 use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;

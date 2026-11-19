@@ -1,3 +1,6 @@
+#[path = "lib.rs"]
+mod playground;
+
 use playground::run;
 
 fn main() {

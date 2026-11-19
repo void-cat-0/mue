@@ -3,7 +3,7 @@
 Run from the workspace root with a graphics display:
 
 ```sh
-cargo run -p scenes --offline
+cargo run --manifest-path examples/Cargo.toml --example scenes --offline
 ```
 
 This is an interactive example of the Scene stack API, with no scripted or capture mode. `App` owns scheduling and the stack; each Scene owns its own Node trees, detached `OwnedScope`, local UI command handle, and business state. A result Scene receives only an elapsed-time snapshot, never a shared handle to the game. Scene callbacks return `mue_macroquad::CallbackResult<()>`, and framework errors propagate through `app.try_frame()?`.

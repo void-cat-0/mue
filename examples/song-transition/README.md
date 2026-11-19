@@ -5,7 +5,7 @@ An ordinary interactive song-library → details application, with a settings Sc
 ## Run
 
 ```bash
-cargo run -p song-transition --offline
+cargo run --manifest-path examples/Cargo.toml --example song-transition --offline
 ```
 
 Click an artwork to open details. Wheel, touch/mouse drag or Up/Down arrows scroll the list; keys 1–3 open a matching visible card. The details button or Esc returns to the original list; Esc on the library exits. Q exits immediately. Navigation/scroll actions during an effect are ignored by the Scene's local policy, not by filtering framework raw input.

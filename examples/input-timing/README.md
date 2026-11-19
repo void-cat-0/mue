@@ -3,7 +3,7 @@
 This experiment compares the identity hit by one click against two generations of the same real mue Node tree. Scene management remains unimplemented. App now preplans and dispatches its input before updates; this coordinate comparison remains separate from App callback behavior.
 
 ```bash
-cargo run -p input-timing --offline -- --fps 1
+cargo run --manifest-path examples/Cargo.toml --example input-timing --offline -- --fps 1
 ```
 
 The blue A and orange B exchange positions once per UI frame. Click the target you see; the next UI frame shows two results for the same pointer-down:

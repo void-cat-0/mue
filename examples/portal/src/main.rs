@@ -1,3 +1,6 @@
+#[path = "lib.rs"]
+mod portal;
+
 fn main() {
     macroquad::Window::from_config(
         macroquad::window::Conf {

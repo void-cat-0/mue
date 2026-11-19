@@ -1,3 +1,6 @@
+#[path = "lib.rs"]
+mod atlas;
+
 fn main() {
     let options = atlas::options();
     if options.print_licenses_if_requested() {

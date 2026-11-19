@@ -1,6 +1,6 @@
 # Examples
 
-The workspace examples cover the public UI API and local host integration patterns:
+The standalone examples package is excluded from the root workspace and its Rustdoc; its targets cover the public UI API and local host integration patterns. Run them from the repository root with `cargo run --manifest-path examples/Cargo.toml --example NAME`:
 
 - `style`: declaration syntax, transforms, transitions, and component composition;
 - `playground`: interactive layout, typography, graphics, input, application tokens, and style declarations;
@@ -13,10 +13,10 @@ The workspace examples cover the public UI API and local host integration patter
 - [`scene-transitions`](https://github.com/void-cat-0/mue/blob/main/examples/scene-transitions/README.md): ordinary interactive use of the public [Scene transition API][scene-transitions-guide], built-in fade, custom slide composite and two-phase overlay cover;
 - [`song-transition`](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/README.md): song-card artwork expansion/return, retained selection/scroll, and an application-owned settings Scene; explicit read-only signals, reusable artwork ownership, Dark/Light/reduced-motion preferences and English/Simplified Chinese [Fluent localization][i18n-guide] without a framework global container;
 - `portal`: a concrete external renderer, texture composition, frame-start chart input, and a modal pause UI; its input and coordinate helpers are local to the example;
-- [`input-timing`](https://github.com/void-cat-0/mue/blob/main/examples/input-timing/README.md): a 1–2 FPS visual comparison of pointer hit-testing against the last displayed Node tree versus the next layout; run with `cargo run -p input-timing --offline -- --fps 1`;
+- [`input-timing`](https://github.com/void-cat-0/mue/blob/main/examples/input-timing/README.md): a 1–2 FPS visual comparison of pointer hit-testing against the last displayed Node tree versus the next layout; run with `cargo run --manifest-path examples/Cargo.toml --example input-timing --offline -- --fps 1`;
 - `nodes`, `basics`, `color`, `gestures`, `pages`, and `tab`: layout, input, graphics, and same-level page selection.
 
-Run one with `cargo run -p style-example`, `cargo run -p theme`, or `cargo run -p portal`. The theme example uses the optional token store (`Theme`, `TokenSet`, `token_set!`, `token!`, and `provide_theme`); [application tokens and context][themes-guide] explains the store and plain `Prop` / `map` / `provide` bindings.
+Run one with `cargo run --manifest-path examples/Cargo.toml --example style-example`, `cargo run --manifest-path examples/Cargo.toml --example theme`, or `cargo run --manifest-path examples/Cargo.toml --example portal`. The theme example uses the optional token store (`Theme`, `TokenSet`, `token_set!`, `token!`, and `provide_theme`); [application tokens and context][themes-guide] explains the store and plain `Prop` / `map` / `provide` bindings.
 
 In [the portal host](https://github.com/void-cat-0/mue/blob/main/examples/portal/src/lib.rs), the host owns a concrete `MockChannel` and calls its resize/render/texture operations directly. [input.rs](https://github.com/void-cat-0/mue/blob/main/examples/portal/src/input.rs) contains the local `ChartInput`, event collection/replay, pointer ownership, Hold-on-resume, and cancel behavior; [target.rs](https://github.com/void-cat-0/mue/blob/main/examples/portal/src/target.rs) maps a logical rect to the actual target pixel size. DPI and resize policy belong to the host. The public `GameController`/`GameChannel` layer and related root exports have been removed; Portal, RenderStateGuard, and SharedTexture/SafeTexture remain in their existing modules. Here "channel" can still describe the external renderer.
 
