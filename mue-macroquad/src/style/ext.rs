@@ -1,4 +1,4 @@
-use mue_core::signal::Signal;
+use mue_core::signal::{ReadSignal, Signal};
 use paste::paste;
 use taffy::{AlignContent, AlignItems, FlexDirection, Position};
 
@@ -139,21 +139,13 @@ pub trait StyleableExt: Styleable {
         })
     }
 
-    fn use_hovered(self, hovered: Signal<bool>) -> Self {
-        let mut hover_count = 0;
-        self.on_hover_event(move |event| match event.action() {
-            PointerAction::Down => {
-                hover_count += 1;
-                hovered.set(true);
-            }
-            PointerAction::Move => {}
-            PointerAction::Up | PointerAction::Cancel => {
-                hover_count -= 1;
-                if hover_count == 0 {
-                    hovered.set(false);
-                }
-            }
-        })
+    /// Configure styles from this node's shared, read-only hover state.
+    ///
+    /// The callback runs once now. Reactive values created inside it belong to
+    /// the hover owner and are retained when this style moves into a node.
+    fn with_hovered(mut self, f: impl FnOnce(Self, ReadSignal<bool>) -> Self) -> Self {
+        let owner = self.style_mut().ensure_hovered();
+        owner.scope.run(|| f(self, *owner.signal))
     }
 }
 

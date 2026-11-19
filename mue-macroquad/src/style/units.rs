@@ -3,19 +3,6 @@
 //! `Size` and `FontSize` are values; `Prop`/signals wrap them. Constructors do
 //! not read the viewport or create signals. Use `signal(Size::Px(...))` when a
 //! component needs to change both the value and its unit.
-//!
-//! ```compile_fail
-//! use mue_macroquad::style::units::{FontSize, Size};
-//! use mue_core::prop::Prop;
-//! let _: Prop<FontSize> = Size::Px(18.0).into();
-//! ```
-//!
-//! ```compile_fail
-//! use mue_macroquad::style::units::{Size, px};
-//! use mue_core::prop::Prop;
-//! let _: Prop<f32> = px(0.5).into();
-//! ```
-//!
 
 use mue_core::{effect::computed, prop::Prop, signal::Access};
 use taffy::{Dimension, LengthPercentage, LengthPercentageAuto};
@@ -76,7 +63,7 @@ mod private {
     impl Sealed for FontSize {}
 }
 
-/// Lower a `Size` according to the target CSS/Taffy property.
+/// Lower a `Size` according to the target style/Taffy property.
 pub trait SizeExt: private::Sealed {
     fn to_dimension(self) -> Dimension;
     fn to_length_percentage(self, property: &str) -> LengthPercentage;

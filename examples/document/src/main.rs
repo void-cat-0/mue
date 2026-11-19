@@ -1,4 +1,5 @@
 //! Read-only rich paragraphs and Markdown. Run with `cargo run -p document`.
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 use macroquad::prelude::{Conf, clear_background, next_frame};
@@ -6,7 +7,6 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     color::Color,
-    node::*,
     style::{Size, Styleable, StyleableExt},
 };
 
@@ -60,74 +60,98 @@ async fn run() {
     responsive::sync();
     let mut app = App::new(
         stack()
-            .size_full()
-            .font_size(responsive::root_font())
-            .background(PAPER)
-            .padding((Size::vw(3.5),))
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            background: {PAPER};
+            padding: {(Size::vw(3.5),)};
+            })
             .children((
                 wrap()
-                    .w_full()
-                    .flex_none()
-                    .gap(responsive::ui(12.))
-                    .margin_bottom(responsive::ui(24.))
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: none;
+                    gap: {responsive::ui(12.)};
+                    margin-bottom: {responsive::ui(24.)};
+                    })
                     .children((
-                        heading("Field journal")
-                            .font_size(responsive::font(20.))
-                            .line_height(responsive::ui(44. * 1.45))
-                            .color(BLUE)
-                            .min_width(0.)
-                            .flex_basis(Size::percent(30.))
-                            .flex_1(),
+                        heading("Field journal").style(mue_macroquad::style! {
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(44. * 1.45)};
+                        color: {BLUE};
+                        min-width: 0px;
+                        flex-basis: 30%;
+                        flex: 1;
+                        }),
                         flexbox()
-                            .flex_none()
-                            .max_width(Size::percent(100.))
-                            .padding((responsive::ui(12.), responsive::ui(8.)))
-                            .min_width(responsive::ui(44.))
-                            .min_height(responsive::ui(44.))
-                            .background(BLUE)
+                            .style(mue_macroquad::style! {
+                            flex: none;
+                            max-width: 100%;
+                            padding: {(responsive::ui(12.), responsive::ui(8.))};
+                            min-width: {responsive::ui(44.)};
+                            min-height: {responsive::ui(44.)};
+                            background: {BLUE};
+                            })
                             .toggle_on_tap(large)
-                            .children(
-                                text(large.select("Smaller type", "Larger type"))
-                                    .font_size(responsive::font(16.))
-                                    .line_height(responsive::ui(44.)),
-                            ),
+                            .children(text(large.select("Smaller type", "Larger type")).style(
+                                mue_macroquad::style! {
+                                font-size: {responsive::font(16.)};
+                                line-height: {responsive::ui(44.)};
+                                },
+                            )),
                         flexbox()
-                            .flex_none()
-                            .max_width(Size::percent(100.))
-                            .padding((responsive::ui(12.), responsive::ui(8.)))
-                            .min_width(responsive::ui(44.))
-                            .min_height(responsive::ui(44.))
-                            .background(BLUE)
+                            .style(mue_macroquad::style! {
+                            flex: none;
+                            max-width: 100%;
+                            padding: {(responsive::ui(12.), responsive::ui(8.))};
+                            min-width: {responsive::ui(44.)};
+                            min-height: {responsive::ui(44.)};
+                            background: {BLUE};
+                            })
                             .toggle_on_tap(alternate)
                             .children(
-                                text(alternate.select("Previous entry", "Next entry"))
-                                    .font_size(responsive::font(16.))
-                                    .line_height(responsive::ui(44.)),
+                                text(alternate.select("Previous entry", "Next entry")).style(
+                                    mue_macroquad::style! {
+                                    font-size: {responsive::font(16.)};
+                                    line-height: {responsive::ui(44.)};
+                                    },
+                                ),
                             ),
                     )),
-                scroll_area().flex_1().w_full().children(
-                    stack()
-                        .w_full()
-                        .max_width(responsive::ui(760.))
-                        .margin_x(Size::auto())
-                        .children((
-                            markdown(source)
-                                .w_full()
-                                .font_size(responsive::font(large.select(22., 18.)))
-                                .line_height(responsive::ui(large.select(31., 26.)))
-                                .color(INK)
-                                .flex_none(),
-                            document(Document::rich([
-                                Span::new("Mara Ellis").bold(),
-                                Span::new("\nOctober 13, 2026").italic(),
-                            ]))
-                            .margin_top(responsive::ui(24.))
-                            .font_size(responsive::font(16.))
-                            .line_height(responsive::ui(23.))
-                            .color(BLUE)
-                            .flex_none(),
-                        )),
-                ),
+                scroll_area()
+                    .style(mue_macroquad::style! {
+                    flex: 1;
+                    width: 100%;
+                    })
+                    .children(
+                        stack()
+                            .style(mue_macroquad::style! {
+                            width: 100%;
+                            max-width: {responsive::ui(760.)};
+                            margin-left: {Size::auto()};
+                                                        margin-right: {Size::auto()};
+                            })
+                            .children((
+                                markdown(source).style(mue_macroquad::style! {
+                                width: 100%;
+                                font-size: {responsive::font(large.select(22., 18.))};
+                                line-height: {responsive::ui(large.select(31., 26.))};
+                                color: {INK};
+                                flex: none;
+                                }),
+                                document(Document::rich([
+                                    Span::new("Mara Ellis").bold(),
+                                    Span::new("\nOctober 13, 2026").italic(),
+                                ]))
+                                .style(mue_macroquad::style! {
+                                margin-top: {responsive::ui(24.)};
+                                font-size: {responsive::font(16.)};
+                                line-height: {responsive::ui(23.)};
+                                color: {BLUE};
+                                flex: none;
+                                }),
+                            )),
+                    ),
             )),
     );
     loop {

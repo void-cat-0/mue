@@ -1,16 +1,19 @@
 //! Signals, keyed children, fonts, and images in a small view.
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 use macroquad::prelude::{Conf, Texture2D, clear_background, next_frame};
-use mue_core::prelude::*;
+use mue_core::{
+    prelude::*,
+    task::{AsyncResource, AsyncState},
+};
 use mue_macroquad::{
     App,
-    animation::Animation,
     color::Color,
     font::{Weight, load_font},
-    node::*,
     shader::SharedTexture,
     style::{Size, Styleable, StyleableExt},
+    transition::Transition,
 };
 
 fn main() {
@@ -33,77 +36,107 @@ async fn run() {
         Texture2D::from_file_with_format(include_bytes!("../assets/ferris.png"), None).into();
     let count = signal(3usize);
     let large = signal(false);
+    // Foreground task; the result state is published on the UI thread.
+    let greeting =
+        AsyncResource::<String, &'static str>::new(async { Ok("Async task completed".to_owned()) });
+    let greeting_text = greeting.state().map(|state| match state {
+        AsyncState::Loading => "Loading task...".to_owned(),
+        AsyncState::Ready(Ok(text)) => text,
+        AsyncState::Ready(Err(error)) => format!("Task failed: {error}"),
+    });
     // Keys preserve each image node when the list grows or shrinks.
     let images = map_keyed(
         count.map(|n| (0..n).collect::<std::rc::Rc<[usize]>>()),
         |n| *n,
         move |_| {
             image(texture.clone())
-                .width(large.select(Size::vw(20.), Size::vw(12.5)))
-                .max_width(responsive::ui(large.select(160., 100.)))
-                .height(Size::vh(20.))
-                .max_height(responsive::ui(120.))
-                .flex_none()
+                .style(mue_macroquad::style! {
+                width: {large.select(Size::vw(20.), Size::vw(12.5))};
+                max-width: {responsive::ui(large.select(160., 100.))};
+                height: {Size::vh(20.)};
+                max-height: {responsive::ui(120.)};
+                flex: none;
+                })
                 .object_contain()
-                .animation(Animation::spring(0.6, 0.3))
+                .style(mue_macroquad::style! { transition: {Transition::spring(0.6, 0.3)}; })
         },
     );
     responsive::sync();
     let mut app = App::new(
         scroll_area()
-            .size_full()
-            .font_size(responsive::root_font())
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            })
             .children(
                 container()
-                    .max_width(responsive::ui(800.))
-                    .padding((Size::vw(4.),))
-                    .gap(responsive::ui(22.))
+                    .style(mue_macroquad::style! {
+                    max-width: {responsive::ui(800.)};
+                    padding: {(Size::vw(4.),)};
+                    gap: {responsive::ui(22.)};
+                    })
                     .children((
-                        heading("Hello 🐦🚀")
-                            .font_size(responsive::font(32. * 1.45))
-                            .line_height(responsive::ui(44. * 1.45)),
-                        text("Space Mono · 400")
-                            .font_family(mono.clone())
-                            .font_size(responsive::font(20.))
-                            .line_height(responsive::ui(28.)),
-                        text("Space Mono · 700")
-                            .font_family(mono)
-                            .font_weight(Weight::BOLD)
-                            .font_size(responsive::font(20.))
-                            .line_height(responsive::ui(28.)),
+                        heading("Hello 🐦🚀").style(mue_macroquad::style! {
+                        font-size: {responsive::font(32. * 1.45)};
+                        line-height: {responsive::ui(44. * 1.45)};
+                        }),
+                        text("Space Mono · 400").style(mue_macroquad::style! {
+                        font-family: {mono.clone()};
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(28.)};
+                        }),
+                        text(greeting_text).style(mue_macroquad::style! {
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(28.)};
+                        }),
+                        text("Space Mono · 700").style(mue_macroquad::style! {
+                        font-family: {mono};
+                        font-weight: {Weight::BOLD};
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(28.)};
+                        }),
                         wrap().children((
                             link("Add")
-                                .font_size(responsive::font(20.))
-                                .line_height(responsive::ui(44.))
-                                .min_width(responsive::ui(44.))
-                                .min_height(responsive::ui(44.))
+                                .style(mue_macroquad::style! {
+                                font-size: {responsive::font(20.)};
+                                line-height: {responsive::ui(44.)};
+                                min-width: {responsive::ui(44.)};
+                                min-height: {responsive::ui(44.)};
+                                })
                                 .on_activate(move || count.update(|n| *n = (*n + 1).min(12))),
                             link("Remove")
-                                .font_size(responsive::font(20.))
-                                .line_height(responsive::ui(44.))
-                                .min_width(responsive::ui(44.))
-                                .min_height(responsive::ui(44.))
+                                .style(mue_macroquad::style! {
+                                font-size: {responsive::font(20.)};
+                                line-height: {responsive::ui(44.)};
+                                min-width: {responsive::ui(44.)};
+                                min-height: {responsive::ui(44.)};
+                                })
                                 .on_activate(move || count.update(|n| *n = n.saturating_sub(1))),
                             link("Resize")
-                                .font_size(responsive::font(20.))
-                                .line_height(responsive::ui(44.))
-                                .min_width(responsive::ui(44.))
-                                .min_height(responsive::ui(44.))
+                                .style(mue_macroquad::style! {
+                                font-size: {responsive::font(20.)};
+                                line-height: {responsive::ui(44.)};
+                                min-width: {responsive::ui(44.)};
+                                min-height: {responsive::ui(44.)};
+                                })
                                 .toggle_on_tap(large),
                         )),
                         separator(),
-                        wrap().gap(responsive::ui(12.)).children(images),
+                        wrap()
+                            .style(mue_macroquad::style! { gap: {responsive::ui(12.)}; })
+                            .children(images),
                         center()
-                            .height(Size::vh(15.))
-                            .max_height(responsive::ui(90.))
-                            .children(
-                                circle()
-                                    .width(Size::vw(8.75))
-                                    .height(Size::vw(8.75))
-                                    .max_width(responsive::ui(70.))
-                                    .max_height(responsive::ui(70.))
-                                    .background(Color::from_rgba(80, 130, 220, 255)),
-                            )
+                            .style(mue_macroquad::style! {
+                            height: {Size::vh(15.)};
+                            max-height: {responsive::ui(90.)};
+                            })
+                            .children(circle().style(mue_macroquad::style! {
+                            width: {Size::vw(8.75)};
+                            height: {Size::vw(8.75)};
+                            max-width: {responsive::ui(70.)};
+                            max-height: {responsive::ui(70.)};
+                            background: {Color::from_rgba(80, 130, 220, 255)};
+                            }))
                             .show_if(count.map(|n| n > 0)),
                     )),
             ),

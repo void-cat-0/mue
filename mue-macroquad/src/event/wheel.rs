@@ -30,6 +30,8 @@ impl WheelEvent {
     }
 }
 
+/// Legacy explicit polling helper. `App::frame` already dispatches wheel events
+/// from its planned raw batch; do not call this in addition to App input.
 pub fn check_wheel(root_node: NodeRef) {
     let pos = macroquad::input::mouse_position();
     let delta = macroquad::input::mouse_wheel();

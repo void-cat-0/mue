@@ -1,0 +1,17 @@
+[package]
+name = "mue-i18n"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+test = false
+doctest = true
+
+[dependencies]
+fluent = "0.17.0"
+fluent-syntax = "0.12.0"
+mue-core.workspace = true
+unic-langid = { version = "0.9.6", features = ["macros"] }

@@ -1,5 +1,5 @@
 use std::{
-    cell::{OnceCell, Ref, RefCell},
+    cell::{OnceCell, Ref, RefCell, RefMut},
     collections::BTreeMap,
     mem,
     rc::Rc,
@@ -14,7 +14,7 @@ use taffy::TaffyTree;
 use crate::{
     font::{FontsAlreadyInitialized, fontdb},
     gesture::{Gesture, GestureId},
-    hook::{HookFn, NodeHooks},
+    hook::{CallbackList, NodeHooks},
     layout::MeasureFn,
     node::{NodeId, NodeInner, text::FontState},
 };
@@ -65,7 +65,7 @@ pub(crate) struct Runtime {
 
     fonts: OnceCell<RefCell<FontState>>,
 
-    pub gestures: RefCell<SlotMap<GestureId, Box<dyn Gesture>>>,
+    pub gestures: RefCell<SlotMap<GestureId, Option<Box<dyn Gesture>>>>,
 
     pub timeouts: RefCell<BTreeMap<TimeoutKey, Box<dyn FnOnce()>>>,
 }
@@ -73,7 +73,7 @@ pub(crate) struct Runtime {
 impl Runtime {
     fn new() -> Self {
         let mut taffy = TaffyTree::new();
-        // Preserve fractional positions and widths during layout animation.
+        // Preserve fractional positions and widths during layout transitions.
         taffy.disable_rounding();
         Self {
             taffy: RefCell::new(taffy),
@@ -95,7 +95,13 @@ impl Runtime {
     }
 
     pub fn with_taffy_mut<R>(f: impl FnOnce(&mut TaffyTree<Box<dyn MeasureFn>>) -> R) -> R {
-        RUNTIME.with(|rt| f(&mut rt.taffy.borrow_mut()))
+        RUNTIME.with(|rt| f(&mut rt.taffy_mut()))
+    }
+
+    pub(crate) fn taffy_mut(&self) -> RefMut<'_, TaffyTree<Box<dyn MeasureFn>>> {
+        self.taffy
+            .try_borrow_mut()
+            .expect("cannot mutate a borrowed Taffy tree; MeasureFn must only read sizing inputs")
     }
     pub fn with_fonts_mut<R>(f: impl FnOnce(&mut FontState) -> R) -> R {
         RUNTIME.with(|rt| {
@@ -142,8 +148,18 @@ impl Runtime {
     pub fn invoke_hook<T: 'static>(
         &self,
         node_id: NodeId,
-        hook_fn: impl Fn(&mut NodeHooks) -> &mut HookFn<T>,
+        hook_fn: impl Fn(&mut NodeHooks) -> &mut CallbackList<T>,
         arg: &T,
+    ) {
+        self.invoke_hook_while(node_id, hook_fn, arg, || true);
+    }
+
+    pub(crate) fn invoke_hook_while<T: 'static>(
+        &self,
+        node_id: NodeId,
+        hook_fn: impl Fn(&mut NodeHooks) -> &mut CallbackList<T>,
+        arg: &T,
+        may_invoke: impl Fn() -> bool,
     ) {
         let mut hook = {
             let mut nodes = self.nodes.borrow_mut();
@@ -152,9 +168,35 @@ impl Runtime {
             };
             mem::take(hook_fn(&mut node.hooks))
         };
-        hook.invoke(arg);
-        if let Some(node) = self.nodes.borrow_mut().get_mut(node_id) {
+        hook.invoke_while(arg, &|| {
+            may_invoke() && self.nodes.borrow().contains_key(node_id)
+        });
+        let mut nodes = self.nodes.borrow_mut();
+        if let Some(node) = nodes.get_mut(node_id) {
             *hook_fn(&mut node.hooks) = hook;
+        } else {
+            drop(nodes);
+            drop(hook);
+        }
+    }
+
+    /// Keep the key reserved, but release arena borrows while user code runs.
+    /// A callback may dispose its node and remove this slot; never resurrect it.
+    pub(crate) fn invoke_gesture(&self, id: GestureId, callback: impl FnOnce(&mut dyn Gesture)) {
+        let gesture = self
+            .gestures
+            .borrow_mut()
+            .get_mut(id)
+            .and_then(Option::take);
+        if let Some(mut gesture) = gesture {
+            callback(gesture.as_mut());
+            let mut arena = self.gestures.borrow_mut();
+            if let Some(slot) = arena.get_mut(id) {
+                *slot = Some(gesture);
+            } else {
+                drop(arena);
+                drop(gesture);
+            }
         }
     }
 

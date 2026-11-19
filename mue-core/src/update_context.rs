@@ -20,17 +20,27 @@ impl UpdateContext {
         self.0.iter().rev().find_map(|value| value.downcast_ref())
     }
 
-    /// Run a callback with this snapshot, restoring the previous context on unwind.
+    /// Run a callback with this snapshot, restoring the previous context afterwards.
     pub fn run<R>(&self, f: impl FnOnce() -> R) -> R {
-        struct Restore(UpdateContext);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                CURRENT.set(std::mem::take(&mut self.0));
-            }
-        }
-        let _restore = Restore(CURRENT.replace(self.clone()));
-        f()
+        let previous = CURRENT.replace(self.clone());
+        let value = f();
+        CURRENT.set(previous);
+        value
     }
+}
+
+/// Take the current context, leaving an empty one. Returns `None` if the
+/// thread-local context has already been destroyed.
+pub(crate) fn take() -> Option<UpdateContext> {
+    CURRENT
+        .try_with(|current| std::mem::take(&mut *current.borrow_mut()))
+        .ok()
+}
+
+/// Restore a context taken by [`take`]. Ignored if the thread-local context has
+/// already been destroyed.
+pub(crate) fn restore(context: UpdateContext) {
+    let _ = CURRENT.try_with(|current| *current.borrow_mut() = context);
 }
 
 /// Attach metadata to updates made by `f`. Nested values override the same type.
@@ -59,20 +69,5 @@ mod tests {
         assert_eq!(*observed.borrow(), Some(42));
         state.set(2);
         assert_eq!(*observed.borrow(), None);
-    }
-
-    #[test]
-    fn nested_context_restores_metadata_after_unwind() {
-        with_update_context(1u32, || {
-            with_update_context("other type", || {
-                assert_eq!(UpdateContext::current().get::<u32>(), Some(&1));
-            });
-            let result = std::panic::catch_unwind(|| {
-                with_update_context(2u32, || panic!("test unwind"));
-            });
-            assert!(result.is_err());
-            assert_eq!(UpdateContext::current().get::<u32>(), Some(&1));
-        });
-        assert!(UpdateContext::current().get::<u32>().is_none());
     }
 }

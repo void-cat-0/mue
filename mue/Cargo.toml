@@ -1,0 +1,18 @@
+[package]
+name = "mue"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+i18n = ["dep:mue-i18n"]
+
+[dependencies]
+macroquad.workspace = true
+mue-core.workspace = true
+mue-macroquad.workspace = true
+mue-components.workspace = true
+mue-macros.workspace = true
+mue-i18n = { workspace = true, optional = true }

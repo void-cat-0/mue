@@ -1,59 +1,84 @@
 use super::{controls::*, responsive};
-use mue_macroquad::{
-    color::Color,
-    factory::factory,
-    node::*,
-    style::{Styleable, StyleableExt, vh, vw},
-    theme::{provide_theme, theme},
-};
-#[derive(Clone)]
-struct Options {
-    accent: bool,
+use mue_components::*;
+use mue_core::prelude::*;
+use mue_macroquad::style::{Styleable, StyleableExt, Transform, TransformOp};
+use std::rc::Rc;
+
+// Only the component's own state lives here; the theme is application tokens.
+#[component]
+fn tile(caption: Rc<str>, #[default] accent: bool, #[default] selected: bool) -> impl Component {
+    let theme = Theme::current().expect("theme installed");
+    let scale = accent.pick(
+        theme.get::<f32>("tile.scale.accent"),
+        theme.get::<f32>("tile.scale.panel"),
+    );
+    center()
+        .style(style! {
+            background: {accent.pick(token!("tile.accent"), token!("tile.panel"))};
+            transform: {scale.map(|scale| Transform(vec![TransformOp::Scale(scale, scale)]))};
+            transition: 220ms spring;
+        })
+        .with_hovered(move |view, hovered| {
+            view.opacity(computed(move |_| {
+                if accent.get() && hovered.get() {
+                    0.65
+                } else if selected.get() {
+                    0.82
+                } else {
+                    1.
+                }
+            }))
+        })
+        .children(text(caption).style(style! {
+            font-size: {responsive::font(22.)};
+            line-height: {responsive::ui(32.)};
+        }))
 }
-pub fn page() -> Node {
-    let (dark, control) = toggle("Theme");
-    let tile = factory(|label: &'static str| {
-        center().children(
-            text(label)
-                .font_size(responsive::font(22.))
-                .line_height(responsive::ui(32.)),
-        )
-    })
-    .defaults(Options { accent: false })
-    .style(|s, _| {
-        s.w_full()
-            .min_width(0.)
-            .padding((vw(2.75), vh(2.75)))
-            .radius(14.)
-    });
-    let first = theme!(|c, s| match c {
-        tile(o) if o.accent => s.background(CORAL),
-        tile => s.background(BLUE),
-        _ => s,
-    });
-    let second = theme!(|c, s| match c {
-        tile(o) if o.accent => s.background(BLUE),
-        tile => s.background(PANEL),
-        _ => s,
-    });
-    let nested = theme!(|c, s| match c {
-        tile => s.background(Color::from_rgba(70, 140, 100, 255)),
-        _ => s,
-    });
+
+fn token_examples(selected: Signal<bool>) -> Node {
     stack()
-        .w_full()
-        .min_width(0.)
-        .gap(vh(2.5))
         .children((
-            control,
-            provide_theme(dark.select(second, first), move || {
-                stack().w_full().min_width(0.).gap(vh(2.)).children((
-                    tile.create("Default").animation(SPRING),
-                    tile.create("Accent")
-                        .options(|o| o.accent = true)
-                        .animation(SPRING),
-                    provide_theme(nested, move || tile.create("Nested").animation(SPRING)),
-                ))
+            tile("Default"),
+            tile("Accent").accent(true),
+            tile("Selected accent").accent(true).selected(selected),
+        ))
+        .into_node()
+}
+
+pub fn page() -> Node {
+    let dark = dark_theme();
+    let selected = signal(true);
+    let sample = r#"// Tokens live in the application, not in the component.
+center()
+    .style(style! {
+        background: {accent.pick(token!("tile.accent"), token!("tile.panel"))};
+        transform: {scale.map(|scale| {
+            Transform(vec![TransformOp::Scale(scale, scale)])
+        })};
+    })
+
+// Switching a theme writes new values into the same signals.
+toggle_theme();"#;
+    stack()
+        .style(style! {
+            width: 100%; min-width: 0px;
+            gap: {responsive::ui(20.)};
+        })
+        .children((
+            demo_button(
+                dark.map(|is_dark| format!("Appearance: {}", if is_dark { "Dark" } else { "Light" })),
+                toggle_theme,
+            ),
+            demo_button("Toggle selected state", move || selected.toggle()),
+            token_examples(selected),
+            text("Local state stays local. Each tile picks between two token handles, and switching the theme rewrites every token in place."),
+            code_block(sample).style(style! {
+                width: 100%; min-width: 0px;
+                text-wrap: {true};
+                font-size: {responsive::font(16.)};
+                line-height: {responsive::ui(24.)};
+                padding: {(responsive::ui(16.),)};
+                border-radius: {responsive::ui(6.)};
             }),
         ))
         .into_node()

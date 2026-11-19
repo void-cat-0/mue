@@ -1,29 +1,32 @@
 mod ext;
+mod transform;
+pub use transform::{IntoTransformProp, Transform, TransformOp, TransformOrigin, TransformProp};
 pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
-use crate::{color::Color, shader::Brush};
+pub use crate::shadow::ShadowCache;
+use crate::{clip::Sector, color::Color, shader::Brush, shadow::Shadow};
 use cosmic_text::Align;
 use cosmic_text::{FamilyOwned, Weight};
 pub use ext::StyleableExt;
 
 use mue_core::{
-    Owned,
-    effect::{computed, computed_always},
+    effect::computed,
     prop::Prop,
     signal::{Access, ReadSignal},
 };
 use paste::paste;
-use std::mem;
+use std::{mem, rc::Rc};
+
 use taffy::{BoxSizing, Display, Overflow, Point, Position};
 
 use crate::{
     event::{pointer::PointerEvent, wheel::WheelEvent},
-    gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent},
-    hook::{HookFn, NodeHooks},
+    gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent, TransformEvent},
+    hook::{CallbackList, NodeHooks},
     math::Matrix,
-    node::{Children, IntoChildren},
+    node::{ChildrenPlan, HoverOwner, IntoChildren},
 };
 
 pub trait IntoRectProp<T> {
@@ -80,59 +83,74 @@ where
 }
 
 macro_rules! define_style {
-    (@themed_property $result:ident, $theme:ident, $defaults:ident, font_size, $ty:ty, $($default:expr)?) => {
-        let fallback = $defaults.font_size.take();
-        $result.font_size = Some(computed_always(move |_| {
-            let current = $theme.get_clone();
-            current.font_size.as_ref().or(fallback.as_ref())
-                .map(|value| value.get())
-                .unwrap_or(FontSize::Em(1.))
-        }).into());
+    (@setter $(#[$doc:meta])* shadow_cache, $ty:ty) => {
+        /// Explicitly enable/disable caching, retaining bool and reactive-bool compatibility.
+        /// Use shadow_cache_policy for Auto; leaving the property unset selects Auto.
+        fn shadow_cache(mut self, enabled: impl Into<Prop<bool>>) -> Self {
+            self.style_mut().shadow_cache = Some(enabled.into().map(ShadowCache::from));
+            self
+        }
+        $(#[$doc])*
+        fn shadow_cache_policy(mut self, policy: impl Into<Prop<ShadowCache>>) -> Self {
+            self.style_mut().shadow_cache = Some(policy.into());
+            self
+        }
     };
-    (@themed_property $result:ident, $theme:ident, $defaults:ident, $field:ident, $ty:ty, $($default:expr)?) => {
-        let fallback = $defaults.$field.take();
-        $result.$field = Some(computed_always(move |_| {
-            let current = $theme.get_clone();
-            current.$field.as_ref().or(fallback.as_ref())
-                .map(|value| value.get_clone())
-                .unwrap_or_else(|| define_style!(@extract_default_raw ($ty, $($default)?)))
-        }).into());
+    (@setter $(#[$doc:meta])* transform_list, $ty:ty) => {
+        $(#[$doc])*
+        fn transform_list(mut self, value: impl Into<Prop<Transform>>) -> Self {
+            self.style_mut().transform_list = Some(value.into());
+            self.style_mut().matrix_transform = Some(Prop::Static(Matrix::IDENTITY));
+            self
+        }
     };
-    // Rect properties already have separate fields: fill only the missing sides.
+    (@setter $(#[$doc:meta])* line_height, $ty:ty) => {
+        $(#[$doc])*
+        fn line_height(mut self, value: impl Into<Prop<Size>>) -> Self {
+            self.style_mut().line_height = Some(value.into());
+            self.style_mut().line_height_multiplier = Some(Prop::Static(None));
+            self
+        }
+    };
+    (@setter $(#[$doc:meta])* $name:ident, $ty:ty) => {
+        $(#[$doc])*
+        fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
+            self.style_mut().$name = Some(value.into());
+            self
+        }
+    };
+    (@accessor $field:ident, $ty:ty, $($default:expr)?) => {
+        paste! {
+            /// Return the explicitly declared property, if any.
+            pub fn [<declared_ $field>](&self) -> Option<Prop<$ty>> {
+                self.$field.clone()
+            }
+            #[allow(dead_code)]
+            pub fn [<take_ $field>](&mut self) -> Prop<$ty> {
+                self.$field.take().unwrap_or_else(|| define_style!(@extract_default ($ty, $($default)?)))
+            }
+        }
+    };
     (@rect_defaults $target:ident, $source:ident, $rect:ident) => {
         paste! {
             define_style!(@defaults $target, $source, [<$rect _left>], [<$rect _right>], [<$rect _top>], [<$rect _bottom>]);
         }
     };
     (@defaults $target:ident, $source:ident, $($field:ident),*) => {
-        $(if $target.$field.is_none() { $target.$field = $source.$field; })*
+        $(if $target.$field.is_none() { $target.$field = $source.$field.take(); })*
     };
-    (@extract_default_raw ($ty:ty, $default:expr)) => {
-        $default
-    };
-
-    (@extract_default_raw ($ty:ty, )) => {
-        <$ty>::default()
-    };
-
-    (@extract_default ($($rest:tt)*)) => {
-        Prop::Static(define_style!(@extract_default_raw ($($rest)*)))
-    };
-
+    (@extract_default_raw ($ty:ty, $default:expr)) => { $default };
+    (@extract_default_raw ($ty:ty, )) => { <$ty>::default() };
+    (@extract_default ($($rest:tt)*)) => { Prop::Static(define_style!(@extract_default_raw ($($rest)*))) };
     (
         $($(#[$property_doc:meta])* $name:ident : $ty:ty $(= $default:expr)?;)*
-        @rects {
-            $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)*
-        }
-        @hooks {
-            $($hook_name:ident : HookFn<$hook_ty:ty>;)*
-        }
+        @rects { $($rect_name:ident : taffy::Rect<$rect_ty:ty> $( = $rect_default:expr)?;)* }
+        @hooks { $($(#[$hook_doc:meta])* $hook_name:ident : CallbackList<$hook_ty:ty>;)* }
     ) => {
         paste! {
+            /// Optional layout, paint, font, child, and event properties for a node.
             #[derive(Default)]
-            /// Optional layout, paint, font, and event properties for a node.
             pub struct Style {
-                pub(crate) animation: Option<crate::animation::Animation>,
                 $(pub(crate) $name: Option<Prop<$ty>>,)*
                 $(
                     pub(crate) [<$rect_name _left>]: Option<Prop<$rect_ty>>,
@@ -140,29 +158,40 @@ macro_rules! define_style {
                     pub(crate) [<$rect_name _top>]: Option<Prop<$rect_ty>>,
                     pub(crate) [<$rect_name _bottom>]: Option<Prop<$rect_ty>>,
                 )*
-                $(pub $hook_name: HookFn<$hook_ty>,)*
-                pub(crate) children: Option<Owned<Children>>,
+                $($(#[$hook_doc])* pub $hook_name: CallbackList<$hook_ty>,)*
+                pub(crate) children: Option<ChildrenPlan>,
+                pub(crate) hover_owners: Vec<Rc<HoverOwner>>,
             }
 
             /// Fluent styles accepting either static properties or reactive signals.
-            /// Length literals and reactive `f32` values are pixels.
+            /// Length literals and reactive f32 values are pixels.
             pub trait Styleable: Sized {
                 fn style_mut(&mut self) -> &mut Style;
 
-                /// Animate changes to this node's interpolatable visual properties.
-                fn animation(mut self, animation: crate::animation::Animation) -> Self {
-                    self.style_mut().animation = Some(animation);
+                /// Set a matrix or transform list, including projected 3D operations.
+                fn transform(mut self, value: impl IntoTransformProp) -> Self {
+                    match value.into_transform_prop() {
+                        TransformProp::Matrix(value) => {
+                            self.style_mut().matrix_transform = Some(value);
+                            self.style_mut().transform_list = Some(Prop::Static(Transform::default()));
+                        }
+                        TransformProp::Functions(value) => {
+                            self.style_mut().transform_list = Some(value);
+                            self.style_mut().matrix_transform = Some(Prop::Static(Matrix::IDENTITY));
+                        }
+                    }
                     self
                 }
 
-                $(
-                    $(#[$property_doc])*
-                    fn $name(mut self, value: impl Into<Prop<$ty>>) -> Self {
-                        self.style_mut().$name = Some(value.into());
-                        self
-                    }
-                )*
-
+                /// Apply a style, replacing properties explicitly set by it.
+                fn style(mut self, mut style: Style) -> Self {
+                    style.provide_defaults_mut(self.style_mut());
+                    let target = self.style_mut();
+                    target.clear();
+                    mem::swap(target, &mut style);
+                    self
+                }
+                $(define_style!(@setter $(#[$property_doc])* $name, $ty);)*
                 $(
                     fn [<$rect_name _left>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
                         self.style_mut().[<$rect_name _left>] = Some(value.into());
@@ -181,15 +210,15 @@ macro_rules! define_style {
                         self
                     }
                     fn [<$rect_name _x>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        let prop = value.into();
-                        self.style_mut().[<$rect_name _left>] = Some(prop.clone());
-                        self.style_mut().[<$rect_name _right>] = Some(prop.clone());
+                        let value = value.into();
+                        self.style_mut().[<$rect_name _left>] = Some(value.clone());
+                        self.style_mut().[<$rect_name _right>] = Some(value);
                         self
                     }
                     fn [<$rect_name _y>](mut self, value: impl Into<Prop<$rect_ty>>) -> Self {
-                        let prop = value.into();
-                        self.style_mut().[<$rect_name _top>] = Some(prop.clone());
-                        self.style_mut().[<$rect_name _bottom>] = Some(prop);
+                        let value = value.into();
+                        self.style_mut().[<$rect_name _top>] = Some(value.clone());
+                        self.style_mut().[<$rect_name _bottom>] = Some(value);
                         self
                     }
                     fn $rect_name(mut self, value: impl IntoRectProp<$rect_ty>) -> Self {
@@ -201,127 +230,100 @@ macro_rules! define_style {
                         self
                     }
                 )*
-
                 $(
+                    $(#[$hook_doc])*
                     fn $hook_name(mut self, hook: impl FnMut(&$hook_ty) + 'static) -> Self {
                         self.style_mut().$hook_name.append(hook);
                         self
                     }
                 )*
-
-                /// Replace the node's children. Factory content is passed to `create`.
+                /// Replace deferred child input, mounted later with the node.
                 fn children(mut self, children: impl IntoChildren) -> Self {
-                    self.style_mut().children = Some(children.into_children());
+                    self.style_mut().children = Some(children.into_children_plan());
                     self
                 }
             }
-
-            impl Styleable for Style {
-                fn style_mut(&mut self) -> &mut Style {
-                    self
-                }
-            }
+            impl Styleable for Style { fn style_mut(&mut self) -> &mut Style { self } }
+            impl Styleable for &mut Style { fn style_mut(&mut self) -> &mut Style { &mut **self } }
 
             impl Style {
-                pub(crate) fn themed_defaults(theme: ReadSignal<std::rc::Rc<Style>>, mut default: Self) -> Self {
-                    let mut result = Self::new();
+                pub(crate) fn bind_explicit_transitions(&mut self, transition: Prop<crate::transition::Transition>) {
+                    $(if let Some(value) = self.$name.take() {
+                        self.$name = Some(crate::transition::bind_property!($name, value, Some(transition)));
+                    })*
                     $(
-                        define_style!(@themed_property result, theme, default, $name, $ty, $($default)?);
-                    )*
-                    $(
-                        define_style!(@themed_property result, theme, default, [<$rect_name _left>], $rect_ty, $($rect_default)?);
-                        define_style!(@themed_property result, theme, default, [<$rect_name _right>], $rect_ty, $($rect_default)?);
-                        define_style!(@themed_property result, theme, default, [<$rect_name _top>], $rect_ty, $($rect_default)?);
-                        define_style!(@themed_property result, theme, default, [<$rect_name _bottom>], $rect_ty, $($rect_default)?);
-                    )*
-                    result.provide_defaults(default);
-                    result
-                }
-                /// Fill missing properties from `other` and append its event hooks.
-                pub fn merge(mut self, other: Self) -> Self {
-                    self.animation = self.animation.or(other.animation);
-                    $(
-                        self.$name = self.$name.or(other.$name);
-                    )*
-                    $(
-                        define_style!(@rect_defaults self, other, $rect_name);
-                    )*
-                    $(
-                        self.$hook_name.extend(other.$hook_name);
-                    )*
-                    self.children = self.children.or(other.children);
-                    self
-                }
-
-                /// Fill missing properties and prepend default event hooks.
-                pub fn provide_defaults(&mut self, mut default: Self) {
-                    self.animation = self.animation.or(default.animation);
-                    $(
-                        if self.$name.is_none() {
-                            self.$name = default.$name;
+                        if let Some(value) = self.[<$rect_name _left>].take() {
+                            self.[<$rect_name _left>] = Some(crate::transition::bind_property!([<$rect_name _left>], value, Some(transition)));
+                        }
+                        if let Some(value) = self.[<$rect_name _right>].take() {
+                            self.[<$rect_name _right>] = Some(crate::transition::bind_property!([<$rect_name _right>], value, Some(transition)));
+                        }
+                        if let Some(value) = self.[<$rect_name _top>].take() {
+                            self.[<$rect_name _top>] = Some(crate::transition::bind_property!([<$rect_name _top>], value, Some(transition)));
+                        }
+                        if let Some(value) = self.[<$rect_name _bottom>].take() {
+                            self.[<$rect_name _bottom>] = Some(crate::transition::bind_property!([<$rect_name _bottom>], value, Some(transition)));
                         }
                     )*
-                    $(
-                        define_style!(@rect_defaults self, default, $rect_name);
-                    )*
+                }
+                /// Fill missing properties and prepend the default hooks.
+                pub fn provide_defaults(&mut self, mut default: Self) {
+                    self.provide_defaults_mut(&mut default);
+                }
+                /// Merge a borrowed input without moving its complete storage through the call chain.
+                pub(crate) fn provide_defaults_mut(&mut self, default: &mut Self) {
+                    define_style!(@defaults self, default, $($name),*);
+                    $(define_style!(@rect_defaults self, default, $rect_name);)*
                     $(
                         mem::swap(&mut self.$hook_name, &mut default.$hook_name);
-                        self.$hook_name.extend(default.$hook_name);
+                        self.$hook_name.extend(mem::take(&mut default.$hook_name));
                     )*
-                    if self.children.is_none() {
-                        self.children = default.children;
-                    }
+                    if self.children.is_none() { self.children = default.children.take(); }
+                    self.append_hover_owners(mem::take(&mut default.hover_owners));
+                    // Release rejected inputs only after the complete merge, in the same
+                    // field order as dropping an owned Style. In particular, a rejected
+                    // child plan must be gone before installing the resulting style.
+                    default.clear();
                 }
-
-                pub(crate) fn assert_visual_only(&self) {
-                    assert!(self.children.is_none() $( && self.$hook_name.is_empty() )*,
-                        "theme and factory style callbacks may only set visual properties");
+                fn clear(&mut self) {
+                    $(let _ = self.$name.take();)*
+                    $(
+                        let _ = self.[<$rect_name _left>].take();
+                        let _ = self.[<$rect_name _right>].take();
+                        let _ = self.[<$rect_name _top>].take();
+                        let _ = self.[<$rect_name _bottom>].take();
+                    )*
+                    $(let _ = mem::take(&mut self.$hook_name);)*
+                    drop(self.children.take());
+                    drop(mem::take(&mut self.hover_owners));
                 }
-
+                $(define_style!(@accessor $name, $ty, $($default)?);)*
                 $(
+                    define_style!(@accessor [<$rect_name _left>], $rect_ty, $($rect_default)?);
+                    define_style!(@accessor [<$rect_name _right>], $rect_ty, $($rect_default)?);
+                    define_style!(@accessor [<$rect_name _top>], $rect_ty, $($rect_default)?);
+                    define_style!(@accessor [<$rect_name _bottom>], $rect_ty, $($rect_default)?);
                     #[allow(dead_code)]
-                    pub(crate) fn [<take_ $name>](&mut self) -> Prop<$ty> {
-                        self.$name.take().unwrap_or_else(|| define_style!(@extract_default ($ty, $($default)?)))
-                    }
-                )*
-
-                $(
-                    #[allow(dead_code)]
-                    pub(crate) fn [<take_ $rect_name>](&mut self) -> Prop<taffy::Rect<$rect_ty>> {
+                    pub fn [<take_ $rect_name>](&mut self) -> Prop<taffy::Rect<$rect_ty>> {
                         if self.[<$rect_name _left>].is_none()
                             && self.[<$rect_name _right>].is_none()
                             && self.[<$rect_name _top>].is_none()
                             && self.[<$rect_name _bottom>].is_none()
                         {
                             let default = define_style!(@extract_default_raw ($rect_ty, $($rect_default)?));
-                            taffy::Rect {
-                                left: default.clone(),
-                                right: default.clone(),
-                                top: default.clone(),
-                                bottom: default,
-                            }
-                            .into()
+                            Prop::Static(taffy::Rect { left: default.clone(), right: default.clone(), top: default.clone(), bottom: default })
                         } else {
-                            let left = self.[<$rect_name _left>].take().unwrap_or_else(|| define_style!(@extract_default ($rect_ty, $($rect_default)?)));
-                            let right = self.[<$rect_name _right>].take().unwrap_or_else(|| define_style!(@extract_default ($rect_ty, $($rect_default)?)));
-                            let top = self.[<$rect_name _top>].take().unwrap_or_else(|| define_style!(@extract_default ($rect_ty, $($rect_default)?)));
-                            let bottom = self.[<$rect_name _bottom>].take().unwrap_or_else(|| define_style!(@extract_default ($rect_ty, $($rect_default)?)));
-                            computed(move |_| taffy::Rect {
-                                left: left.get_clone(),
-                                right: right.get_clone(),
-                                top: top.get_clone(),
-                                bottom: bottom.get_clone(),
-                            })
-                            .into()
+                            let left = self.[<take_ $rect_name _left>]();
+                            let right = self.[<take_ $rect_name _right>]();
+                            let top = self.[<take_ $rect_name _top>]();
+                            let bottom = self.[<take_ $rect_name _bottom>]();
+                            computed(move |_| taffy::Rect { left: left.get_clone(), right: right.get_clone(), top: top.get_clone(), bottom: bottom.get_clone() }).into()
                         }
                     }
                 )*
-
                 $(
                     #[allow(dead_code)]
-                    pub(crate) fn [<take_ $hook_name>](&mut self) -> HookFn<$hook_ty> {
-                        mem::take(&mut self.$hook_name)
-                    }
+                    pub(crate) fn [<take_ $hook_name>](&mut self) -> CallbackList<$hook_ty> { mem::take(&mut self.$hook_name) }
                 )*
             }
         }
@@ -380,9 +382,14 @@ define_style! {
     /// Set how much this node shrinks when flex children exceed available space.
     flex_shrink: f32 = 1.0;
 
+    transition: crate::transition::Transition = crate::transition::Transition::Instant;
+
     // Paint
       /// Transform this node and its descendants without changing layout size.
-    transform: Matrix = Matrix::IDENTITY;
+    matrix_transform: Matrix = Matrix::IDENTITY;
+    /// Transform functions, applied in order around the border-box origin.
+    transform_list: Transform;
+    transform_origin: TransformOrigin;
     /// Multiply painted alpha; 0 is transparent and 1 is opaque.
     opacity: f32 = 1.0;
     /// Paint the background with a solid color, gradient, or texture brush.
@@ -391,6 +398,17 @@ define_style! {
     color: Brush = Brush::Solid(Color::WHITE);
     /// Round background corners by this radius in pixels.
     radius: Size = Size::Px(0.);
+    /// Draw a drop shadow behind the background.
+    shadow: Shadow;
+    /// Select shared mask admission (Auto by default). Exact resident masks reuse immediately;
+    /// new masks require stable parameters, and Auto also requires substantial recent coverage.
+    /// Currently native OpenGL only; unsupported, small or changing shadows stay analytic.
+    shadow_cache: ShadowCache = ShadowCache::Auto;
+    /// Clip children to a rounded rectangle with this radius (px/vw/vh;
+    /// percent is not resolved).
+    clip_radius: Size = Size::Px(0.);
+    /// Clip children to an angular sector.
+    clip_sector: Sector;
 
     // Text
     /// Align shaped lines within the text node's content width.
@@ -400,6 +418,7 @@ define_style! {
     font_size: FontSize = FontSize::Em(1.);
     /// Set baseline spacing in pixels.
     line_height: Size = Size::Px(44.);
+    line_height_multiplier: Option<f32>;
     /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
@@ -411,11 +430,11 @@ define_style! {
     /// Underline each shaped line with the foreground brush.
     text_underline: bool = false;
     text_strikethrough: bool = false;
-    text_wrap_mode: crate::node::TextWrap;
-    text_overflow: crate::node::TextOverflow;
+    text_wrap_mode: crate::node::text::TextWrap;
+    text_overflow: crate::node::text::TextOverflow;
     /// Maximum visual lines. None displays the whole document.
     text_max_lines: Option<usize>;
-    text_vertical_align: crate::node::TextVerticalAlign;
+    text_vertical_align: crate::node::text::TextVerticalAlign;
     /// Extra space between newline-delimited paragraphs, in logical pixels.
     paragraph_spacing: Size = Size::Px(0.);
     letter_spacing: Size = Size::Px(0.);
@@ -429,17 +448,25 @@ define_style! {
     }
 
     @hooks {
-        on_render: HookFn<()>;
-        on_pointer_event: HookFn<PointerEvent>;
-        on_hover_event: HookFn<PointerEvent>;
-        on_wheel_event: HookFn<WheelEvent>;
+        /// Advance local frame state once per App frame, with delta time in seconds.
+        /// Layout preparation and repeated drawing do not invoke this hook.
+        on_update: CallbackList<f32>;
+        /// Prepare geometry after publishing this node's absolute rect, before its children.
+        /// May run repeatedly while layout stabilizes; do not advance time here.
+        on_layout: CallbackList<()>;
+        /// Draw using prepared geometry. Do not change layout or advance time here.
+        on_render: CallbackList<()>;
+        on_pointer_event: CallbackList<PointerEvent>;
+        on_hover_event: CallbackList<PointerEvent>;
+        on_wheel_event: CallbackList<WheelEvent>;
 
-        on_tap: HookFn<()>;
-        on_long_press: HookFn<()>;
-        on_pan: HookFn<PanEvent>;
-        on_swipe: HookFn<SwipeEvent>;
-        on_pinch: HookFn<PinchEvent>;
-        on_rotate: HookFn<RotateEvent>;
+        on_tap: CallbackList<()>;
+        on_long_press: CallbackList<()>;
+        on_pan: CallbackList<PanEvent>;
+        on_swipe: CallbackList<SwipeEvent>;
+        on_pinch: CallbackList<PinchEvent>;
+        on_rotate: CallbackList<RotateEvent>;
+        on_transform: CallbackList<TransformEvent>;
     }
 }
 
@@ -448,10 +475,26 @@ impl Style {
         Self::default()
     }
 
+    /// Take the deferred input for mounting inside the node's scope.
+    pub(crate) fn take_children_plan(&mut self) -> Option<ChildrenPlan> {
+        self.children.take()
+    }
+
+    pub(crate) fn ensure_hovered(&mut self) -> Rc<HoverOwner> {
+        if let Some(owner) = self.hover_owners.first() {
+            return owner.clone();
+        }
+        let owner = HoverOwner::new();
+        self.hover_owners.push(owner.clone());
+        owner
+    }
+
     pub(crate) fn build_hooks(&mut self) -> NodeHooks {
         NodeHooks {
+            update: self.take_on_update(),
+            layout: self.take_on_layout(),
             render: self.take_on_render(),
-            after_children: HookFn::default(),
+            after_children: CallbackList::default(),
             pointer_event: self.take_on_pointer_event(),
             hover_event: self.take_on_hover_event(),
             wheel_event: self.take_on_wheel_event(),
@@ -459,48 +502,34 @@ impl Style {
     }
 
     pub(crate) fn build_taffy(&mut self) -> ReadSignal<taffy::Style> {
-        fn to_size<S>(width: Prop<S>, height: Prop<S>) -> Prop<taffy::Size<S>>
-        where
-            S: Clone + PartialEq + 'static,
-        {
-            if let Some((width, height)) = width.as_static().zip(height.as_static()) {
-                Prop::Static(taffy::Size {
-                    width: width.clone(),
-                    height: height.clone(),
-                })
-            } else {
-                computed(move |_| taffy::Size {
-                    width: width.get_clone(),
-                    height: height.get_clone(),
-                })
-                .into()
-            }
-        }
-
         let display = self.take_display();
         let box_sizing = self.take_box_sizing();
         let aspect_ratio = self.take_aspect_ratio();
-        let gap = to_size(self.take_column_gap(), self.take_row_gap());
+        let column_gap = self.take_column_gap();
+        let row_gap = self.take_row_gap();
 
-        let size = to_size(self.take_width(), self.take_height());
-        let min_size = to_size(self.take_min_width(), self.take_min_height());
-        let max_size = to_size(self.take_max_width(), self.take_max_height());
+        let width = self.take_width();
+        let height = self.take_height();
+        let min_width = self.take_min_width();
+        let min_height = self.take_min_height();
+        let max_width = self.take_max_width();
+        let max_height = self.take_max_height();
 
         let overflow_x = self.take_overflow_x();
         let overflow_y = self.take_overflow_y();
-        let overflow = if let Some((x, y)) = overflow_x.as_static().zip(overflow_y.as_static()) {
-            Prop::Static(Point { x: *x, y: *y })
-        } else {
-            computed(move |_| Point {
-                x: overflow_x.get_clone(),
-                y: overflow_y.get_clone(),
-            })
-            .into()
-        };
 
-        let margin = self.take_margin();
-        let padding = self.take_padding();
-        let border = self.take_border();
+        let margin_left = self.take_margin_left();
+        let margin_right = self.take_margin_right();
+        let margin_top = self.take_margin_top();
+        let margin_bottom = self.take_margin_bottom();
+        let padding_left = self.take_padding_left();
+        let padding_right = self.take_padding_right();
+        let padding_top = self.take_padding_top();
+        let padding_bottom = self.take_padding_bottom();
+        let border_left = self.take_border_left();
+        let border_right = self.take_border_right();
+        let border_top = self.take_border_top();
+        let border_bottom = self.take_border_bottom();
 
         let align_items = self.take_align_items();
         let align_self = self.take_align_self();
@@ -510,7 +539,10 @@ impl Style {
         let justify_content = self.take_justify_content();
 
         let position = self.take_position();
-        let inset = self.take_inset();
+        let inset_left = self.take_inset_left();
+        let inset_right = self.take_inset_right();
+        let inset_top = self.take_inset_top();
+        let inset_bottom = self.take_inset_bottom();
 
         let flex_direction = self.take_flex_direction();
         let flex_wrap = self.take_flex_wrap();
@@ -523,17 +555,47 @@ impl Style {
             display: display.get(),
             box_sizing: box_sizing.get(),
             aspect_ratio: aspect_ratio.get(),
-            gap: gap.get().map(|v| v.to_length_percentage("gap")),
+            gap: taffy::Size {
+                width: column_gap.get().to_length_percentage("gap"),
+                height: row_gap.get().to_length_percentage("gap"),
+            },
 
-            size: size.get().map(Size::to_dimension),
-            min_size: min_size.get().map(Size::to_dimension),
-            max_size: max_size.get().map(Size::to_dimension),
+            size: taffy::Size {
+                width: width.get().to_dimension(),
+                height: height.get().to_dimension(),
+            },
+            min_size: taffy::Size {
+                width: min_width.get().to_dimension(),
+                height: min_height.get().to_dimension(),
+            },
+            max_size: taffy::Size {
+                width: max_width.get().to_dimension(),
+                height: max_height.get().to_dimension(),
+            },
 
-            overflow: overflow.get(),
+            overflow: Point {
+                x: overflow_x.get(),
+                y: overflow_y.get(),
+            },
 
-            margin: margin.get().map(Size::to_length_percentage_auto),
-            padding: padding.get().map(|v| v.to_length_percentage("padding")),
-            border: border.get().map(|v| v.to_length_percentage("border")),
+            margin: taffy::Rect {
+                left: margin_left.get().to_length_percentage_auto(),
+                right: margin_right.get().to_length_percentage_auto(),
+                top: margin_top.get().to_length_percentage_auto(),
+                bottom: margin_bottom.get().to_length_percentage_auto(),
+            },
+            padding: taffy::Rect {
+                left: padding_left.get().to_length_percentage("padding"),
+                right: padding_right.get().to_length_percentage("padding"),
+                top: padding_top.get().to_length_percentage("padding"),
+                bottom: padding_bottom.get().to_length_percentage("padding"),
+            },
+            border: taffy::Rect {
+                left: border_left.get().to_length_percentage("border"),
+                right: border_right.get().to_length_percentage("border"),
+                top: border_top.get().to_length_percentage("border"),
+                bottom: border_bottom.get().to_length_percentage("border"),
+            },
 
             align_items: align_items.get(),
             align_self: align_self.get(),
@@ -543,7 +605,12 @@ impl Style {
             justify_content: justify_content.get(),
 
             position: position.get(),
-            inset: inset.get().map(Size::to_length_percentage_auto),
+            inset: taffy::Rect {
+                left: inset_left.get().to_length_percentage_auto(),
+                right: inset_right.get().to_length_percentage_auto(),
+                top: inset_top.get().to_length_percentage_auto(),
+                bottom: inset_bottom.get().to_length_percentage_auto(),
+            },
 
             flex_direction: flex_direction.get(),
             flex_wrap: flex_wrap.get(),
@@ -555,4 +622,26 @@ impl Style {
             ..Default::default()
         })
     }
+}
+
+impl Style {
+    fn append_hover_owners(&mut self, owners: Vec<Rc<HoverOwner>>) {
+        for owner in owners {
+            if !self
+                .hover_owners
+                .iter()
+                .any(|existing| Rc::ptr_eq(existing, &owner))
+            {
+                self.hover_owners.push(owner);
+            }
+        }
+    }
+}
+
+/// Enumerations used by style declarations without requiring direct Taffy dependencies.
+pub mod values {
+    pub use cosmic_text::Align as TextAlign;
+    pub use taffy::{
+        AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, Overflow, Position,
+    };
 }

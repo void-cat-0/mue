@@ -1,9 +1,9 @@
 use super::{controls::*, responsive};
+use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     math::Vector,
-    node::*,
-    style::{Style, Styleable, StyleableExt, vh, vw},
+    style::{Style, Styleable, vh, vw},
 };
 
 pub fn page() -> Node {
@@ -49,105 +49,130 @@ pub fn page() -> Node {
     // Options configure input recognizers at build time. A keyed revision replaces only this viewport.
     let revision = signal(0u32);
     watch(options, move |_| revision.update(|v| *v += 1));
-    let areas = map_keyed(
-        revision.map(|n| std::rc::Rc::from([n])),
-        |n| *n,
-        move |_| {
-            let (
+    let areas = keyed(revision, move |_| {
+        let (
+            axis,
+            touch,
+            mouse,
+            wheel,
+            speed,
+            threshold,
+            lock,
+            momentum,
+            friction,
+            velocity,
+            chain,
+            bars,
+        ) = options.get();
+        scroll_area()
+            .style(mue_macroquad::style! {
+            height: {vh(38.75)};
+            width: 100%;
+            })
+            .offset(offset)
+            .style(mue_macroquad::style! { background: {panel_brush()}; })
+            .options(ScrollOptions {
                 axis,
-                touch,
-                mouse,
-                wheel,
-                speed,
-                threshold,
-                lock,
-                momentum,
+                touch: !touch,
+                mouse_drag: mouse,
+                wheel: !wheel,
+                wheel_speed: speed,
+                drag_threshold: threshold,
+                axis_lock: !lock,
+                momentum: !momentum,
                 friction,
-                velocity,
-                chain,
-                bars,
-            ) = options.get();
-            scroll_area()
-                .height(vh(38.75))
-                .w_full()
-                .offset(offset)
-                .background(PANEL)
-                .options(ScrollOptions {
-                    axis,
-                    touch: !touch,
-                    mouse_drag: mouse,
-                    wheel: !wheel,
-                    wheel_speed: speed,
-                    drag_threshold: threshold,
-                    axis_lock: !lock,
-                    momentum: !momentum,
-                    friction,
-                    max_velocity: velocity,
-                    chain: !chain,
-                    scrollbars: !bars,
-                })
-                .content_style(Style::new().gap(vh(1.5)).padding((vw(2.), vh(2.))))
-                .children(
-                    (0..20)
-                        .map(|n| {
-                            center()
-                                .width(responsive::ui(1200.))
-                                .height(responsive::ui(54.))
-                                .flex_none()
-                                .background(if n % 2 == 0 { BLUE } else { CORAL })
-                                .children(
-                                    text(format!("Row {n}"))
-                                        .font_size(responsive::font(22.))
-                                        .line_height(responsive::ui(32.)),
-                                )
-                                .into_node()
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .into_node()
-        },
-    );
+                max_velocity: velocity,
+                chain: !chain,
+                scrollbars: !bars,
+            })
+            .content_style(Style::new().style(mue_macroquad::style! {
+            gap: {vh(1.5)};
+            padding: {(vw(2.), vh(2.))};
+            }))
+            .children(
+                (0..20)
+                    .map(|n| {
+                        center()
+                            .style(mue_macroquad::style! {
+                            width: {responsive::ui(1200.)};
+                            height: {responsive::ui(54.)};
+                            flex: none;
+                            background: {if n % 2 == 0 { BLUE } else { CORAL }};
+                            })
+                            .children(text(format!("Row {n}")).style(mue_macroquad::style! {
+                            font-size: {responsive::font(22.)};
+                            line-height: {responsive::ui(32.)};
+                            }))
+                            .into_node()
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_node()
+    });
     let page = signal(0usize);
     let rows = map_keyed(
         page.map(|p| (p * 5..p * 5 + 5).collect::<std::rc::Rc<[usize]>>()),
         |n| *n,
         |n| {
             text(format!("Item {}", n + 1))
-                .font_size(responsive::font(20.))
-                .line_height(responsive::ui(28.))
+                .style(mue_macroquad::style! {
+                font-size: {responsive::font(20.)};
+                line-height: {responsive::ui(28.)};
+                })
                 .into_node()
         },
     );
     stack()
-        .w_full()
-        .min_width(0.)
-        .gap(vh(2.5))
+        .style(mue_macroquad::style! {
+        width: 100%;
+        min-width: 0px;
+        gap: {vh(2.5)};
+        })
         .children((
             controls(vec![a, b, c, d, e, f, g, h, i, j, k, l]),
             areas,
-            wrap().w_full().gap(vw(1.)).children((
-                button("Reset", move || offset.set(Vector::ZERO)),
-                text(offset.map(|v| format!("{:.0}, {:.0}", v.x, v.y)))
-                    .font_size(responsive::font(18.))
-                    .line_height(responsive::ui(28.)),
-            )),
+            wrap()
+                .style(mue_macroquad::style! {
+                width: 100%;
+                gap: {vw(1.)};
+                })
+                .children((
+                    demo_button("Reset", move || offset.set(Vector::ZERO)),
+                    text(offset.map(|v| format!("{:.0}, {:.0}", v.x, v.y))).style(
+                        mue_macroquad::style! {
+                        font-size: {responsive::font(18.)};
+                        line-height: {responsive::ui(28.)};
+                        },
+                    ),
+                )),
             section(
                 "Pagination",
                 stack().children((
                     list()
-                        .font_size(responsive::font(20.))
-                        .line_height(responsive::ui(28.))
-                        .gap(responsive::ui(8.))
+                        .style(mue_macroquad::style! {
+                        font-size: {responsive::font(20.)};
+                        line-height: {responsive::ui(28.)};
+                        gap: {responsive::ui(8.)};
+                        })
                         .children(rows),
-                    wrap().w_full().gap(vw(1.)).children((
-                        button("Previous", move || {
-                            page.update(|p| *p = p.saturating_sub(1))
-                        }),
-                        text(page.map(|p| format!("{} / 8", p + 1)))
-                            .font_size(responsive::font(18.))
-                            .line_height(responsive::ui(28.)),
-                        button("Next", move || page.update(|p| *p = (*p + 1).min(7))),
-                    )),
+                    wrap()
+                        .style(mue_macroquad::style! {
+                        width: 100%;
+                        gap: {vw(1.)};
+                        })
+                        .children((
+                            demo_button("Previous", move || {
+                                page.update(|p| *p = p.saturating_sub(1))
+                            }),
+                            text(page.map(|p| format!("{} / 8", p + 1)))
+                                .style(
+                                    mue_macroquad::style! { font-size: {responsive::font(18.)}; },
+                                )
+                                .style(
+                                    mue_macroquad::style! { line-height: {responsive::ui(28.)}; },
+                                ),
+                            demo_button("Next", move || page.update(|p| *p = (*p + 1).min(7))),
+                        )),
                 )),
             ),
         ))

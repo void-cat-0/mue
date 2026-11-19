@@ -14,8 +14,9 @@ use lyon::{
 };
 use macroquad::prelude::*;
 use mue_core::{
-    effect::computed_always,
+    effect::{computed, computed_always},
     prop::Prop,
+    scope::{inject, provide},
     signal::{Access, ReadSignal},
 };
 use smallvec::SmallVec;
@@ -25,6 +26,7 @@ use crate::{
     shader::{Brush, IntoShader, Shader, SharedTexture},
     style::Style,
 };
+use macroquad::retained::RetainedVertex;
 
 #[derive(Default)]
 struct Cache {
@@ -43,10 +45,7 @@ pub(crate) fn with_transform<R>(transform: Matrix, draw: impl FnOnce() -> R) -> 
         return draw();
     }
     let previous = DRAW_TRANSFORM.replace(DRAW_TRANSFORM.get() * transform);
-    let c = transform.to_cols_array();
-    let matrix = macroquad::math::Mat4::from_cols_array(&[
-        c[0], c[1], 0., 0., c[3], c[4], 0., 0., 0., 0., 1., 0., c[6], c[7], 0., 1.,
-    ]);
+    let matrix = crate::math::model_matrix(transform);
     unsafe { get_internal_gl() }
         .quad_gl
         .push_model_matrix(matrix);
@@ -56,19 +55,56 @@ pub(crate) fn with_transform<R>(transform: Matrix, draw: impl FnOnce() -> R) -> 
     result
 }
 
-/// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.
-pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
-    let transform = DRAW_TRANSFORM.get();
+/// The accumulated transform for the node currently rendering.
+pub(crate) fn current_transform() -> Matrix {
+    DRAW_TRANSFORM.get()
+}
+
+/// Whether mue should use macroquad's retained geometry path.
+///
+/// Check both the backend and the currently selected material before building
+/// retained geometry. Unmatched custom materials keep the immediate path.
+pub(crate) fn retained_enabled() -> bool {
+    macroquad::retained::is_supported() && crate::material::retained_material_matches()
+}
+
+/// Axis-aligned bounds of a rectangle after a canvas transform.
+pub(crate) fn transform_rect(transform: Matrix, rect: Rect) -> Rect {
     let corners = [
         rect.min(),
         rect.max(),
         vec2(rect.right(), rect.y),
         vec2(rect.x, rect.bottom()),
     ]
-    .map(|point| transform.transform_point2(point));
+    .map(|point| crate::math::project_point(transform, point));
     let min = corners.into_iter().reduce(Vector::min).unwrap();
     let max = corners.into_iter().reduce(Vector::max).unwrap();
-    let rect = Rect::new(min.x, min.y, max.x - min.x, max.y - min.y);
+    Rect::new(min.x, min.y, max.x - min.x, max.y - min.y)
+}
+
+/// Current scissor in logical, top-left coordinates.
+pub(crate) fn current_clip_logical() -> Option<Rect> {
+    let scale = macroquad::window::screen_dpi_scale().max(f32::EPSILON);
+    let gl = unsafe { get_internal_gl() };
+    gl.quad_gl.get_scissor().map(|(x, y, w, h)| {
+        Rect::new(
+            x as f32 / scale,
+            y as f32 / scale,
+            w as f32 / scale,
+            h as f32 / scale,
+        )
+    })
+}
+
+/// Whether `rect` intersects `clip`, or the clip is absent.
+pub(crate) fn rect_visible(clip: Option<Rect>, rect: &Rect) -> bool {
+    clip.is_none_or(|clip| clip.intersect(rect).is_some())
+}
+
+/// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.
+pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
+    let transform = DRAW_TRANSFORM.get();
+    let rect = transform_rect(transform, rect);
     let gl = unsafe { macroquad::window::get_internal_gl() }.quad_gl;
     let previous = gl.get_scissor();
     let scale = macroquad::window::screen_dpi_scale();
@@ -97,13 +133,32 @@ pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
 }
 
 #[derive(Clone)]
-#[repr(transparent)]
-struct Transform(Prop<Matrix>);
+struct PaintContext {
+    opacity: Prop<f32>,
+}
 
-#[derive(Clone)]
-struct Opacity(Prop<f32>);
+fn combine_opacity(inherited: Option<Prop<f32>>, local: Prop<f32>) -> Prop<f32> {
+    match inherited {
+        Some(Prop::Static(parent)) => local.map(move |local| parent * local),
+        Some(parent) => computed(move |_| parent.get() * local.get()).into(),
+        None => local,
+    }
+}
 
-/// Draw geometry using the node's inherited transform and opacity.
+/// Bind this node's final opacity before mounting its children or paint consumers.
+///
+/// Called once after transition binding, this retains the local property in Style
+/// while publishing the effective alpha for both this node and its descendants.
+pub(crate) fn bind_node_style(style: &mut Style) {
+    let inherited = inject::<PaintContext>().map(|context| context.opacity);
+    let opacity = combine_opacity(
+        inherited,
+        style.declared_opacity().unwrap_or(Prop::Static(1.)),
+    );
+    provide(PaintContext { opacity });
+}
+
+/// Draw geometry using the node's paint transform and effective inherited opacity.
 pub struct Paint {
     pub transform: Prop<Matrix>,
     opacity: Prop<f32>,
@@ -111,6 +166,11 @@ pub struct Paint {
 }
 
 impl Paint {
+    /// Effective alpha for retained geometry.
+    pub(crate) fn opacity(&self) -> f32 {
+        self.opacity.get()
+    }
+
     /// Build cached shapes that update whenever their tracked dependencies change.
     pub fn build(&self, mut f: impl FnMut(&mut ShapesBuilder) + 'static) -> ReadSignal<Rc<Shapes>> {
         let transform = self.transform;
@@ -145,42 +205,55 @@ impl Paint {
         });
         shapes.draw();
     }
+
+    /// Submit a solid quad without allocating temporary Shapes or tessellation buffers.
+    pub(crate) fn draw_solid_rect(&self, rect: Rect, color: crate::color::Color) {
+        self.draw_quad(rect, color, None);
+    }
+
+    /// Bind a cached mask. Its material derives high-precision UVs from local position.
+    pub(crate) fn draw_mask_rect(&self, rect: Rect, texture: &Texture2D) {
+        self.draw_quad(rect, crate::color::Color::WHITE, Some(texture));
+    }
+
+    fn draw_quad(&self, rect: Rect, color: crate::color::Color, texture: Option<&Texture2D>) {
+        let transform = self.transform.get();
+        let alpha = self.opacity.get();
+        // Row-major corners and the diagonal match ShapesBuilder::fill_quad.
+        let vertices = [
+            rect.min(),
+            vec2(rect.right(), rect.y),
+            vec2(rect.x, rect.bottom()),
+            rect.max(),
+        ]
+        .map(|point| color.new_vertex(&transform, &point, alpha));
+        const INDICES: [u16; 6] = [0, 1, 3, 0, 3, 2];
+        let gl = unsafe { get_internal_gl() }.quad_gl;
+        gl.texture(texture);
+        gl.draw_mode(DrawMode::Triangles);
+        gl.geometry(&vertices, &INDICES);
+    }
 }
 
 fn frobenius_norm(m: &Matrix) -> f32 {
     (m.col(0).length_squared() + m.col(1).length_squared() + m.col(2).length_squared()).sqrt()
 }
 
-/// Obtain paint state while building a node, inheriting parent transform and opacity.
+/// Obtain this node's already bound paint state while building its consumers.
 pub fn use_paint(style: &mut Style) -> Paint {
-    fn extract<T: Clone + PartialEq + 'static>(
-        prev: Option<Prop<T>>,
-        style: Option<Prop<T>>,
-        default: T,
-        mut reduce: impl FnMut(T, T) -> T + 'static,
-    ) -> Prop<T> {
-        match (prev, style) {
-            (Some(prev), Some(style)) => Prop::Dynamic(mue_core::effect::computed(move |_| {
-                reduce(prev.get_clone(), style.get_clone())
-            })),
-            (Some(prev), None) => prev,
-            (None, Some(style)) => style,
-            (None, None) => Prop::Static(default),
-        }
-    }
-
-    let transform = extract(
-        mue_core::scope::inject::<Transform>().map(|it| it.0),
-        style.transform,
-        Matrix::IDENTITY,
-        |a, b| a * b,
-    );
-    let opacity = extract(
-        mue_core::scope::inject::<Opacity>().map(|it| it.0),
-        style.opacity,
-        1.0,
-        |a, b| a * b,
-    );
+    let (transform, opacity) = if let Some(context) = inject::<PaintContext>() {
+        // Node::render applies the node transform around the entire subtree.
+        // Geometry stays in layout coordinates, and local alpha is already bound.
+        (Prop::Static(Matrix::IDENTITY), context.opacity)
+    } else {
+        // Preserve direct use outside the node mount protocol.
+        (
+            style
+                .declared_matrix_transform()
+                .unwrap_or(Prop::Static(Matrix::IDENTITY)),
+            style.declared_opacity().unwrap_or(Prop::Static(1.)),
+        )
+    };
     let tolerance = transform.map(|t| {
         let scale = frobenius_norm(&t);
         0.2 / scale
@@ -198,7 +271,55 @@ pub struct Shapes {
     shapes: SmallVec<[Shape; 1]>,
 }
 
+impl mue_core::prop::PropValue for Shapes {}
+
+/// One texture batch of retained geometry.
+pub(crate) struct RetainedBatch {
+    pub(crate) texture: Option<SharedTexture>,
+    pub(crate) vertices: Vec<RetainedVertex>,
+    pub(crate) indices: Vec<u32>,
+}
+
 impl Shapes {
+    /// Total vertex count across all texture batches.
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.shapes
+            .iter()
+            .map(|shape| shape.buffers.vertices.len())
+            .sum()
+    }
+
+    /// Convert the cached geometry into immutable buffer batches.
+    pub(crate) fn retained_batches(&self) -> impl Iterator<Item = RetainedBatch> + '_ {
+        self.shapes
+            .iter()
+            .filter(|shape| !shape.buffers.vertices.is_empty() && !shape.buffers.indices.is_empty())
+            .map(|shape| RetainedBatch {
+                texture: shape.texture.clone(),
+                vertices: shape
+                    .buffers
+                    .vertices
+                    .iter()
+                    .map(|vertex| RetainedVertex {
+                        position: [vertex.position.x, vertex.position.y],
+                        texcoord: [vertex.uv.x, vertex.uv.y],
+                        color: [
+                            vertex.color[0] as f32 / 255.,
+                            vertex.color[1] as f32 / 255.,
+                            vertex.color[2] as f32 / 255.,
+                            vertex.color[3] as f32 / 255.,
+                        ],
+                    })
+                    .collect(),
+                indices: shape
+                    .buffers
+                    .indices
+                    .iter()
+                    .map(|&index| index as u32)
+                    .collect(),
+            })
+    }
+
     /// Build reusable geometry in local coordinates for a `shape` node.
     pub fn build(f: impl FnOnce(&mut ShapesBuilder)) -> Rc<Self> {
         let mut shapes = Self::default();
@@ -642,243 +763,49 @@ impl ShapesBuilder<'_> {
     }
 }
 
-/// Add the background before the node's content hooks.
+/// Cache background geometry and draw it before the node's content hooks.
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
     let radius = crate::style::units::resolve_length(style.take_radius(), "radius");
+    let shadow = style.take_shadow();
+    let shadow_cache = style.take_shadow_cache();
+    let mut shadow_mask = crate::shadow::ShadowMaskState::default();
     let paint = use_paint(style);
-    style.on_render.append(move |_| {
-        let brush = background.get_clone();
-        if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
-            return;
-        }
-        let rect = rect.get();
-        if rect.w <= 0. || rect.h <= 0. {
-            return;
-        }
-        let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
-        paint.draw(|p| {
+    // Default transparent containers need no cache, even during inherited opacity changes.
+    let shapes = if matches!(&background, Prop::Static(Brush::Solid(color)) if color.a <= 0.) {
+        None
+    } else {
+        Some(paint.build(move |p| {
+            let rect = rect.get();
+            if rect.w <= 0. || rect.h <= 0. {
+                return;
+            }
+            let brush = background.get_clone();
+            if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
+                return;
+            }
+            let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
             if radius > 0. {
                 p.fill_rounded_rect(rect, radius, brush.shader(rect));
             } else {
                 p.fill_rect(rect, brush.shader(rect));
             }
-        });
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        color::Color,
-        shader::{Brush, ColorStop, LinearGradient},
+        }))
     };
-
-    fn assert_shape_limits(shapes: &Shapes) {
-        for shape in &shapes.shapes {
-            assert!(shape.buffers.vertices.len() <= MAX_SHAPE_VERTICES);
-            assert!(shape.buffers.indices.len() <= MAX_SHAPE_INDICES);
-            assert_eq!(shape.buffers.indices.len() % 3, 0);
-            assert!(
-                shape
-                    .buffers
-                    .indices
-                    .iter()
-                    .all(|&index| (index as usize) < shape.buffers.vertices.len())
-            );
+    style.on_render.append(move |_| {
+        let rect = rect.get();
+        if rect.w <= 0. || rect.h <= 0. {
+            shadow_mask.reset();
+            return;
         }
-    }
-
-    #[test]
-    fn many_glyph_quads_keep_all_geometry_without_gpu() {
-        let uv = Rect::new(0.25, 0.5, 0.125, 0.25);
-        let shapes = Shapes::build(|builder| {
-            for index in 0..4_000 {
-                // Same path as draw_texture, but None avoids creating a GPU texture.
-                builder.fill_quad(
-                    Rect::new((index % 100) as f32, (index / 100) as f32, 1., 1.),
-                    0.,
-                    None,
-                    Some(uv),
-                    Color::WHITE,
-                );
-            }
-        });
-
-        assert_shape_limits(&shapes);
-        assert_eq!(
-            shapes
-                .shapes
-                .iter()
-                .map(|s| s.buffers.indices.len())
-                .sum::<usize>(),
-            24_000
-        );
-        assert_eq!(
-            shapes
-                .shapes
-                .iter()
-                .map(|s| s.buffers.vertices.len())
-                .sum::<usize>(),
-            16_000
-        );
-        assert!(shapes.shapes.len() > 1);
-        let mut glyph = 0;
-        for shape in &shapes.shapes {
-            for indices in shape.buffers.indices.as_chunks::<6>().0 {
-                let x = (glyph % 100) as f32;
-                let y = (glyph / 100) as f32;
-                let positions = [(x, y), (x + 1., y), (x + 1., y + 1.), (x, y + 1.)];
-                let uvs = [
-                    (uv.x, uv.y),
-                    (uv.x + uv.w, uv.y),
-                    (uv.x + uv.w, uv.y + uv.h),
-                    (uv.x, uv.y + uv.h),
-                ];
-                for (&index, corner) in indices.iter().zip([0, 1, 2, 0, 2, 3]) {
-                    let vertex = &shape.buffers.vertices[index as usize];
-                    assert_eq!((vertex.position.x, vertex.position.y), positions[corner]);
-                    assert_eq!((vertex.uv.x, vertex.uv.y), uvs[corner]);
-                }
-                glyph += 1;
-            }
+        if let Some(shadow) = shadow.try_get() {
+            crate::shadow::draw_shadow(&paint, rect, shadow, shadow_cache.get(), &mut shadow_mask);
+        } else {
+            shadow_mask.reset();
         }
-        assert_eq!(glyph, 4_000);
-    }
-
-    #[test]
-    fn tessellated_mesh_is_split_without_loss() {
-        let mut buffers = VertexBuffers::<Vertex, u32>::new();
-        // More than u16::MAX input vertices must still remap without wrapping.
-        for index in 0..22_000u32 {
-            let base = buffers.vertices.len() as u32;
-            buffers.vertices.extend([
-                Vertex::new(index as f32, 0., 0., 0., 0., macroquad::color::WHITE),
-                Vertex::new(index as f32, 1., 0., 0., 0., macroquad::color::WHITE),
-                Vertex::new(index as f32, 0., 1., 0., 0., macroquad::color::WHITE),
-            ]);
-            buffers.indices.extend([base, base + 1, base + 2]);
+        // Keep submission on the immediate path so neighboring backgrounds can batch.
+        if let Some(shapes) = shapes {
+            shapes.get_clone().draw();
         }
-        let mut shapes = Shapes::default();
-        append_mesh(&mut shapes, None, buffers);
-
-        assert_shape_limits(&shapes);
-        assert_eq!(
-            shapes
-                .shapes
-                .iter()
-                .map(|s| s.buffers.indices.len())
-                .sum::<usize>(),
-            66_000
-        );
-        assert!(shapes.shapes.len() > 1);
-        for (triangle, indices) in shapes
-            .shapes
-            .iter()
-            .flat_map(|shape| {
-                shape
-                    .buffers
-                    .indices
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .map(move |indices| (shape, indices))
-            })
-            .enumerate()
-        {
-            let (shape, indices) = indices;
-            for &index in indices {
-                assert_eq!(
-                    shape.buffers.vertices[index as usize].position.x,
-                    triangle as f32
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn large_fill_and_stroke_paths_use_bounded_batches() {
-        let mut path = lyon::path::Path::builder();
-        for index in 0..2_000 {
-            path.add_rectangle(
-                &lyon::geom::Box2D::from_origin_and_size(
-                    lyon::geom::point(index as f32 * 3., 0.),
-                    lyon::geom::size(1., 1.),
-                ),
-                lyon::path::Winding::Positive,
-            );
-        }
-        let path = path.build();
-        let fill = Shapes::build(|builder| builder.fill_path(path.iter(), Color::WHITE));
-        let stroke = Shapes::build(|builder| builder.stroke_path(path.iter(), Color::WHITE));
-        for shapes in [&fill, &stroke] {
-            assert_shape_limits(shapes);
-            assert!(shapes.shapes.len() > 1);
-        }
-        assert_eq!(
-            fill.shapes
-                .iter()
-                .map(|s| s.buffers.indices.len())
-                .sum::<usize>(),
-            12_000
-        );
-    }
-
-    #[test]
-    fn custom_grid_larger_than_u16_is_tiled() {
-        struct DenseShader;
-        impl Shader for DenseShader {
-            fn subdivisions(&self, _: Rect) -> (usize, usize) {
-                (256, 256)
-            }
-            fn texture(&self) -> Option<SharedTexture> {
-                None
-            }
-            fn new_vertex(&self, mat: &Matrix, point: &Vector, alpha: f32) -> Vertex {
-                Color::WHITE.new_vertex(mat, point, alpha)
-            }
-        }
-        let shapes = Shapes::build(|builder| {
-            builder.fill_rect(Rect::new(0., 0., 256., 256.), DenseShader);
-        });
-        assert_shape_limits(&shapes);
-        assert_eq!(
-            shapes
-                .shapes
-                .iter()
-                .map(|s| s.buffers.indices.len())
-                .sum::<usize>(),
-            256 * 256 * 6
-        );
-    }
-
-    #[test]
-    fn maximum_gradient_subdivision_is_split_without_loss() {
-        let brush = Brush::LinearGradient(LinearGradient::new(
-            vec2(0., 0.),
-            vec2(1., 1.),
-            [
-                ColorStop::new(0., Color::BLACK),
-                ColorStop::new(1., Color::WHITE),
-            ],
-        ));
-        let shapes = Shapes::build(|builder| {
-            builder.fill_rect(
-                Rect::new(0., 0., 192., 192.),
-                brush.shader(Rect::new(0., 0., 192., 192.)),
-            );
-        });
-
-        assert_shape_limits(&shapes);
-        assert_eq!(
-            shapes
-                .shapes
-                .iter()
-                .map(|s| s.buffers.indices.len())
-                .sum::<usize>(),
-            32 * 32 * 6
-        );
-        assert!(shapes.shapes.len() > 1);
-    }
+    });
 }

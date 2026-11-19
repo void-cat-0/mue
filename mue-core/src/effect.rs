@@ -1,4 +1,10 @@
-use std::{ops::Deref, slice};
+//! Reactive effects, derived signals, and cleanup callbacks.
+//!
+//! Effects and derived signals belong to the scope active when they are
+//! created. Rerunning a callback uses the ambient scope at the time of the
+//! rerun. Use [`on_cleanup`] to release resources on a rerun or on disposal.
+
+use std::{marker::PhantomData, ops::Deref, rc::Rc, slice};
 
 use slotmap::{Key, new_key_type};
 use smallvec::SmallVec;
@@ -57,6 +63,7 @@ pub(crate) struct EffectInner {
     pub cleanups: Vec<CleanupCallback>,
     pub signal: SignalId,
     pub dependencies: Dependencies,
+    pub dependency_revision: u64,
     pub state: EffectState,
     #[cfg(debug_assertions)]
     #[allow(dead_code)]
@@ -78,6 +85,7 @@ impl EffectInner {
             cleanups: Vec::new(),
             signal,
             dependencies,
+            dependency_revision: 0,
             state,
             #[cfg(debug_assertions)]
             location,
@@ -91,27 +99,47 @@ impl EffectInner {
     }
 
     pub fn register(self, rt: &Runtime) -> EffectId {
+        rt.assert_resource_creation_allowed();
         rt.effects.borrow_mut().insert(self)
     }
 }
 
+/// A disposable handle to a reactive effect, confined to its runtime thread.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::effect::Effect>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::effect::Effect>();
+/// ```
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Effect {
     pub(crate) id: EffectId,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl Effect {
     pub(crate) fn new(id: EffectId) -> Self {
         CURRENT_SCOPE.with_borrow_mut(|scope| {
-            scope.push_effect(Self { id });
+            scope.push_effect(Self {
+                id,
+                _thread_affinity: PhantomData,
+            });
         });
-        Self { id }
+        Self {
+            id,
+            _thread_affinity: PhantomData,
+        }
     }
 
     pub fn null() -> Self {
         Self {
             id: EffectId::null(),
+            _thread_affinity: PhantomData,
         }
     }
 
@@ -139,6 +167,7 @@ pub fn watch<T: 'static>(
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f(signal);
@@ -165,6 +194,7 @@ pub fn watch_immediate<T: 'static>(
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f(Prop::Dynamic(signal));
@@ -190,6 +220,7 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f();
@@ -202,13 +233,26 @@ pub fn watch_effect(mut f: impl FnMut() + 'static) -> Effect {
             location,
         )
         .register(rt);
+        let effect = Effect::new(effect_id);
         rt.update(effect_id);
-        Effect::new(effect_id)
+        effect
     })
 }
 
+/// Run without subscribing the surrounding effect to reactive reads.
+///
+/// The current scope and resource ownership are unchanged. Effects and computed
+/// values created inside the callback still track their own dependencies. There
+/// is no current effect for direct calls to `on_cleanup` inside the callback.
+pub fn untracked<R>(f: impl FnOnce() -> R) -> R {
+    Runtime::with(|rt| rt.without_effect(f))
+}
+
 /// Register a cleanup function to be called when the current effect is re-run or disposed.
-/// This function should only be called within an effect callback.
+/// During scope disposal, owned effects and computed producers are cleaned before their
+/// scope tree signals are removed, so cleanup may read those live signals. Teardown
+/// cleanup must not create reactive resources or mutate the disposing graph. This
+/// function should only be called within an effect callback.
 ///
 /// # Example
 /// ```
@@ -238,6 +282,7 @@ fn create_computed<T: 'static>(callback: EffectCallback) -> ReadSignal<T> {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let signal_id = SignalInner::new(
             None,
             None,
@@ -255,8 +300,9 @@ fn create_computed<T: 'static>(callback: EffectCallback) -> ReadSignal<T> {
         )
         .register(rt);
         rt.signal_mut(signal_id).effect = Some(effect_id);
+        let signal = ReadSignal::new(signal_id);
         rt.update(effect_id);
-        ReadSignal::new(signal_id)
+        signal
     })
 }
 
@@ -290,15 +336,30 @@ pub fn computed_always<T: 'static>(mut f: impl FnMut(Option<&T>) -> T + 'static)
     }))
 }
 
+/// A copyable reaction handle confined to its runtime thread.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::effect::Reaction>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::effect::Reaction>();
+/// ```
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Reaction {
     pub(crate) effect_id: EffectId,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl Reaction {
     fn new(effect_id: EffectId) -> Self {
-        Self { effect_id }
+        Self {
+            effect_id,
+            _thread_affinity: PhantomData,
+        }
     }
 
     pub fn track<R>(&self, f: impl FnOnce() -> R) -> R {
@@ -311,6 +372,7 @@ pub fn create_reaction(mut f: impl FnMut() + 'static) -> Reaction {
     #[cfg(debug_assertions)]
     let location = std::panic::Location::caller();
     Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
         let effect_id = EffectInner::new(
             Box::new(move |_value| {
                 f();
@@ -323,6 +385,8 @@ pub fn create_reaction(mut f: impl FnMut() + 'static) -> Reaction {
             location,
         )
         .register(rt);
+        // Reactions are effects too: retain their cleanup in the creating scope.
+        Effect::new(effect_id);
         Reaction::new(effect_id)
     })
 }

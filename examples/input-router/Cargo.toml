@@ -1,0 +1,12 @@
+[package]
+name = "input-router"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lib]
+doctest = false

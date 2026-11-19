@@ -1,4 +1,5 @@
 //! Each panel owns a recognizer. Pinch and rotate need two touch contacts.
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 use macroquad::prelude::{Conf, clear_background, next_frame};
@@ -6,27 +7,30 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     color::Color,
-    node::*,
-    style::{Styleable, StyleableExt, percent, vh, vw},
+    style::{Styleable, StyleableExt, vh, vw},
 };
 
 fn panel(title: &str, value: ReadSignal<String>) -> StackBuilder {
     stack()
-        .flex_basis(responsive::ui(250.))
-        .flex_grow(1.)
-        .min_width(0.)
-        .max_width(percent(100.))
-        .min_height(responsive::ui(180.))
-        .padding((responsive::ui(20.),))
-        .radius(responsive::ui(12.))
-        .background(Color::from_rgba(30, 40, 58, 255))
+        .style(mue_macroquad::style! {
+        flex-basis: {responsive::ui(250.)};
+        flex-grow: {1.};
+        min-width: 0px;
+        max-width: 100%;
+        min-height: {responsive::ui(180.)};
+        padding: {(responsive::ui(20.),)};
+        border-radius: {responsive::ui(12.)};
+        background: {Color::from_rgba(30, 40, 58, 255)};
+        })
         .children((
-            heading(title)
-                .font_size(responsive::font(24.))
-                .line_height(responsive::ui(32.)),
-            text(value)
-                .font_size(responsive::font(18.))
-                .line_height(responsive::ui(28.)),
+            heading(title).style(mue_macroquad::style! {
+            font-size: {responsive::font(24.)};
+            line-height: {responsive::ui(32.)};
+            }),
+            text(value).style(mue_macroquad::style! {
+            font-size: {responsive::font(18.)};
+            line-height: {responsive::ui(28.)};
+            }),
         ))
 }
 fn main() {
@@ -43,7 +47,6 @@ fn main() {
 async fn run() {
     let tap = signal(0);
     let held = signal(0);
-    let hovered = signal(false);
     let wheel = signal(0.);
     let pan = signal(String::from("Drag"));
     let swipe = signal(String::from("Swipe"));
@@ -52,8 +55,10 @@ async fn run() {
     responsive::sync();
     let mut app = App::new(
         scroll_area()
-            .size_full()
-            .font_size(responsive::root_font())
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            })
             .options(ScrollOptions {
                 // Content drags belong to the panels; scroll with the wheel or scrollbar.
                 touch: false,
@@ -61,16 +66,31 @@ async fn run() {
             })
             .children(
                 wrap()
-                    .w_full()
-                    .padding((vw(3.), vh(3.5)))
-                    .column_gap(vw(2.))
-                    .row_gap(vh(3.))
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    padding: {(vw(3.), vh(3.5))};
+                    column-gap: {vw(2.)};
+                    row-gap: {vh(3.)};
+                    })
                     .children((
                         panel("Tap", tap.map(|n| format!("{n}")))
                             .on_activate(move || tap.update(|n| *n += 1)),
                         panel("Long press", held.map(|n| format!("{n}")))
                             .on_long_press(move |_| held.update(|n| *n += 1)),
-                        panel("Hover", hovered.map(|v| format!("{v}"))).use_hovered(hovered),
+                        panel("Hover", *signal(String::new())).with_hovered(|view, hovered| {
+                            view.children((
+                                heading("Hover").style(mue_macroquad::style! {
+                                    font-size: {responsive::font(24.)};
+                                    line-height: {responsive::ui(32.)};
+                                }),
+                                text(hovered.map(|value| format!("{value}"))).style(
+                                    mue_macroquad::style! {
+                                        font-size: {responsive::font(18.)};
+                                        line-height: {responsive::ui(28.)};
+                                    },
+                                ),
+                            ))
+                        }),
                         panel("Wheel", wheel.map(|v| format!("{v:.1}")))
                             .on_wheel_event(move |e| wheel.update(|n| *n += e.delta.y)),
                         panel("Pan", *pan).on_pan(move |e| {

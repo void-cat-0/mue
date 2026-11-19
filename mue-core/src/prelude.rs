@@ -2,11 +2,15 @@ pub use crate::{
     default_props,
     disposable::{Disposable, Owned},
     effect::{
-        Effect, Reaction, computed, computed_always, create_reaction, on_cleanup, watch,
+        Effect, Reaction, computed, computed_always, create_reaction, on_cleanup, untracked, watch,
         watch_effect, watch_immediate,
     },
     prop::{Prop, PropValue},
     runtime::batch,
-    scope::{Scope, create_scope, current_scope},
+    scope::{OwnedScope, Scope, ScopedFuture, current_scope, scope_future},
     signal::{Access, ReadSignal, Signal, signal},
+    task::{
+        AsyncResource, AsyncState, BlockingTask, Elapsed, FallibleTask, JoinSet, Task,
+        next_timer_deadline, sleep, spawn, spawn_blocking, timeout, try_spawn,
+    },
 };

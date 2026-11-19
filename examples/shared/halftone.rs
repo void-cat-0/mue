@@ -1,7 +1,11 @@
 //! A custom GPU material can live inside an ordinary Mue node.
 use macroquad::prelude::*;
 use mue_core::prelude::*;
-use mue_macroquad::{layout::use_layout, node::Node, style::Style};
+use mue_macroquad::{
+    layout::use_layout,
+    node::{Node, NodeContext},
+    style::Style,
+};
 
 // Macroquad queues draws but deletes a material's pipeline as soon as it is dropped.
 // Submit any pending draws before a departing page releases its material.
@@ -37,34 +41,37 @@ void main() {
 }
 "#;
 
-pub fn halftone(style: Style, density: ReadSignal<f32>, moving: ReadSignal<bool>) -> Node {
-    let material = PageMaterial(
-        load_material(
-            ShaderSource::Glsl {
-                vertex: VERTEX,
-                fragment: FRAGMENT,
-            },
-            MaterialParams {
-                uniforms: vec![
-                    UniformDesc::new("time", UniformType::Float1),
-                    UniformDesc::new("density", UniformType::Float1),
-                    UniformDesc::new("origin", UniformType::Float2),
-                ],
-                ..Default::default()
-            },
-        )
-        .expect("halftone material"),
-    );
-    Node::build_with_style(style, move |style| {
+#[mue_components::node]
+pub fn halftone(ctx: NodeContext, density: f32, moving: bool) -> Node {
+    ctx.finish(Style::new(), move |style| {
+        let material = PageMaterial(
+            load_material(
+                ShaderSource::Glsl {
+                    vertex: VERTEX,
+                    fragment: FRAGMENT,
+                },
+                MaterialParams {
+                    uniforms: vec![
+                        UniformDesc::new("time", UniformType::Float1),
+                        UniformDesc::new("density", UniformType::Float1),
+                        UniformDesc::new("origin", UniformType::Float2),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .expect("halftone material"),
+        );
         let rect = use_layout(style).rect;
-        let mut time = 0.;
-        style.on_render.append(move |_| {
+        let time = signal(0.);
+        style.on_update.append(move |dt| {
             if moving.get() {
-                time += get_frame_time();
+                time.update(|time| *time += *dt);
             }
+        });
+        style.on_render.append(move |_| {
             let r = rect.get();
             let material = &material;
-            material.0.set_uniform("time", time);
+            material.0.set_uniform("time", time.get());
             material.0.set_uniform("density", density.get());
             material.0.set_uniform("origin", (r.x, r.y));
             gl_use_material(&material.0);

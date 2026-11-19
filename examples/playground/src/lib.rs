@@ -1,4 +1,6 @@
 //! An interactive exercise of node options. Run with `cargo run -p playground`.
+use mue_components::*;
+mod assets;
 mod controls;
 mod fonts;
 mod graphics;
@@ -10,6 +12,7 @@ mod motion;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 mod scrolling;
+mod styles;
 mod theming;
 mod typography;
 use controls::*;
@@ -17,18 +20,20 @@ use macroquad::prelude::{clear_background, get_time, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    node::*,
-    style::{Styleable, StyleableExt, percent, vh, vw},
+    font::{self, fontdb},
+    style::{Styleable, vh, vw},
 };
 
-const PAGES: [&str; 8] = [
+const PAGES: [&str; 10] = [
     "Layout",
     "Typography",
     "Graphics",
     "Motion",
     "Scrolling",
     "Input",
+    "Map gestures",
     "Theme",
+    "Style declarations",
     "Font licenses",
 ];
 
@@ -40,27 +45,32 @@ fn destination(index: usize) -> Node {
         3 => motion::page(),
         4 => scrolling::page(),
         5 => input::page(),
-        6 => theming::page(),
+        6 => input::map_page(),
+        7 => theming::page(),
+        8 => styles::page(),
         _ => fonts::licenses(),
     };
     scroll_area()
-        .size_full()
-        .background(BG)
-        // Leave touch drags to the recognizers on the input page; its scrollbar still works.
+        .style(mue_macroquad::style! {
+        width: 100%; height: 100%;
+        })
         .options(ScrollOptions {
-            touch: index != 5,
+            touch: true,
             ..Default::default()
         })
         .children(
             container()
-                .max_width(percent(100.))
-                .min_width(0.)
-                .padding((vw(3.), vh(3.)))
-                .gap(vh(2.5))
+                .style(mue_macroquad::style! {
+                max-width: 100%;
+                min-width: 0px;
+                padding: {(vw(3.), vh(3.))};
+                gap: {vh(2.5)};
+                })
                 .children((
-                    heading(PAGES[index])
-                        .font_size(responsive::font(30.))
-                        .line_height(responsive::ui(40.)),
+                    heading(PAGES[index]).style(mue_macroquad::style! {
+                    font-size: {responsive::font(30.)};
+                    line-height: {responsive::ui(40.)};
+                    }),
                     content,
                 )),
         )
@@ -80,86 +90,43 @@ pub extern "C" fn quad_main() {
 }
 
 pub async fn run() {
-    fonts::initialize();
     responsive::sync();
     let selected = signal(0usize);
     let fps = signal(0u32);
-    let (transition, transition_control) = choice(
-        "Transition",
-        vec![
-            ("Slide", PagesTransition::Slide),
-            ("Vertical", PagesTransition::SlideVertical),
-            ("None", PagesTransition::None),
-        ],
-    );
-    let page_view = map_keyed(
-        transition.map(|value| std::rc::Rc::from([value])),
-        |value| *value as u8,
-        move |value| {
-            pages(selected, (0..PAGES.len()).map(destination))
-                .transition(*value)
-                .transition_animation(SPRING)
-                .into_node()
-        },
-    );
-    let mut app = App::new(
-        stack()
-            .size_full()
-            .font_size(responsive::root_font())
-            .gap(0.)
-            .background(BG)
-            .children((
-                wrap()
-                    .w_full()
-                    .flex_none()
-                    .padding((vw(2.), vh(1.5)))
-                    .gap(vw(1.))
-                    .children(
-                        PAGES
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, title)| button(title, move || selected.set(i)))
-                            .collect::<Vec<_>>(),
-                    ),
-                separator(),
-                flexbox()
-                    .w_full()
-                    .flex_1()
-                    .min_width(0.)
-                    .min_height(0.)
-                    .children(page_view),
-                wrap()
-                    .w_full()
-                    .flex_none()
-                    .padding((vw(2.), vh(1.25)))
-                    .gap(vw(1.))
-                    .children((
-                        button("Previous", move || {
-                            selected.update(|index| *index = index.saturating_sub(1));
-                        }),
-                        button("Next", move || {
-                            selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1));
-                        }),
-                        text(selected.map(|index| format!("Page {} / {}", index + 1, PAGES.len())))
-                            .font_size(responsive::font(16.))
-                            .line_height(responsive::ui(24.))
-                            .flex_1(),
-                        text(fps.map(|fps| format!("{fps} FPS")))
-                            .font_size(responsive::font(16.))
-                            .line_height(responsive::ui(24.))
-                            .min_width(0.)
-                            .flex_none()
-                            .text_wrap(false),
-                        transition_control,
-                    )),
-            )),
-    );
+    let zoom = responsive::zoom();
+    // Font parsing is CPU-heavy. Build the database on a blocking thread and
+    // keep a text-free loading screen until it is ready.
+    let mut font_db = Some(AsyncResource::<fontdb::Database, String>::new_blocking(
+        || Ok(fonts::database()),
+    ));
+    let mut loading_app = Some(App::new(loading_screen()));
+    let mut real_app: Option<App> = None;
     let mut frames = 0;
     let mut sampled_at = get_time();
     loop {
         responsive::sync();
-        clear_background(BG.into());
-        app.frame();
+        styles::update_animation_time(get_time() as f32);
+        clear_background(background_color().into());
+        if real_app.is_none() {
+            let ready = font_db.as_ref().and_then(|resource| {
+                match resource.state().get_clone_untracked() {
+                    AsyncState::Ready(Ok(db)) => Some(db),
+                    _ => None,
+                }
+            });
+            if let Some(db) = ready {
+                font::initialize("zh-CN", db)
+                    .expect("initialize bundled fonts before creating text");
+                real_app = Some(App::new(build_ui(selected, fps, zoom)));
+                loading_app = None;
+                font_db = None;
+            }
+        }
+        if let Some(app) = real_app.as_mut() {
+            app.frame();
+        } else if let Some(app) = loading_app.as_mut() {
+            app.frame();
+        }
         next_frame().await;
         frames += 1;
         let now = get_time();
@@ -171,4 +138,125 @@ pub async fn run() {
             sampled_at = now;
         }
     }
+}
+
+fn build_ui(selected: Signal<usize>, fps: Signal<u32>, zoom: ReadSignal<f32>) -> Node {
+    mue_macroquad::inherit::provide_foreground(foreground(), || {
+        Theme::install(&theme());
+        let (transition, transition_control) = choice(
+            "Transition",
+            vec![
+                ("Slide", PagesTransition::Slide),
+                ("Vertical", PagesTransition::SlideVertical),
+                ("None", PagesTransition::None),
+            ],
+        );
+        let page_view = keyed(transition, move |value| {
+            pages(selected, (0..PAGES.len()).map(destination))
+                .page_transition(*value)
+                .transition_curve(SPRING)
+                .into_node()
+        });
+        stack()
+            .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            font-size: {responsive::root_font()};
+            transition: 180ms ease-in-out;
+            gap: 0px;
+            background: {background()};
+            })
+            .children((
+                scroll_area()
+                    .axis(ScrollAxis::Horizontal)
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    height: {responsive::ui(56.)};
+                    flex: none;
+                    background: {panel_brush()};
+                    })
+                    .options(ScrollOptions {
+                        scrollbars: false,
+                        axis: ScrollAxis::Horizontal,
+                        ..Default::default()
+                    })
+                    .content_style(mue_macroquad::style! {
+                        gap: {vw(1.)};
+                        padding-left: {vw(2.)};
+                        padding-right: {vw(2.)};
+                        align-items: center;
+                    })
+                    .children(
+                        PAGES
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, title)| tab_button(title, selected, i))
+                            .collect::<Vec<_>>(),
+                    ),
+                separator(),
+                flexbox()
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: 1;
+                    min-width: 0px;
+                    min-height: 0px;
+                    })
+                    .children(page_view),
+                wrap()
+                    .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: none;
+                    padding: {(vw(2.), vh(1.25))};
+                    gap: {vw(1.)};
+                    })
+                    .children((
+                        demo_button("Previous", move || {
+                            selected.update(|index| *index = index.saturating_sub(1));
+                        }),
+                        demo_button("Next", move || {
+                            selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1));
+                        }),
+                        demo_button(
+                            computed(move |_| format!("Scale {:.0}%", zoom.get() * 100.)),
+                            responsive::cycle_zoom,
+                        ),
+                        text(selected.map(|index| format!("Page {} / {}", index + 1, PAGES.len())))
+                            .style(mue_macroquad::style! {
+                            font-size: {responsive::font(16.)};
+                            line-height: {responsive::ui(24.)};
+                            flex: 1;
+                            }),
+                        text(fps.map(|fps| format!("{fps} FPS"))).style(mue_macroquad::style! {
+                        font-size: {responsive::font(16.)};
+                        line-height: {responsive::ui(24.)};
+                        min-width: 0px;
+                        flex: none;
+                        text-wrap: {false};
+                        }),
+                        transition_control,
+                    )),
+            ))
+            .into_node()
+    })
+    .into_node()
+}
+
+fn loading_screen() -> Node {
+    stack()
+        .style(mue_macroquad::style! {
+        width: 100%; height: 100%;
+        background: {background()};
+        align-items: center;
+        justify-content: center;
+        })
+        .children(
+            flexbox()
+                .style(mue_macroquad::style! {
+                width: 48px;
+                height: 48px;
+                border-radius: 24px;
+                background: {panel_brush()};
+                })
+                .into_node(),
+        )
+        .into_node()
 }

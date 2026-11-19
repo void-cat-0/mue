@@ -1,8 +1,8 @@
-use std::{any::Any, collections::HashSet, marker::PhantomData, ops::Deref};
+use std::{any::Any, collections::HashSet, marker::PhantomData, ops::Deref, rc::Rc};
 
 use slotmap::new_key_type;
 
-use crate::{Disposable, effect::EffectId, runtime::Runtime, scope::CURRENT_SCOPE};
+use crate::{Disposable, effect::EffectId, prop::Prop, runtime::Runtime, scope::CURRENT_SCOPE};
 
 new_key_type! {
     pub(crate) struct SignalId;
@@ -17,6 +17,7 @@ pub(crate) struct SignalInner {
     pub effect: Option<EffectId>,
     pub subscribers: HashSet<EffectId>,
     pub comparator: Option<Comparator>,
+    pub revision: u64,
     #[cfg(debug_assertions)]
     #[allow(dead_code)]
     pub location: &'static std::panic::Location<'static>,
@@ -33,20 +34,44 @@ impl SignalInner {
             effect: None,
             subscribers: HashSet::new(),
             comparator,
+            revision: 0,
             #[cfg(debug_assertions)]
             location,
         }
     }
 
     pub fn register(self, rt: &Runtime) -> SignalId {
+        rt.assert_resource_creation_allowed();
         rt.signals.borrow_mut().insert(self)
     }
 }
 
 /// A copyable read-only handle. Tracked reads subscribe the current effect.
+///
+/// The handle is non-owning and bound to the thread that owns its runtime.
+/// Fallible reads handle disposal of this signal or an unavailable runtime. They
+/// do not make a still-live derived signal with disposed dependencies safe to
+/// recompute: ordinary reads of those dependencies remain lifecycle misuse.
+///
+/// While a clone or write callback is using a signal's value, reentrant accesses
+/// to that value are unavailable: fallible access fails and ordinary access panics.
+/// This does not block accesses to unrelated signals. If a value's `Clone`
+/// disposes its signal, an ordinary clone still returns the snapshot; a
+/// fallible clone returns `None`. Neither restores the disposed signal.
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::signal::ReadSignal<()>>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::signal::ReadSignal<()>>();
+/// ```
 pub struct ReadSignal<T> {
     pub(crate) id: SignalId,
     _marker: PhantomData<T>,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl<T> Clone for ReadSignal<T> {
@@ -58,6 +83,10 @@ impl<T> Clone for ReadSignal<T> {
 impl<T> Copy for ReadSignal<T> {}
 
 /// Read reactive values with or without subscribing to changes.
+///
+/// An untracked read does not subscribe to the accessed value. It does not
+/// suppress other tracked reads made explicitly from user callbacks, including
+/// custom implementations of `Clone`.
 pub trait Access {
     type Value;
 
@@ -96,11 +125,13 @@ impl<T> ReadSignal<T> {
             scope.push_signal(Self {
                 id,
                 _marker: PhantomData,
+                _thread_affinity: PhantomData,
             });
         });
         Self {
             id,
             _marker: PhantomData,
+            _thread_affinity: PhantomData,
         }
     }
 
@@ -108,7 +139,18 @@ impl<T> ReadSignal<T> {
         Self {
             id: Runtime::with(|rt| rt.null_signal),
             _marker: PhantomData,
+            _thread_affinity: PhantomData,
         }
+    }
+
+    /// Notification revision after bringing this signal up to date.
+    /// Does not subscribe; untracked writes do not advance the revision.
+    #[doc(hidden)]
+    pub fn revision_untracked(&self) -> u64 {
+        Runtime::with(|rt| {
+            rt.update_signal_if_necessary(self.id);
+            rt.signal_mut(self.id).revision
+        })
     }
 
     pub fn is_null(&self) -> bool {
@@ -118,10 +160,6 @@ impl<T> ReadSignal<T> {
     /// Whether this handle's owning scope or signal has been disposed.
     pub fn is_disposed(&self) -> bool {
         Runtime::with(|rt| !rt.signals.borrow().contains_key(self.id))
-    }
-
-    fn with_inner_mut<R>(self, rt: &Runtime, f: impl FnOnce(&mut SignalInner) -> R) -> R {
-        f(&mut rt.signal_mut(self.id))
     }
 
     #[track_caller]
@@ -141,6 +179,195 @@ impl<T> ReadSignal<T> {
     }
 }
 
+const UNAVAILABLE_VALUE: &str = "signal value is unavailable (disposed, null, or in use)";
+
+// Temporarily own the value so user code can run without borrowing the signal
+// arena. The empty slot also prevents overlapping access to the same value.
+struct SignalValue<'a> {
+    runtime: &'a Runtime,
+    id: SignalId,
+    value: Option<Value>,
+    comparator: Option<Comparator>,
+}
+
+impl<'a> SignalValue<'a> {
+    fn take(runtime: &'a Runtime, id: SignalId) -> Option<Self> {
+        let (value, comparator) = {
+            let mut signals = runtime.signals.borrow_mut();
+            let signal = signals.get_mut(id)?;
+            (signal.value.take()?, signal.comparator)
+        };
+        Some(Self {
+            runtime,
+            id,
+            value: Some(value),
+            comparator,
+        })
+    }
+
+    fn get<T: 'static>(&self) -> &T {
+        self.value.as_ref().unwrap().downcast_ref().unwrap()
+    }
+
+    fn get_mut<T: 'static>(&mut self) -> &mut T {
+        self.value.as_mut().unwrap().downcast_mut().unwrap()
+    }
+
+    fn set<T: 'static>(mut self, value: T, notify: bool) -> Result<bool, T> {
+        let (rt, id) = (self.runtime, self.id);
+        if !rt.signals.borrow().contains_key(id) {
+            // A set_with callback can dispose the signal before comparison.
+            return Err(value);
+        }
+        let changed = self
+            .comparator
+            .is_none_or(|compare| !compare(self.value.as_deref().unwrap(), &value));
+        let (old, unused) = {
+            let mut signals = rt.signals.borrow_mut();
+            let Some(signal) = signals.get_mut(id).filter(|signal| signal.value.is_none()) else {
+                return Err(value);
+            };
+            // Publish or restore the value before running either destructor.
+            if changed {
+                signal.value = Some(Box::new(value));
+                (self.value.take(), None)
+            } else {
+                signal.value = self.value.take();
+                (None, Some(value))
+            }
+        };
+        drop(old);
+        drop(unused);
+        if changed && notify && rt.signals.borrow().contains_key(id) {
+            rt.on_update(id);
+        }
+        Ok(changed)
+    }
+}
+
+impl Drop for SignalValue<'_> {
+    fn drop(&mut self) {
+        if self.value.is_none() {
+            return;
+        }
+        let mut value = self.value.take();
+        {
+            let mut signals = self.runtime.signals.borrow_mut();
+            if let Some(signal) = signals.get_mut(self.id)
+                && signal.value.is_none()
+            {
+                signal.value = value.take();
+            }
+        }
+        // Disposal or a reentrant replacement must not drop user values while
+        // the arena is borrowed, nor resurrect the original signal/value.
+        drop(value);
+    }
+}
+
+impl<T: 'static> ReadSignal<T> {
+    /// Copy and subscribe, returning None if this signal or runtime is unavailable.
+    ///
+    /// Like [`Self::try_get_clone`], this can still panic if a live derived
+    /// signal's callback reads a disposed dependency.
+    pub fn try_get(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        self.try_read(true, |rt| self.copy_value(rt))
+    }
+
+    /// Clone and subscribe, returning None if this signal or runtime is unavailable.
+    ///
+    /// Derived signals are refreshed before reading and checked again afterwards,
+    /// because recomputation can dispose this signal. A value temporarily taken
+    /// by an in-progress callback, clone, or comparison is also unavailable.
+    /// This does not catch user panics or ordinary lifecycle misuse: a still-live
+    /// derived signal whose callback reads a disposed dependency can still panic.
+    pub fn try_get_clone(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.try_read(true, |rt| self.try_clone_value(rt))
+    }
+
+    /// Copy without subscribing, returning None when the signal/runtime is unavailable.
+    /// See [`Self::try_get_clone`] for derived-signal lifecycle limits.
+    pub fn try_get_untracked(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        self.try_read(false, |rt| self.copy_value(rt))
+    }
+
+    /// Clone without subscribing, returning None when the signal/runtime is unavailable.
+    /// See [`Self::try_get_clone`] for derived-signal lifecycle limits.
+    pub fn try_get_clone_untracked(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.try_read(false, |rt| self.try_clone_value(rt))
+    }
+
+    fn try_read(&self, tracked: bool, read: impl FnOnce(&Runtime) -> Option<T>) -> Option<T> {
+        Runtime::try_with(|rt| {
+            let value = read(rt)?;
+            if tracked {
+                rt.track(self.id);
+            }
+            Some(value)
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn copy_value(&self, rt: &Runtime) -> Option<T>
+    where
+        T: Copy,
+    {
+        // Copy needs neither a custom Clone nor an intermediate empty slot.
+        let signals = rt.signals.borrow();
+        let signal = signals.get(self.id)?;
+        let value = signal.value.as_ref()?;
+        if let Some(producer) = signal.effect {
+            drop(signals);
+            rt.update_effect_if_necessary(producer);
+            let signals = rt.signals.borrow();
+            let value = signals.get(self.id)?.value.as_ref()?;
+            return Some(*value.downcast_ref::<T>().unwrap());
+        }
+        Some(*value.downcast_ref::<T>().unwrap())
+    }
+
+    fn clone_value(&self, rt: &Runtime) -> Option<T>
+    where
+        T: Clone,
+    {
+        let producer = {
+            let signals = rt.signals.borrow();
+            let signal = signals.get(self.id)?;
+            // Do not recursively refresh a computed value that is already in use.
+            signal.value.as_ref()?;
+            signal.effect
+        };
+        if let Some(producer) = producer {
+            rt.update_effect_if_necessary(producer);
+        }
+        let value = SignalValue::take(rt, self.id)?;
+        Some(value.get::<T>().clone())
+    }
+
+    fn try_clone_value(&self, rt: &Runtime) -> Option<T>
+    where
+        T: Clone,
+    {
+        let cloned = self.clone_value(rt)?;
+        // Clone (or dropping the original after disposal) can also run user code.
+        let is_live = rt.signals.borrow().contains_key(self.id);
+        is_live.then_some(cloned)
+    }
+}
+
 impl ReadSignal<bool> {
     /// Choose between two values whenever this boolean changes.
     /// For example, `expanded.select(480., 180.)` supplies a reactive pixel width.
@@ -157,6 +384,19 @@ impl ReadSignal<bool> {
             }
         })
     }
+
+    /// Choose between two properties whenever this boolean changes.
+    ///
+    /// Unlike [`ReadSignal::select`], the branches are properties, so a reactive
+    /// branch keeps updating while it is selected.
+    pub fn pick<T, A, B>(self, when_true: A, when_false: B) -> Prop<T>
+    where
+        T: Clone + PartialEq + 'static,
+        A: Into<Prop<T>>,
+        B: Into<Prop<T>>,
+    {
+        Prop::from(self).pick(when_true, when_false)
+    }
 }
 
 impl<T> Disposable for ReadSignal<T> {
@@ -168,6 +408,23 @@ impl<T> Disposable for ReadSignal<T> {
 impl<T: 'static> Access for ReadSignal<T> {
     type Value = T;
 
+    fn get(&self) -> T
+    where
+        T: Copy,
+    {
+        Runtime::with(|rt| {
+            rt.track(self.id);
+            self.copy_value(rt).expect(UNAVAILABLE_VALUE)
+        })
+    }
+
+    fn get_untracked(&self) -> T
+    where
+        T: Copy,
+    {
+        Runtime::with(|rt| self.copy_value(rt).expect(UNAVAILABLE_VALUE))
+    }
+
     fn track(&self) {
         Runtime::with(|rt| rt.track(self.id));
     }
@@ -176,23 +433,28 @@ impl<T: 'static> Access for ReadSignal<T> {
     where
         T: Clone,
     {
-        Runtime::with(|rt| {
-            rt.update_signal_if_necessary(self.id);
-            self.with_inner_mut(rt, |inner| {
-                inner
-                    .value
-                    .as_ref()
-                    .unwrap()
-                    .downcast_ref::<T>()
-                    .unwrap()
-                    .clone()
-            })
-        })
+        Runtime::with(|rt| self.clone_value(rt).expect(UNAVAILABLE_VALUE))
     }
 }
 
-#[repr(transparent)]
 /// A copyable writable handle whose updates notify subscribed effects.
+///
+/// Update callbacks and comparators may access unrelated signals, but the value
+/// being written is unavailable until the operation publishes or restores it.
+/// They may dispose this signal: disposal prevents publication and notification,
+/// and an update still returns its callback's result. Replaced and unused values
+/// are dropped after the signal's value is available again (if it is still live).
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<mue_core::signal::Signal<()>>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<mue_core::signal::Signal<()>>();
+/// ```
+#[repr(transparent)]
 pub struct Signal<T>(ReadSignal<T>);
 
 impl<T> Clone for Signal<T> {
@@ -228,8 +490,12 @@ impl<T: 'static> Signal<T> {
         ))
     }
 
+    /// Create a signal without a comparator: every set notifies, even for equal values.
+    ///
+    /// Use this for payloads that are not `PartialEq` (handles, `Rc<dyn Trait>`, closures),
+    /// or when an expensive or unreliable comparison is undesirable.
     #[track_caller]
-    pub fn shallow(value: T) -> Self {
+    pub fn new_always(value: T) -> Self {
         create_signal(SignalInner::new(
             Some(Box::new(value)),
             None,
@@ -248,28 +514,22 @@ impl<T: 'static> Signal<T> {
         });
     }
 
+    /// Replace the value and notify if changed. Returns false if equal or if
+    /// the callback or comparator disposed the signal before publication.
     pub fn set_with(self, f: impl FnOnce(&T) -> T) -> bool {
-        let updated = self.set_with_untracked(f);
-        if updated {
-            Runtime::with(|rt| rt.on_update(self.id));
-        }
-        updated
+        self.set_with_inner(f, true)
     }
 
+    /// Like [`Self::set_with`], without notifying subscribers.
     pub fn set_with_untracked(self, f: impl FnOnce(&T) -> T) -> bool {
+        self.set_with_inner(f, false)
+    }
+
+    fn set_with_inner(self, f: impl FnOnce(&T) -> T, notify: bool) -> bool {
         Runtime::with(|rt| {
-            self.with_inner_mut(rt, |inner| {
-                let new_value = f(inner.value.as_ref().unwrap().downcast_ref::<T>().unwrap());
-                if inner
-                    .comparator
-                    .is_none_or(|cmp| !cmp(inner.value.as_ref().unwrap().as_ref(), &new_value))
-                {
-                    inner.value = Some(Box::new(new_value));
-                    true
-                } else {
-                    false
-                }
-            })
+            let current = SignalValue::take(rt, self.id).expect(UNAVAILABLE_VALUE);
+            let value = f(current.get::<T>());
+            current.set(value, notify).unwrap_or(false)
         })
     }
 
@@ -277,21 +537,46 @@ impl<T: 'static> Signal<T> {
         self.set_with(|_| value);
     }
 
+    /// Set and notify, returning the supplied value if the signal/runtime is unavailable.
+    ///
+    /// The comparator behaves as in set: equal values retain the old value without
+    /// notifying, and signals without a comparator always notify. A value temporarily
+    /// taken by an in-progress callback, clone, or comparison is unavailable.
+    /// User panics are not caught. Once accepted, dropping the old or unused value
+    /// may dispose this signal; the write still returns Ok(()).
+    pub fn try_set(self, value: T) -> Result<(), T> {
+        let mut value = Some(value);
+        Runtime::try_with(|rt| {
+            let value = value.take().unwrap();
+            let Some(current) = SignalValue::take(rt, self.id) else {
+                return Err(value);
+            };
+            current.set(value, true).map(|_| ())
+        })
+        .unwrap_or_else(|_| Err(value.take().unwrap()))
+    }
+
     pub fn set_untracked(self, value: T) {
         self.set_with_untracked(|_| value);
     }
 
     pub fn update<R>(self, f: impl FnOnce(&mut T) -> R) -> R {
-        let result = self.update_untracked(f);
-        Runtime::with(|rt| rt.on_update(self.id));
-        result
+        self.update_inner(f, true)
     }
 
     pub fn update_untracked<R>(self, f: impl FnOnce(&mut T) -> R) -> R {
+        self.update_inner(f, false)
+    }
+
+    fn update_inner<R>(self, f: impl FnOnce(&mut T) -> R, notify: bool) -> R {
         Runtime::with(|rt| {
-            self.with_inner_mut(rt, |inner| {
-                f(inner.value.as_mut().unwrap().downcast_mut::<T>().unwrap())
-            })
+            let mut current = SignalValue::take(rt, self.id).expect(UNAVAILABLE_VALUE);
+            let result = f(current.get_mut::<T>());
+            drop(current);
+            if notify && rt.signals.borrow().contains_key(self.id) {
+                rt.on_update(self.id);
+            }
+            result
         })
     }
 }
@@ -311,7 +596,10 @@ impl<T> Disposable for Signal<T> {
 }
 
 fn create_signal<T: 'static>(inner: SignalInner) -> Signal<T> {
-    let id = Runtime::with(|rt| inner.register(rt));
+    let id = Runtime::with(|rt| {
+        rt.assert_resource_creation_allowed();
+        inner.register(rt)
+    });
     Signal(ReadSignal::new(id))
 }
 
@@ -323,9 +611,278 @@ pub fn signal<T: PartialEq + 'static>(value: T) -> Signal<T> {
 
 #[cfg(test)]
 mod test {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     use crate::{prelude::*, runtime::Runtime};
+
+    use super::ReadSignal;
+
+    struct DropProbe {
+        value: u32,
+        on_drop: Option<Rc<dyn Fn()>>,
+    }
+
+    impl Clone for DropProbe {
+        fn clone(&self) -> Self {
+            Self {
+                value: self.value,
+                on_drop: None,
+            }
+        }
+    }
+
+    impl PartialEq for DropProbe {
+        fn eq(&self, other: &Self) -> bool {
+            self.value == other.value
+        }
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            if let Some(on_drop) = &self.on_drop {
+                on_drop();
+            }
+        }
+    }
+
+    #[test]
+    fn write_callbacks_can_use_unrelated_signals() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let value = signal(1u32);
+            let other = signal(2u32);
+            let notified = Rc::new(RefCell::new(Vec::new()));
+            watch(*value, {
+                let notified = notified.clone();
+                move |read| notified.borrow_mut().push(read.get())
+            });
+            let revision = value.revision_untracked();
+
+            let result = value.update(|current| {
+                assert_eq!(value.try_get(), None);
+                assert_eq!(value.try_set(99), Err(99));
+                other.set(3);
+                *current += other.get();
+                *current
+            });
+            assert_eq!(result, 4);
+            assert!(value.set_with(|current| {
+                other.update(|n| *n += 1);
+                *current + other.get()
+            }));
+            assert!(!value.set_with(|current| {
+                other.set_untracked(5);
+                *current
+            }));
+            assert!(value.set_with_untracked(|current| *current + other.get()));
+            value.update_untracked(|current| *current += 1);
+
+            assert_eq!(value.get(), 14);
+            assert_eq!(&*notified.borrow(), &[4, 8]);
+            assert_eq!(value.revision_untracked(), revision.wrapping_add(2));
+        });
+    }
+
+    #[test]
+    fn ordinary_set_compares_without_borrowing_the_arena() {
+        struct Compared(u32, Signal<u32>);
+
+        impl PartialEq for Compared {
+            fn eq(&self, other: &Self) -> bool {
+                self.1.update_untracked(|calls| *calls += 1);
+                self.0 == other.0
+            }
+        }
+
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let calls = signal(0);
+            let value = signal(Compared(1, calls));
+            assert!(!value.set_with(|_| Compared(1, calls)));
+            value.set(Compared(2, calls));
+            assert_eq!(calls.get(), 2);
+            value.update_untracked(|v| assert_eq!(v.0, 2));
+        });
+    }
+
+    #[test]
+    fn clone_can_reenter_and_copy_reads_do_not_call_clone() {
+        #[derive(Copy)]
+        struct CloneProbe(Signal<u32>);
+
+        #[allow(clippy::non_canonical_clone_impl)]
+        impl Clone for CloneProbe {
+            fn clone(&self) -> Self {
+                self.0.update_untracked(|calls| *calls += 1);
+                *self
+            }
+        }
+
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let clones = signal(0);
+            let value = Signal::new_always(CloneProbe(clones));
+            let prop = crate::prop::Prop::Dynamic(*value);
+            let _ = value.get();
+            let _ = prop.get_untracked();
+            assert!(value.try_get().is_some());
+            assert_eq!(clones.get(), 0);
+
+            watch_effect(move || {
+                let _ = value.get_clone();
+            });
+            watch_effect(move || {
+                let _ = value.get_clone_untracked();
+            });
+            assert_eq!(clones.get(), 2);
+            value.set(CloneProbe(clones));
+            assert_eq!(clones.get(), 3);
+        });
+    }
+
+    #[test]
+    fn ordinary_set_publishes_before_dropping_old_or_unused_values() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let value = signal(DropProbe {
+                value: 1,
+                on_drop: None,
+            });
+            value.update_untracked(|current| {
+                current.on_drop = Some(Rc::new(move || {
+                    assert_eq!(value.get_clone().value, 2);
+                    value.set(DropProbe {
+                        value: 3,
+                        on_drop: None,
+                    });
+                }));
+            });
+            value.set(DropProbe {
+                value: 2,
+                on_drop: None,
+            });
+            assert_eq!(value.get_clone().value, 3);
+            assert!(!value.set_with(|_| DropProbe {
+                value: 3,
+                on_drop: Some(Rc::new(move || {
+                    assert_eq!(value.get_clone().value, 3);
+                    value.dispose();
+                })),
+            }));
+            assert!(value.is_disposed());
+        });
+    }
+
+    #[test]
+    fn disposing_during_write_does_not_restore_or_notify() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let updated = signal(7u32);
+            watch(*updated, |_| panic!("notified disposed signal"));
+            assert_eq!(
+                updated.update(|current| {
+                    updated.dispose();
+                    *current + 1
+                }),
+                8
+            );
+            assert!(updated.is_disposed());
+
+            let replaced = signal(7u32);
+            watch(*replaced, |_| panic!("notified disposed signal"));
+            assert!(!replaced.set_with(|current| {
+                replaced.dispose();
+                *current + 1
+            }));
+            assert!(replaced.is_disposed());
+        });
+    }
+
+    #[test]
+    fn disposing_during_clone_does_not_restore_the_signal() {
+        struct CloneProbe(Option<ReadSignal<Self>>);
+
+        impl Clone for CloneProbe {
+            fn clone(&self) -> Self {
+                if let Some(read) = self.0 {
+                    assert!(read.try_get_clone().is_none());
+                    read.dispose();
+                }
+                Self(None)
+            }
+        }
+
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let make_probe = || {
+                let value = Signal::new_always(CloneProbe(None));
+                value.update_untracked(|probe| probe.0 = Some(*value));
+                value
+            };
+            let ordinary = make_probe();
+            assert!(ordinary.get_clone().0.is_none());
+            assert!(ordinary.is_disposed());
+            let fallible = make_probe();
+            assert!(fallible.try_get_clone().is_none());
+            assert!(fallible.is_disposed());
+        });
+    }
+
+    #[test]
+    fn new_always_notifies_even_when_the_value_is_equal() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let value = Signal::new_always(1u32);
+            let read = *value;
+            let runs = Rc::new(RefCell::new(0));
+            watch_effect({
+                let runs = runs.clone();
+                move || {
+                    read.get();
+                    *runs.borrow_mut() += 1;
+                }
+            });
+            assert_eq!(*runs.borrow(), 1);
+            value.set(1);
+            assert_eq!(*runs.borrow(), 2);
+        });
+    }
+
+    #[test]
+    fn notification_revisions_distinguish_equal_silent_and_computed_updates() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let initial = source.revision_untracked();
+            source.set(0);
+            assert_eq!(source.revision_untracked(), initial);
+            source.set_untracked(1);
+            assert_eq!(source.revision_untracked(), initial);
+            source.force_trigger();
+            assert_eq!(source.revision_untracked(), initial.wrapping_add(1));
+            let parity = source.map(|n| n % 2);
+            let revision = parity.revision_untracked();
+            batch(|| {
+                source.set(3);
+                assert_eq!(parity.revision_untracked(), revision);
+                source.set(4);
+                assert_ne!(parity.revision_untracked(), revision);
+            });
+            let runs = Rc::new(RefCell::new(0));
+            watch_effect({
+                let runs = runs.clone();
+                move || {
+                    source.revision_untracked();
+                    *runs.borrow_mut() += 1;
+                }
+            });
+            source.set(5);
+            assert_eq!(*runs.borrow(), 1);
+        });
+    }
 
     #[test]
     fn test_signal_basic() {
@@ -418,6 +975,184 @@ mod test {
             let signal = signals.get(count.id).unwrap();
             assert!(signal.subscribers.is_empty());
         });
+    }
+
+    #[test]
+    fn fallible_access_returns_none_for_disposed_handles_and_stale_slot_reuse() {
+        let owner = OwnedScope::new();
+        let (read, id) = owner.run(|| {
+            let value = signal(21);
+            (*value, value.id)
+        });
+        owner.dispose();
+        assert_eq!(read.try_get(), None);
+        assert_eq!(read.try_get_untracked(), None);
+        assert_eq!(read.try_get_clone(), None);
+        assert_eq!(read.try_get_clone_untracked(), None);
+
+        let replacement_owner = OwnedScope::new();
+        replacement_owner.run(|| {
+            let replacement = signal(99);
+            use slotmap::Key;
+            assert_ne!(replacement.id, id);
+            assert_eq!(
+                replacement.id.data().as_ffi() as u32,
+                id.data().as_ffi() as u32
+            );
+            let runs = Rc::new(Cell::new(0));
+            let watch_runs = runs.clone();
+            watch_effect(move || {
+                assert_eq!(read.try_get(), None);
+                watch_runs.set(watch_runs.get() + 1);
+            });
+            replacement.set(100);
+            assert_eq!(runs.get(), 1);
+            assert_eq!(read.try_get(), None);
+            assert_eq!(replacement.try_get(), Some(100));
+        });
+    }
+
+    #[test]
+    fn fallible_reads_track_only_after_success_and_refresh_derived_signals() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(1);
+            let derived = source.map(|value| value + 1);
+            let reads = Rc::new(RefCell::new(0));
+            let runs = reads.clone();
+            watch_effect(move || {
+                assert!(derived.try_get().is_some());
+                *runs.borrow_mut() += 1;
+            });
+            assert_eq!(*reads.borrow(), 1);
+            source.set(4);
+            assert_eq!(*reads.borrow(), 2);
+            assert_eq!(derived.try_get_untracked(), Some(5));
+            assert_eq!(*reads.borrow(), 2);
+            batch(|| {
+                source.set(9);
+                assert_eq!(derived.try_get_clone_untracked(), Some(10));
+            });
+            assert_eq!(*reads.borrow(), 3);
+
+            let untracked_source = signal(String::from("first"));
+            let untracked_runs = Rc::new(Cell::new(0));
+            let runs = untracked_runs.clone();
+            watch_effect(move || {
+                assert!(untracked_source.try_get_clone_untracked().is_some());
+                runs.set(runs.get() + 1);
+            });
+            untracked_source.set(String::from("second"));
+            assert_eq!(untracked_runs.get(), 1);
+        });
+    }
+
+    #[test]
+    fn fallible_reads_return_none_when_recomputation_disposes_derived_signal() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let source = signal(0);
+            let derived_handle = Rc::new(Cell::new(None::<ReadSignal<i32>>));
+            let callback_handle = derived_handle.clone();
+            let derived = crate::effect::computed(move |_| {
+                if let Some(handle) = callback_handle.get() {
+                    handle.dispose();
+                }
+                source.get()
+            });
+            derived_handle.set(Some(derived));
+            batch(|| {
+                source.set(1);
+                assert_eq!(derived.try_get(), None);
+            });
+        });
+    }
+
+    #[test]
+    fn try_set_preserves_equality_and_notifies_once_for_changes() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let value = signal(1);
+            let runs = Rc::new(RefCell::new(0));
+            let watch_runs = runs.clone();
+            watch_effect(move || {
+                value.get();
+                *watch_runs.borrow_mut() += 1;
+            });
+            assert_eq!(value.try_set(1), Ok(()));
+            assert_eq!(*runs.borrow(), 1);
+            assert_eq!(value.try_set(2), Ok(()));
+            assert_eq!(*runs.borrow(), 2);
+            assert_eq!(value.get_untracked(), 2);
+
+            let always = Signal::new_always(3);
+            let always_runs = Rc::new(RefCell::new(0));
+            let watch_runs = always_runs.clone();
+            watch_effect(move || {
+                always.get();
+                *watch_runs.borrow_mut() += 1;
+            });
+            assert_eq!(always.try_set(3), Ok(()));
+            assert_eq!(*always_runs.borrow(), 2);
+        });
+    }
+
+    #[test]
+    fn try_set_drops_replaced_and_unused_values_without_arena_borrows() {
+        let owner = OwnedScope::new();
+        owner.run(|| {
+            let handle = Rc::new(Cell::new(None::<Signal<DropProbe>>));
+            let hook_handle = handle.clone();
+            let value = Signal::new(DropProbe {
+                value: 1,
+                on_drop: Some(Rc::new(move || {
+                    if let Some(value) = hook_handle.get() {
+                        let _ = value.try_set(DropProbe {
+                            value: 3,
+                            on_drop: None,
+                        });
+                    }
+                })),
+            });
+            handle.set(Some(value));
+            assert!(
+                value
+                    .try_set(DropProbe {
+                        value: 2,
+                        on_drop: None,
+                    })
+                    .is_ok()
+            );
+            assert_eq!(value.try_get_clone().map(|value| value.value), Some(3));
+
+            let reentered = Rc::new(Cell::new(false));
+            let reentered_by_drop = reentered.clone();
+            let unused = Signal::new(DropProbe {
+                value: 4,
+                on_drop: None,
+            });
+            let read = *unused;
+            assert!(
+                unused
+                    .try_set(DropProbe {
+                        value: 4,
+                        on_drop: Some(Rc::new(move || {
+                            reentered_by_drop.set(read.try_get_clone().is_some());
+                        })),
+                    })
+                    .is_ok()
+            );
+            assert!(reentered.get());
+            assert_eq!(unused.try_get_clone().map(|value| value.value), Some(4));
+        });
+    }
+
+    #[test]
+    fn try_set_returns_value_when_disposed() {
+        let owner = OwnedScope::new();
+        let value = owner.run(|| signal(1));
+        owner.dispose();
+        assert_eq!(value.try_set(7), Err(7));
     }
 
     #[test]

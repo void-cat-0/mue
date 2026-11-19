@@ -1,4 +1,5 @@
 //! Layout and typography gallery. Run with `cargo run -p nodes`.
+use mue_components::*;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 
@@ -8,7 +9,6 @@ use mue_macroquad::{
     App,
     color::Color,
     math::Vector,
-    node::*,
     style::{Size, Style, Styleable, StyleableExt},
 };
 
@@ -40,58 +40,150 @@ async fn run() {
         items,
         |index| *index,
         |index| {
-            text(format!("Retained item {}", index + 1))
-                .font_size(responsive::font(18.))
-                .line_height(responsive::ui(28.))
+            text(format!("Retained item {}", index + 1)).style(mue_macroquad::style! {
+            font-size: {responsive::font(18.)};
+            line-height: {responsive::ui(28.)};
+            })
         },
     );
-    let mut app = App::new(stack().size_full().font_size(responsive::root_font()).padding((Size::vw(3.),)).background(PAPER).gap(responsive::ui(18.)).children((
-        wrap().w_full().flex_none().children((
-            heading("Layout + type").font_size(responsive::font(30.)).line_height(responsive::ui(40.))
-                .min_width(0.).flex_basis(Size::percent(60.)).flex_1(),
-            link("Back to top").min_height(responsive::ui(44.)).font_size(responsive::font(16.)).line_height(responsive::ui(24.)).on_activate(move || offset.set(Vector::ZERO)),
+    let mut app = App::new(stack().style(mue_macroquad::style! {
+width: 100%; height: 100%;
+font-size: {responsive::root_font()};
+padding: {(Size::vw(3.),)};
+background: {PAPER};
+gap: {responsive::ui(18.)};
+}).children((
+        wrap().style(mue_macroquad::style! {
+width: 100%;
+flex: none;
+}).children((
+            heading("Layout + type").style(mue_macroquad::style! {
+font-size: {responsive::font(30.)};
+line-height: {responsive::ui(40.)};
+min-width: 0px;
+flex-basis: 60%;
+flex: 1;
+}),
+            link("Back to top").style(mue_macroquad::style! {
+min-height: {responsive::ui(44.)};
+font-size: {responsive::font(16.)};
+line-height: {responsive::ui(24.)};
+}).on_activate(move || offset.set(Vector::ZERO)),
         )),
-        scroll_area().flex_1().w_full().offset(offset)
+        scroll_area().style(mue_macroquad::style! {
+flex: 1;
+width: 100%;
+}).offset(offset)
             .options(ScrollOptions { mouse_drag: true, ..Default::default() })
-            .content_style(Style::new().gap(responsive::ui(24.)).padding((Size::vw(2.),)))
+            .content_style(Style::new().style(mue_macroquad::style! {
+gap: {responsive::ui(24.)};
+padding: {(Size::vw(2.),)};
+}))
             .children((
-                container().max_width(responsive::ui(760.)).min_width(0.).padding((0.,)).gap(responsive::ui(18.)).children((
+                container().style(mue_macroquad::style! {
+max-width: {responsive::ui(760.)};
+min-width: 0px;
+padding: {(0.,)};
+gap: {responsive::ui(18.)};
+}).children((
                     text("Wheel, drag the content, or drag a scrollbar. Child links still respond to taps.")
-                        .font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
-                    wrap().gap(responsive::ui(12.)).children((code("flexbox").line_height(responsive::ui(44.)), code("stack").line_height(responsive::ui(44.)), code("wrap").line_height(responsive::ui(44.)), code("container").line_height(responsive::ui(44.)))),
-                    aspect_ratio().ratio(3.).w_full().flex_none().background(PANEL).radius(responsive::ui(8.)).children((
-                        center().size_full().children(em("A frame with a 3:1 ratio").font_size(responsive::font(20.)).line_height(responsive::ui(28.))),
+                        .style(mue_macroquad::style! {
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+}),
+                    wrap().style(mue_macroquad::style! { gap: {responsive::ui(12.)}; }).children((code("flexbox").style(mue_macroquad::style! { line-height: {responsive::ui(44.)}; }), code("stack").style(mue_macroquad::style! { line-height: {responsive::ui(44.)}; }), code("wrap").style(mue_macroquad::style! { line-height: {responsive::ui(44.)}; }), code("container").style(mue_macroquad::style! { line-height: {responsive::ui(44.)}; }))),
+                    aspect_ratio().ratio(3.).style(mue_macroquad::style! {
+width: 100%;
+flex: none;
+background: {PANEL};
+border-radius: {responsive::ui(8.)};
+}).children((
+                        center().style(mue_macroquad::style! { width: 100%; height: 100%; }).children(em("A frame with a 3:1 ratio").style(mue_macroquad::style! {
+font-size: {responsive::font(20.)};
+line-height: {responsive::ui(28.)};
+})),
                         float().placement(FloatPlacement::TopEnd).children(
-                            center().width(responsive::ui(40.)).height(responsive::ui(40.)).radius(responsive::ui(20.)).background(ACCENT)
-                                .children(text("+").color(PAPER).font_size(responsive::font(24.)).line_height(responsive::ui(24.))),
+                            center().style(mue_macroquad::style! {
+width: {responsive::ui(40.)};
+height: {responsive::ui(40.)};
+border-radius: {responsive::ui(20.)};
+background: {ACCENT};
+})
+                                .children(text("+").style(mue_macroquad::style! {
+color: {PAPER};
+font-size: {responsive::font(24.)};
+line-height: {responsive::ui(24.)};
+})),
                         ),
                     )),
                     separator(),
-                    blockquote("Small pieces, composed with the same style API.").font_size(responsive::font(22.)).line_height(responsive::ui(32.)),
-                    link_overlay().min_height(responsive::ui(44.)).background(PANEL).padding((Size::vw(2.),)).radius(responsive::ui(8.)).gap(responsive::ui(8.))
+                    blockquote("Small pieces, composed with the same style API.").style(mue_macroquad::style! {
+font-size: {responsive::font(22.)};
+line-height: {responsive::ui(32.)};
+}),
+                    link_overlay().style(mue_macroquad::style! {
+min-height: {responsive::ui(44.)};
+background: {PANEL};
+padding: {(Size::vw(2.),)};
+border-radius: {responsive::ui(8.)};
+gap: {responsive::ui(8.)};
+})
                         .on_activate(move || taps.update(|count| *count += 1))
                         .children((
-                            heading("An actionable card").level(HeadingLevel::H3).font_size(responsive::font(22.)).line_height(responsive::ui(30.)),
-                            text(taps.map(|count| format!("Card activated {count} times"))).font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
-                            link("Toggle list length").min_height(responsive::ui(44.)).font_size(responsive::font(18.)).line_height(responsive::ui(28.)).toggle_on_tap(expanded),
+                            heading("An actionable card").level(HeadingLevel::H3).style(mue_macroquad::style! {
+font-size: {responsive::font(22.)};
+line-height: {responsive::ui(30.)};
+}),
+                            text(taps.map(|count| format!("Card activated {count} times"))).style(mue_macroquad::style! {
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+}),
+                            link("Toggle list length").style(mue_macroquad::style! {
+min-height: {responsive::ui(44.)};
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+}).toggle_on_tap(expanded),
                         )),
-                    list().marker(ListMarker::Ordered(1)).font_size(responsive::font(18.)).line_height(responsive::ui(28.)).children(rows),
-                    scroll_area().axis(ScrollAxis::Horizontal).w_full()
-                        .height(Size::vh(17.)).max_height(responsive::ui(130.)).flex_none().background(PANEL)
-                        .children(code_block("let view = stack().gap(16.).children((heading(\"Hello\"), text(\"Compose your interface with familiar nodes.\")));" )
-                            .font_size(responsive::font(18.)).line_height(responsive::ui(28.)).flex_none()),
+                    list().marker(ListMarker::Ordered(1)).style(mue_macroquad::style! {
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+}).children(rows),
+                    scroll_area().axis(ScrollAxis::Horizontal).style(mue_macroquad::style! {
+width: 100%;
+height: {Size::vh(17.)};
+max-height: {responsive::ui(130.)};
+flex: none;
+background: {PANEL};
+})
+                        .children(code_block("let view = stack().style(mue_macroquad::style! { gap: {16.}; }).children((heading(\"Hello\"), text(\"Compose your interface with familiar nodes.\")));" )
+                            .style(mue_macroquad::style! {
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+flex: none;
+})),
                     document(Document::blocks([
                         Document::heading("Rich documents", HeadingLevel::H2),
                         Document::rich([Span::new("Keep styled runs together: "), Span::new("emphasis").italic(),
                             Span::new(", "), Span::new("code").monospace(), Span::new(" and normal text.")]),
                         Document::blockquote("Documents share typography conventions with the standalone nodes."),
-                    ])).font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
+                    ])).style(mue_macroquad::style! {
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+}),
                     markdown("## Markdown still works\n\n- Existing APIs are preserved\n- Paragraphs wrap naturally\n\n**End of gallery.**")
-                        .font_size(responsive::font(18.)).line_height(responsive::ui(28.)),
+                        .style(mue_macroquad::style! {
+font-size: {responsive::font(18.)};
+line-height: {responsive::ui(28.)};
+}),
                 )),
             )),
         text(offset.map(|value| format!("Scroll offset: {:.0}, {:.0}", value.x, value.y)))
-            .font_size(responsive::font(14.)).line_height(responsive::ui(20.)).color(ACCENT).flex_none(),
+            .style(mue_macroquad::style! {
+font-size: {responsive::font(14.)};
+line-height: {responsive::ui(20.)};
+color: {ACCENT};
+flex: none;
+}),
     )));
     loop {
         responsive::sync();
