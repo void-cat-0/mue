@@ -11,7 +11,7 @@ Add `mue` to your application’s dependencies using the GitHub repository.
 mue = { git = "https://github.com/void-cat-0/mue", branch = "main" }
 ```
 
-Import `mue::{App, prelude::*}` to build UI. Use `mue::macroquad` for the host window and frame loop. See the [getting-started guide](docs/getting-started.md) for a complete example and Git dependencies.
+Import `mue::{App, prelude::*}` to build UI. Use `mue::macroquad` for the host window and frame loop. See the [getting-started guide](docs/learn/first-step.md) for a complete example and Git dependencies.
 
 ## Crates
 
@@ -34,17 +34,11 @@ cargo doc -p mue --all-features --open
 
 The `mue::guide` module collects the application guides in Rustdoc. The same guides are available here on GitHub.
 
-- [Getting started](docs/getting-started.md)
-- [Components and custom nodes](docs/components.md)
-- [Reusable component declarations](docs/factories.md)
-- [Styles and units](docs/style.md)
-- [Property transitions](docs/transitions.md)
-- [Scenes and input](docs/scenes.md)
-- [Scene transitions](docs/scene-transitions.md)
-- [Application tokens](docs/themes.md)
-- [Foreground tasks](docs/tasks.md)
-- [Fluent localization](docs/i18n.md)
-- [Examples](docs/examples.md)
+| Section | Contents |
+| --- | --- |
+| [Learn](docs/learn/index.md) | Nine chapters in order, from the first window to localization. |
+| [Reference](docs/reference/index.md) | API contracts, accepted syntax, and workspace examples. |
+| [Example app](docs/example-app.md) | Build a release checklist with multiple screens and file saving. |
 
 ## Examples
 

@@ -4,7 +4,7 @@
 //! Use [`renderer`] for the full renderer API and [`macroquad`] for the host
 //! window and frame loop. Enable the `i18n` Cargo feature for Fluent localization.
 //!
-//! Start with the [Getting started guide](guide::getting_started) or browse all
+//! Start with the [your first window](guide::learn::first_window) or browse all
 //! [application guides](guide). The project is hosted on [GitHub](https://github.com/void-cat-0/mue).
 //!
 //! ```no_run

@@ -24,8 +24,10 @@ Chart events replay at frame start; App preplans the complete UI pointer/hover/w
 
 The portal collector and UI PointerManager use [mue input cursors][input-api], sharing one legacy macroquad input source: `InputSubscriber::new()`, then `read()`, handle `InputBatch::is_interrupted()`, and `repeat(&mut handler)`. No consumer queue is allocated; unread events expire each frame, even with no App. Use cursors in the main application future and synchronous callbacks, before `next_frame`, rather than automatic macroquad coroutines. On a missed frame portal clears its buffered/held state and cancels chart pointers; normal game pause still retains owner/Hold semantics. `App::frame_paused()` discards UI input and cancels capture/gestures before ticking tasks. The [Scene runtime][scenes-guide] documents App scheduling; the portal example demonstrates an external renderer without Scene management.
 
-[scene-transitions-guide]: scene-transitions.md
-[i18n-guide]: i18n.md
-[themes-guide]: themes.md
-[scenes-guide]: scenes.md
+
 [input-api]: https://github.com/void-cat-0/mue/blob/main/mue-macroquad/src/input.rs
+
+[themes-guide]: ../learn/themes.md
+[scenes-guide]: ../learn/scenes.md
+[scene-transitions-guide]: ../learn/scenes.md#scene-transitions
+[i18n-guide]: ../learn/i18n.md
