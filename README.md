@@ -2,10 +2,22 @@
 
 mue is a retained, reactive UI toolkit for [Macroquad](https://macroquad.rs), written in Rust. It combines typed Rust builders with Taffy layout and cosmic-text shaping.
 
+## Getting started
+
+Add `mue` to your application’s dependencies using the GitHub repository.
+
+```toml
+[dependencies]
+mue = { git = "https://github.com/void-cat-0/mue", branch = "main" }
+```
+
+Import `mue::{App, prelude::*}` to build UI. Use `mue::macroquad` for the host window and frame loop. See the [getting-started guide](docs/getting-started.md) for a complete example and Git dependencies.
+
 ## Crates
 
 | Crate | Purpose |
 | --- | --- |
+| `mue` | Application entry point for the renderer, reactive core, components, and authoring macros. Enable `i18n` for Fluent localization. |
 | `mue-core` | Renderer-independent signals, effects, scopes, properties, and foreground tasks. |
 | `mue-macroquad` | Macroquad nodes, styles, input, rendering, App, and Scene runtime. |
 | `mue-components` | Layout, typography, graphics, and optional application token components. |
@@ -14,17 +26,19 @@ mue is a retained, reactive UI toolkit for [Macroquad](https://macroquad.rs), wr
 
 ## Documentation
 
-Build the public API documentation for the workspace crates:
+Build the public API documentation starting at the `mue` crate.
 
 ```sh
-cargo doc --workspace --no-deps --open
+cargo doc -p mue --all-features --open
 ```
 
-The crate and module pages document the public API, contracts, limitations, and examples. The guides cover workflows that span several APIs:
+The `mue::guide` module collects the application guides in Rustdoc. The same guides are available here on GitHub.
 
 - [Getting started](docs/getting-started.md)
 - [Components and custom nodes](docs/components.md)
+- [Reusable component declarations](docs/factories.md)
 - [Styles and units](docs/style.md)
+- [Property transitions](docs/transitions.md)
 - [Scenes and input](docs/scenes.md)
 - [Scene transitions](docs/scene-transitions.md)
 - [Application tokens](docs/themes.md)

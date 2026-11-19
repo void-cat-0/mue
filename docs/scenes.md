@@ -2,11 +2,10 @@
 
 `App::with_scene(scene)` starts a retained Scene stack with one active top. A Scene retains its Node trees, gameplay state and resources, submits layout roots, and chooses the order of custom drawing and UI. Only the top receives Scene events and participates in update/layout/render and Node updates; covered instances remain owned but are not automatically drawn behind it. `App::new(root)` remains the Node-only convenience entry point and uses the same scheduler.
 
-```rust
-use mue_macroquad::{
-    App, CallbackResult, Scene, SceneFrame, SceneRender, SceneRoot,
-    node::{Node, IntoNode, flexbox},
-    style::{Styleable, StyleableExt},
+```rust,no_run
+use mue::{
+    App, Scene, prelude::*,
+    renderer::{CallbackResult, SceneFrame, SceneRender, SceneRoot},
 };
 
 struct Menu { ui: Node }
@@ -30,13 +29,13 @@ let mut app = App::with_scene(Menu { ui: flexbox().size_full().into_node() });
 // In the host loop: app.try_frame()?; macroquad::window::next_frame().await;
 ```
 
-See the [scenes example](../examples/scenes/README.md) for a runnable gameplay/HUD/pause layer, push/pop return values and retained-state round trips.
+See the [scenes example](https://github.com/void-cat-0/mue/blob/main/examples/scenes/README.md) for a runnable gameplay/HUD/pause layer, push/pop return values and retained-state round trips.
 
 ## Scene interface
 
 A Scene has four entry points. `event` responds to notifications; `update` advances ordinary frame-driven business; `layout` submits UI roots; `render` organizes drawing. Notifications keep their own timing instead of being delayed until `update`.
 
-```rust
+```text
 fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()>;
 fn update(&mut self, ctx: &mut SceneContext<'_>) -> CallbackResult<()>;
 fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()>;
@@ -59,7 +58,7 @@ The Scene submits roots through `layout`; App prepares all geometry, snapshots a
 
 Roots must be independent. Duplicate/shared nodes, ancestor/descendant submissions and a layout root attached to another Taffy tree return an error. App snapshots the whole forest before any node update, and stabilizes geometry across roots so later rect observers cannot leave an earlier root stale.
 
-Call `render.draw(root)` for each submitted tree at its intended position in the drawing sequence. The order of these calls determines Node input stacking in the next frame; the submission Vec does not. A submitted root omitted from drawing receives no new Node input. The controlled entry point rejects unsubmitted, disposed or repeatedly drawn roots and brackets the existing UI text-atlas pass. Custom camera/target/pass operations belong between complete UI draw calls. See the [`mue-macroquad` Rustdoc](../mue-macroquad/src/lib.rs) and [`RenderStateGuard`](../mue-macroquad/src/render.rs) for the host rendering contract.
+Call `render.draw(root)` for each submitted tree at its intended position in the drawing sequence. The order of these calls determines Node input stacking in the next frame; the submission Vec does not. A submitted root omitted from drawing receives no new Node input. The controlled entry point rejects unsubmitted, disposed or repeatedly drawn roots and brackets the existing UI text-atlas pass. Custom camera/target/pass operations belong between complete UI draw calls. See the [`mue-macroquad` Rustdoc][renderer-api] and [`RenderStateGuard`][render-state-guard-api] for the host rendering contract.
 
 During Scene rendering, call this entry point rather than bypassing it with `NodeRef::render()`, which cannot record displayed membership. Render callbacks should only draw or update rendering caches. Neither a borrowed root list nor reactive `batch` is a full display snapshot: keep hit-test state unchanged from drawing until the next preplanning phase.
 
@@ -124,7 +123,7 @@ A newly exposed/installed top can draw in the switching frame, but receives neit
 `SceneResult` is `Box<dyn Any>` with no Send bound; the receiving Scene defines a concrete business type and downcasts it. The default `event` drops unhandled Returned values. This is runtime type erasure, not compile-time parent/child result matching; handle an unexpected type explicitly. Pass a concrete business value to `pop_with_result`/`pop_scene_with_result`, not an already boxed `SceneResult` (which would be boxed again). Results must own or share any resources needed after the child is dropped; they cannot rely on child-owned reactive handles staying alive.
 
 ```rust
-use mue_macroquad::{CallbackResult, Scene, SceneContext, SceneEvent};
+use mue::{Scene, renderer::{CallbackResult, SceneContext, SceneEvent}};
 use std::io;
 
 struct PlayResult { score: u32 }
@@ -155,23 +154,23 @@ impl Scene for SongDetails {
 
 For external playback, stop immediately on `Pause`, but treat `Resume` as eligibility. Start audio from the first ordinary `update` in which the session should run, after processing user pause or stop actions. A switch can commit after the resumed Scene sees input but before it gets an update.
 
-App does not pause/cancel arbitrary tasks merely because their Scene is covered. Scene-owned Task handles stay owned; dropping them requests cancellation under the existing caller-owned rules, while detached or host-side work may continue. Field/drop ownership must keep resources alive as long as needed. Normal permanent removal pauses a running top before releasing it, but App destruction does not run fallible lifecycle callbacks. Stacks are released top-down. Optional draw-only [Scene transitions](scene-transitions.md) can delay a stack commit; asynchronous lifecycle callbacks, cross-Scene business/input propagation and automatic audio/contact policy are not implemented.
+App does not pause/cancel arbitrary tasks merely because their Scene is covered. Scene-owned Task handles stay owned; dropping them requests cancellation under the existing caller-owned rules, while detached or host-side work may continue. Field/drop ownership must keep resources alive as long as needed. Normal permanent removal pauses a running top before releasing it, but App destruction does not run fallible lifecycle callbacks. Stacks are released top-down. Optional draw-only [Scene transitions][scene-transitions-guide] can delay a stack commit; asynchronous lifecycle callbacks, cross-Scene business/input propagation and automatic audio/contact policy are not implemented.
 
 ## Application-owned resources and settings
 
-The [song-transition application](<../examples/song-transition/README.md>) demonstrates a concrete ownership pattern with existing APIs, not a new framework container. Its [host](<../examples/song-transition/src/application.rs>) owns App, an immutable `Rc<Catalog>` and Settings; Settings keeps an independent `OwnedScope` alive for theme/reduced-motion signals. App is the first field and therefore drops before those external resources. Library/Details constructors receive read-only settings and an editor-Scene factory; only SettingsScene receives writable access.
+The [song-transition application](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/README.md) demonstrates a concrete ownership pattern with existing APIs, not a new framework container. Its [host](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/src/application.rs) owns App, an immutable `Rc<Catalog>` and Settings; Settings keeps an independent `OwnedScope` alive for theme/reduced-motion signals. App is the first field and therefore drops before those external resources. Library/Details constructors receive read-only settings and an editor-Scene factory; only SettingsScene receives writable access.
 
-Each independently owned view explicitly provides a typed `ReadSettings` in its detached construction scope. Deep UI components inject during synchronous build and retain the handles they need; Scene callbacks do not automatically enter a Scene scope, and scope context follows the construction chain rather than the Scene stack. Local maps/computed belong to the view or node owner. Theme and [Fluent localization](<i18n.md>) bindings update retained UI without resetting selection/scroll, while artwork transitions sample the reduced-motion preference at request time. Settings pops without a result; Details still returns its typed selected index even when animation is bypassed. Locale/namespace Translators are passed explicitly to independently owned views; only SettingsScene receives the language-changing capability.
+Each independently owned view explicitly provides a typed `ReadSettings` in its detached construction scope. Deep UI components inject during synchronous build and retain the handles they need; Scene callbacks do not automatically enter a Scene scope, and scope context follows the construction chain rather than the Scene stack. Local maps/computed belong to the view or node owner. Theme and [Fluent localization][i18n-guide] bindings update retained UI without resetting selection/scroll, while artwork transitions sample the reduced-motion preference at request time. Settings pops without a result; Details still returns its typed selected index even when animation is bypassed. Locale/namespace Translators are passed explicitly to independently owned views; only SettingsScene receives the language-changing capability.
 
 Signal/Scope copies do not keep their owner alive; owning Rc assets do. Keep the global owner alive through all consumers and teardown. This example has no asynchronous tasks: if a consumer adds caller-owned or host tasks, cancel/finish them and drain foreground cleanup before disposing shared reactive resources. Dropping App or a Task handle is not a general synchronous task join.
 
 ## Loading flows and picture transitions
 
-The [scene-flow consumer](../examples/scene-flow/README.md) demonstrates retained details → Loading/Failure/Ready/Running/Results → return or retry using these existing entry points. Its Request owns a foreground Task awaiting CPU-only blocking work; normal `update` consumes an accepted generation and uploads a GPU texture. Ready does not automatically start the session. Cancel revokes publication before pop, and a late worker result cannot reactivate the cancelled flow. Internal business states do not each require another Scene.
+The [scene-flow consumer](https://github.com/void-cat-0/mue/blob/main/examples/scene-flow/README.md) demonstrates retained details → Loading/Failure/Ready/Running/Results → return or retry using these existing entry points. Its Request owns a foreground Task awaiting CPU-only blocking work; normal `update` consumes an accepted generation and uploads a GPU texture. Ready does not automatically start the session. Cancel revokes publication before pop, and a late worker result cannot reactivate the cancelled flow. Internal business states do not each require another Scene.
 
-The consumer now attaches the public [Scene transition interface](scene-transitions.md) to push/pop requests. `SceneRequest::transition` configures one deferred switch; `SceneTransition::crossfade/composite/overlay` share App-owned timing, while custom drawing stays replaceable. `AfterSwitch` commits before animation; `AroundSwitch` presents an exit endpoint before committing at a later safe boundary. Constructors/default-free applications are GPU-free; only selected composites capture opaque pictures. The retired Scene is not kept running by the effect. The previous example-local Presenter has been removed. Internal Loading/Ready/Running/Results state changes remain within one Scene and do not automatically animate.
+The consumer now attaches the public [Scene transition interface][scene-transitions-guide] to push/pop requests. `SceneRequest::transition` configures one deferred switch; `SceneTransition::crossfade/composite/overlay` share App-owned timing, while custom drawing stays replaceable. `AfterSwitch` commits before animation; `AroundSwitch` presents an exit endpoint before committing at a later safe boundary. Constructors/default-free applications are GPU-free; only selected composites capture opaque pictures. The retired Scene is not kept running by the effect. The previous example-local Presenter has been removed. Internal Loading/Ready/Running/Results state changes remain within one Scene and do not automatically animate.
 
-The consumer submits roots with `RootInput::None` until the actual current picture has drawn and the public transition is complete. Raw Scene input remains complete; Esc/back and gameplay policy are Scene-owned. Host suspension freezes effect time; the first restoration delta is zero. Resize rebuilds picture buffers without restarting the clock or resetting input/Scene state; if an old source is gone, composites use the live picture for both inputs. GPU composition currently requires OpenGL/default-camera/full origin-zero window rendering, not arbitrary camera/pass capture. Overlay effects allocate no picture targets. See [the transition tutorial](scene-transitions.md) and the examples for exact timing, interruption, input and ownership rules.
+The consumer submits roots with `RootInput::None` until the actual current picture has drawn and the public transition is complete. Raw Scene input remains complete; Esc/back and gameplay policy are Scene-owned. Host suspension freezes effect time; the first restoration delta is zero. Resize rebuilds picture buffers without restarting the clock or resetting input/Scene state; if an old source is gone, composites use the live picture for both inputs. GPU composition currently requires OpenGL/default-camera/full origin-zero window rendering, not arbitrary camera/pass capture. Overlay effects allocate no picture targets. See [the transition tutorial][scene-transitions-guide] and the examples for exact timing, interruption, input and ownership rules.
 
 ## Errors
 
@@ -180,3 +179,8 @@ Scene callbacks return `CallbackResult<()>` (`Result<(), mue_macroquad::BoxError
 Any callback error stops the rest of that frame, clears displayed-root eligibility, cancels UI capture/hover and marks the App faulted. Later ordinary frames drain old input and return `Error::Faulted` until the host requests recovery. The host can explicitly call `replace_scene` to replace the failed top or `reset_scene` to abandon the whole stack; a recovery frame drains old input. Push/pop cannot recover a faulted App. The host can also drop it; its fallible lifecycle callbacks do not run during destruction. A faulted frame without recovery drains input but does not drive ordinary timeouts or tasks, including while suspended. An error from any event arm stops scheduling just like update/layout/render errors. Error context still identifies the notification phase (`Scene input/result/enter/pause/resume`) rather than hiding it behind a generic event error. A selected transition is not committed if the old pause fails; failure after pop/installation does not roll back already dropped Scenes or business side effects. Failed results are not retried; reset/drop releases any remaining pending values. Faulted-frame draining and UI cancellation are lifecycle cleanup, not a press-ownership filter on a normal Scene raw batch. This does not restore a partially rendered framebuffer or recover panics.
 
 `frame`, `frame_with_update` and `frame_paused` retain convenience signatures and panic on a returned Scene error. Fallible applications should use the `try_` variants. Existing Node hook/layout panics still follow the project's fatal-panic policy.
+
+[scene-transitions-guide]: scene-transitions.md
+[i18n-guide]: i18n.md
+[renderer-api]: https://github.com/void-cat-0/mue/blob/main/mue-macroquad/src/lib.rs
+[render-state-guard-api]: https://github.com/void-cat-0/mue/blob/main/mue-macroquad/src/render.rs

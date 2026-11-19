@@ -8,15 +8,12 @@ Applications can define ordinary token structs and pass them explicitly or throu
 
 A `Prop<T>` holds either a static value or a read-only signal. A setter accepts that property without taking a snapshot of its current value. Use `map` to project application data into the exact type required by a style property. For example, foreground and background setters accept `Prop<Brush>`, so this example maps palette colors with `solid`:
 
-```rust
+```rust,no_run
 use std::rc::Rc;
-use mue_components::prelude::*;
-use mue_core::{prelude::*, scope::{inject, provide}};
-use mue_macroquad::{
+use mue::{
     App,
-    color::Color,
-    shader::{Brush, solid},
-    style::{Styleable, StyleableExt},
+    prelude::*,
+    renderer::{color::Color, shader::solid},
 };
 
 #[derive(Clone, PartialEq)]
@@ -76,20 +73,18 @@ A plain wrapper function can accept `Prop<Palette>` directly instead of using co
 
 `mue_components::tokens` covers the common case: many named values of a few types, registered once and read as ordinary properties. It is a value store, not a theme engine — no selectors, no cascade, and components still read ordinary properties.
 
-```rust
-use mue_components::{prelude::*, tokens::{Theme, provide_theme}};
-use mue_core::Size;
-use mue_macroquad::{
-    color::Color,
-    shader::{Brush, solid},
+```rust,no_run
+use mue::{
+    components::{Theme, token_set},
+    core::Size,
+    prelude::*,
+    renderer::{color::Color, shader::{Brush, solid}},
 };
 use std::rc::Rc;
 
 let theme = Rc::new(Theme::new());
-theme.register(&token_set! {
-    panel: solid(Color::WHITE),
-    "gap": Size::Px(12.),
-});
+theme.register(&token_set! { panel: solid(Color::WHITE) });
+theme.register(&token_set! { gap: Size::Px(12.) });
 
 // Read a key as a live property; the setter binds once.
 text("Label").background(theme.get::<Brush>("panel"));
@@ -132,18 +127,16 @@ The current scope is synchronous, thread-local state. Calling `Scope::run(|| asy
 
 Use `mue_core::spawn` for foreground work. It creates no `OwnedScope` and inherits no context. Each poll and future destructor runs under `Scope::null` and `Runtime::without_effect`, with no ambient dependency tracker or `current_effect`; the previous context is restored on normal return. Captured handles still depend on their original owners. Reactive resources created by a plain task have no automatic owner and need an explicit owner or manual disposal. Dropping the returned handle cancels the task. `detach()` gives up output observation and leaves lifetime management to the executor. `Task<T>` awaits to `T` directly, so `Task<Result<T, E>>` produces the business `Result<T, E>` without a cancellation `Option`. A `Task<T>` handle is `Send` when `T: Send` and may move across threads for await/drop, but its future is polled and destroyed on its original UI thread. For blocking work, `spawn_blocking` runs a closure on a fresh OS thread and returns a `BlockingTask<T>`; publish its result from a foreground task or use `AsyncResource::new_blocking`. Network/IO work runs on the host's runtime and is awaited from a foreground task. Polling a completed task again or awaiting one forcibly stopped at executor shutdown panics; panics are not recovered.
 
-Opt into operation-local scope and resource ownership with `mue_core::scope::scope_future(future) -> ScopedFuture<F>`, also exported at the crate root and in the prelude. Wrapping creates a separate `OwnedScope::new_inherited()` immediately. Its parent is a weak link for context lookup only, neither keepalive nor a snapshot. The wrapper scope is installed for polling and inner future destruction, then both inner future and owner are dropped on `Poll::Ready` before output is returned, even if the completed wrapper is retained. A returned local reactive handle is therefore invalid after completion. Only resources constructed while polling under this wrapper are owned by it; captured pre-created resources do not transfer ownership. The wrapper has no `'static` bound itself, is `!Send + !Sync`, and works standalone or inside `spawn(scope_future(...))`. Standalone use provides scope ownership only; task execution isolation comes from `spawn`. `Scope::run(|| async { ... })` is not a substitute. A resource passed to an effect callback still follows its existing behavior; effect reruns do not restore their creation scope. See [foreground tasks](tasks.md) for a concrete example.
+Opt into operation-local scope and resource ownership with `mue_core::scope::scope_future(future) -> ScopedFuture<F>`, also exported at the crate root and in the prelude. Wrapping creates a separate `OwnedScope::new_inherited()` immediately. Its parent is a weak link for context lookup only, neither keepalive nor a snapshot. The wrapper scope is installed for polling and inner future destruction, then both inner future and owner are dropped on `Poll::Ready` before output is returned, even if the completed wrapper is retained. A returned local reactive handle is therefore invalid after completion. Only resources constructed while polling under this wrapper are owned by it; captured pre-created resources do not transfer ownership. The wrapper has no `'static` bound itself, is `!Send + !Sync`, and works standalone or inside `spawn(scope_future(...))`. Standalone use provides scope ownership only; task execution isolation comes from `spawn`. `Scope::run(|| async { ... })` is not a substitute. A resource passed to an effect callback still follows its existing behavior; effect reruns do not restore their creation scope. See [foreground tasks][tasks-guide] for a concrete example.
 
-`App::frame()` drives a bounded number of ready tasks before layout. This is cooperative scheduling on the UI thread; blocking work uses `spawn_blocking` and publishes results through a foreground continuation; network/IO work runs on the host's runtime. A long synchronous poll still blocks rendering. Arbitrary futures passed to other executors keep their own context and cancellation rules. `AsyncResource<T, E>` owns its state owner and task; render `AsyncState::Loading` and `AsyncState::Ready(Result<T, E>)`, and retain the resource for as long as its state is used. State persists until the resource is dropped. `new` runs the input operation on the foreground executor; `new_blocking` runs a blocking closure on a fresh OS thread; both publish state on the UI thread. A blocking operation cannot use `scope_future`. Replacing/dropping the resource cancels the previous operation. See [task usage](tasks.md) for ownership and cancellation limits.
+`App::frame()` drives a bounded number of ready tasks before layout. This is cooperative scheduling on the UI thread; blocking work uses `spawn_blocking` and publishes results through a foreground continuation; network/IO work runs on the host's runtime. A long synchronous poll still blocks rendering. Arbitrary futures passed to other executors keep their own context and cancellation rules. `AsyncResource<T, E>` owns its state owner and task; render `AsyncState::Loading` and `AsyncState::Ready(Result<T, E>)`, and retain the resource for as long as its state is used. State persists until the resource is dropped. `new` runs the input operation on the foreground executor; `new_blocking` runs a blocking closure on a fresh OS thread; both publish state on the UI thread. A blocking operation cannot use `scope_future`. Replacing/dropping the resource cancels the previous operation. See [task usage][tasks-guide] for ownership and cancellation limits.
 
 ## Hover and inherited foreground
 
 Hover is an explicit input to ordinary style configuration:
 
-```rust
-use mue_components::prelude::*;
-use mue_core::prelude::*;
-use mue_macroquad::style::{Styleable, StyleableExt};
+```rust,no_run
+use mue::prelude::*;
 
 let view = text("Hover me").with_hovered(|view, hovered| {
     view.opacity(hovered.select(0.7, 1.))
@@ -154,9 +147,8 @@ The callback runs immediately once. Its derived resources are owned by the hover
 
 For text foreground inheritance, use the renderer's explicit subtree helper:
 
-```rust
-use mue_components::prelude::*;
-use mue_macroquad::{color::Color, inherit::provide_foreground};
+```rust,no_run
+use mue::{prelude::*, renderer::{color::Color, inherit::provide_foreground}};
 
 let subtree = provide_foreground(Color::BLACK, || {
     stack().children((text("Inherited color"), text("Another label")))
@@ -165,4 +157,10 @@ let subtree = provide_foreground(Color::BLACK, || {
 
 `mue_macroquad::inherit::provide_foreground` accepts `Prop<Brush>`-compatible inputs and retains its context owner with the subtree. Explicit text color takes priority over this inherited default. Custom text-like primitives can use `mue_macroquad::inherit::inherited_foreground()` to obtain the optional property. This inheritance helper supplies one foreground value; application tokens remain ordinary data consumed explicitly.
 
-See [component and node authoring](components.md), [reusable component declarations](factories.md), [styles and units](style.md), and [transitions](transitions.md).
+See [component and node authoring][components-guide], [reusable component declarations][factories-guide], [styles and units][style-guide], and [property transitions][transitions-guide].
+
+[components-guide]: components.md
+[factories-guide]: factories.md
+[style-guide]: style.md
+[transitions-guide]: transitions.md
+[tasks-guide]: tasks.md

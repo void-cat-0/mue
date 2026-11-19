@@ -7,7 +7,7 @@ Scene transitions are optional presentation attached to a deferred Scene request
 `push`, `pop`, `pop_with_result`, `replace` and `exit` return a `SceneRequest` configuration handle. Host-side `push_scene`, `pop_scene`, `pop_scene_with_result`, `replace_scene` and `reset_scene` do the same.
 
 ```rust
-use mue_macroquad::{Scene, SceneContext, SceneTransition, transition::Transition};
+use mue::{Scene, renderer::{SceneContext, SceneTransition, transition::Transition}};
 
 struct Details;
 impl Scene for Details {}
@@ -47,8 +47,10 @@ A terminal `pop`/`exit` has no entering Scene. `AroundSwitch` can present its ex
 `SceneTransition::crossfade(curve)` is a built-in RGB mix with opaque output. `SceneTransition::composite(curve, callback)` uses the same `AfterSwitch` scheduling but lets the callback draw the whole composite. The callback receives borrowed `ScenePictures { from, to }`, valid only during that draw, and a `TransitionFrame`.
 
 ```rust
-use macroquad::prelude::{draw_texture_ex, vec2, DrawTextureParams, WHITE};
-use mue_macroquad::{SceneTransition, transition::Transition};
+use mue::{
+    macroquad::prelude::{DrawTextureParams, WHITE, draw_texture_ex, vec2},
+    renderer::{SceneTransition, transition::Transition},
+};
 
 fn slide() -> SceneTransition {
     SceneTransition::composite(Transition::ease_out(0.4), |frame, pictures| {
@@ -82,8 +84,10 @@ Current composite restrictions: **OpenGL**, full origin-zero logical window view
 `overlay(timing, callback)` draws over the normally rendered Scene, using logical window coordinates. It allocates no picture targets and supports either timing. A closure can own an illustration, geometric mask or shader to express shared-asset/cover transitions without capturing full Scene pictures.
 
 ```rust
-use macroquad::prelude::{draw_rectangle, Color};
-use mue_macroquad::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition};
+use mue::{
+    macroquad::prelude::{Color, draw_rectangle},
+    renderer::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition},
+};
 
 fn black_cover() -> SceneTransition {
     SceneTransition::overlay(
@@ -110,12 +114,14 @@ Callbacks only draw or maintain rendering caches, not mutate business/layout/hit
 
 `App::transition_state()`, `SceneContext::transition()` and `SceneRender::transition()` expose the effect sample. Input/update callbacks normally observe the preceding successful sample; a switching lifecycle callback observes the entering phase's initial sample; render observes this frame's candidate. `App::is_transitioning()` and `SceneContext::is_transitioning()` are convenience queries.
 
-There is **no implicit raw-input or Node-press filtering** based on alpha. Node paths are still planned against the last drawn roots. If a new live UI must remain inactive under an old picture, the Scene should submit `RootInput::None` until its observed transition is gone, and grant eligibility through a subsequent normal layout. The runtime never rescues or consumes an old batch, synthesizes a Down, or decides which raw touches count for gameplay. The [scene-flow example](<../examples/scene-flow/README.md>) demonstrates this explicit visual-readiness policy.
+There is **no implicit raw-input or Node-press filtering** based on alpha. Node paths are still planned against the last drawn roots. If a new live UI must remain inactive under an old picture, the Scene should submit `RootInput::None` until its observed transition is gone, and grant eligibility through a subsequent normal layout. The runtime never rescues or consumes an old batch, synthesizes a Down, or decides which raw touches count for gameplay. The [scene-flow example](https://github.com/void-cat-0/mue/blob/main/examples/scene-flow/README.md) demonstrates this explicit visual-readiness policy.
 
 A newer request cancels the current effect at the safe boundary. If the old command has not committed, its pending destination/result is dropped; if it has committed, the stack is **not rolled back**. Last-request-wins applies before selection. Composite-to-composite interruption can continue from the last displayed blend; arbitrary overlay continuity, reverse playback and automatic shared-element matching are not promised. Closures and pending requests are released before source owners on cancellation/fault/App drop, including failed commit preparation. There is no unbounded request queue.
 
 Host suspension draws no effects, allocates no pictures and advances no phase clock. Animated requests over an entered source wait for a normal rendering frame; instantaneous requests retain the prior suspended-commit/deferred-results behavior. Resume's first Scene/Node/effect delta is zero. Non-GPU global work runs once per suspended frame when no error stops it. A normal frame with no drawable area also waits without acknowledging picture draws; it does not suppress Scene input. A new request can cancel a waiting effect without rendering it. Instantaneous requests and overlays do not require a valid picture size merely to discard an old composite; an unavailable old picture is invalidated, not treated as a Scene error.
 
-Effect/capture errors propagate through `try_frame`, fault the App and clear input eligibility exactly like Scene errors. Failed endpoint drawing does not commit the pending switch; a failure after installation does not roll back it. Recovery is explicit and instant. See [Scene lifecycle/errors](<scenes.md>) for the shared ownership and stopped-state contract.
+Effect/capture errors propagate through `try_frame`, fault the App and clear input eligibility exactly like Scene errors. Failed endpoint drawing does not commit the pending switch; a failure after installation does not roll back it. Recovery is explicit and instant. See [Scene lifecycle and errors][scenes-guide] for the shared ownership and stopped-state contract.
 
-The [scene-transitions example](<../examples/scene-transitions/README.md>) demonstrates built-in fade, a custom slide composite and a two-phase cover. The [song-transition example](<../examples/song-transition/README.md>) adds illustration expansion/shrink, rounded shape/crop interpolation and retained list state using the same overlay API, without Scene screenshots. Both examples use Scene-local state and separate modules for effects and views.
+The [scene-transitions example](https://github.com/void-cat-0/mue/blob/main/examples/scene-transitions/README.md) demonstrates built-in fade, a custom slide composite and a two-phase cover. The [song-transition example](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/README.md) adds illustration expansion/shrink, rounded shape/crop interpolation and retained list state using the same overlay API, without Scene screenshots. Both examples use Scene-local state and separate modules for effects and views.
+
+[scenes-guide]: scenes.md

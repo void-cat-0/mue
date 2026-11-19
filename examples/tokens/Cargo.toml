@@ -7,7 +7,4 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-macroquad = { workspace = true }
-mue-core = { workspace = true }
-mue-macroquad = { workspace = true }
-mue-components = { workspace = true }
+mue.workspace = true

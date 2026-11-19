@@ -3,6 +3,8 @@
 `style!` is a typed declaration macro. It accepts familiar kebab-case property names and lowers them to the renderer's `Style` setters. Values in braces are Rust expressions and retain their reactive type.
 
 ```rust
+use mue::prelude::*;
+
 let card = flexbox().style(style! {
     width: 100%;
     max-width: 640px;
@@ -18,7 +20,7 @@ Static lengths use `px`, `%`, `vw`, and `vh`; `font-size` also accepts `em` and 
 
 Responsive helpers are ordinary Rust expressions, so they stay in braces:
 
-```rust
+```rust,ignore
 style! {
     min-height: {responsive::ui(144.)};
     font-size: {responsive::font(22.)};
@@ -29,7 +31,7 @@ The responsive helpers return reactive `Prop<Size>` and `Prop<FontSize>` values.
 
 Theme tokens use the `token!(...)` value form. It reads the nearest installed `Theme` and takes the value type from the property:
 
-```rust
+```rust,ignore
 style! {
     font-size: token!(title);
     gap: token!(gap);

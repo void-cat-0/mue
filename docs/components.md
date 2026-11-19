@@ -3,7 +3,7 @@
 The component crate owns reusable behavior:
 
 - layout: `stack`, `wrap`, `center`, `container`, `scroll_area`, and `pages`;
-- application-level push/pop flows use [Scenes](scenes.md); the former navigation stack has been removed.
+- application-level push/pop flows use [Scenes][scenes-guide]; the former navigation stack has been removed.
 - controls: `button`;
 - overlay: `overlay_host`;
 - graphics: `image`, `shape`, and `circle`;
@@ -15,7 +15,7 @@ Both `#[component]` and `#[node]` generate styleable builders. Calling a generat
 
 ```rust
 use std::rc::Rc;
-use mue_components::prelude::*;
+use mue::prelude::*;
 
 #[component]
 fn primary_button(caption: Rc<str>, #[default] primary: bool) -> impl Component {
@@ -35,12 +35,7 @@ A parameter affects appearance when component code explicitly uses it in a style
 Terminal `#[node]` bodies return a real `Node`; the macro injects `NodeContext` positionally as the first parameter. Its type annotation is preserved and checked by Rust, so `NodeContext`, qualified paths, and type aliases are accepted. The parameter may use any simple name, including `mut`, such as `ctx: NodeContext`; call `ctx.finish(defaults, body)` to combine the configured style with node defaults and initialize its consumers. This injected parameter is excluded from the builder constructor and setters, cannot use `#[default]` or `#[model]`, and its name cannot be referenced by defaults because they are evaluated before injection. The public constructor still returns a configurable builder:
 
 ```rust
-use mue_components::node;
-use mue_macroquad::{
-    layout::use_layout,
-    node::{IntoNode, Node, NodeContext},
-    style::{Style, Styleable},
-};
+use mue::{prelude::*, renderer::layout::use_layout};
 
 #[node]
 fn spacer(ctx: NodeContext, #[default(8.)] height: f32) -> Node {
@@ -63,17 +58,17 @@ Put shared `provide` / context setup in the node author body before `ctx.finish(
 
 `Style` stores ordinary fields and exposes its hook fields publicly. Register callbacks with `style.on_render.append(callback)`, `style.on_wheel_event.append(callback)`, and the corresponding public fields. Fluent builder methods such as `.on_render(...)` remain available. The synchronous author body and init closure may use local borrowed data; hooks, effects, event callbacks, and retained child plans keep their own existing `'static` requirements.
 
-Local `provide`, signals, effects, and `map` / `computed` projections created in a node body share its node scope, just as component-local resources do. External inputs still require their original owner to remain alive. Handwritten `BuildNode` implementations use the same `NodeContext::finish(defaults, body)` protocol and receive `IntoNode` from a blanket impl, so only `build` is written by hand. The crate-level Rustdoc covers the generated builder and node contracts; run `cargo doc -p mue-components --no-deps --open` to read it.
+Local `provide`, signals, effects, and `map` / `computed` projections created in a node body share its node scope, just as component-local resources do. External inputs still require their original owner to remain alive. Handwritten `BuildNode` implementations use the same `NodeContext::finish(defaults, body)` protocol and receive `IntoNode` from a blanket impl, so only `build` is written by hand. See the [component API reference][components-api] for the generated builder and node contracts.
 
 ## Frame phases
 
-`App::frame` preplans Node input against the displayed frame before lifecycle/input callbacks, dispatches Node pointer/hover/wheel, and notifies the current Scene through `event(SceneEvent::Input(&batch), ctx)` with the complete original raw batch. Node UI handling does not consume or filter that batch. Transitions, timeouts/tasks, the `frame_with_update` callback and `Scene::update` follow. App prepares all submitted roots, invokes each snapshotted node's `Style::on_update(&dt)` once, stabilizes geometry again, and lets the Scene organize drawing. Suspended frames do not run node updates or layout; see [Scene input and lifecycle](scenes.md#input).
+`App::frame` preplans Node input against the displayed frame before lifecycle/input callbacks, dispatches Node pointer/hover/wheel, and notifies the current Scene through `event(SceneEvent::Input(&batch), ctx)` with the complete original raw batch. Node UI handling does not consume or filter that batch. Transitions, timeouts/tasks, the `frame_with_update` callback and `Scene::update` follow. App prepares all submitted roots, invokes each snapshotted node's `Style::on_update(&dt)` once, stabilizes geometry again, and lets the Scene organize drawing. Suspended frames do not run node updates or layout; see [Scene input and lifecycle][scene-input-guide].
 
 A measurement installed with `Layout::set_measure_fn` and its reactive subscriptions belong to the measuring node, even when installed from another scope. Replacing it or disposing the node releases the old callback and subscriptions. It runs in the Taffy solver: read sizing inputs (or `Layout::rect.get_untracked()` for previously published geometry), but do not mutate reactive/layout state or call `with_taffy` from it.
 
 Use `style.on_layout.append(...)` for geometry correction after the node's rect is published and before its children are visited. It may run repeatedly while layout stabilizes; do not advance time there. Use `style.on_update.append(...)` for frame state such as momentum or elapsed time, and keep `on_render` / `on_after_children` limited to drawing and render caches. App snapshots the active node list for updates: deleted nodes are skipped, and nodes mounted during an update start updating next frame.
 
-A retained `Node` exposes `prepare_layout(available_size: Vector)` and `render()` through its `NodeRef`. Preparation uses logical pixels and a zero root origin, publishes rects/scroll clips without drawing, and may be repeated without advancing time. Call it outside an enclosing reactive `batch` so geometry observers can settle, and after input routing for the displayed frame. `render()` consumes the prepared geometry, brackets the UI text-atlas pass, and may be repeated without running node updates. It does not drive tasks, advance transitions, set the camera, or flush texture deletions. `prepare_layout_in(bounds: Rect)` also accepts an explicit logical origin and available size. App owns frame scheduling; the [Scene API](scenes.md) can submit multiple roots and interleave their controlled drawing with gameplay.
+A retained `Node` exposes `prepare_layout(available_size: Vector)` and `render()` through its `NodeRef`. Preparation uses logical pixels and a zero root origin, publishes rects/scroll clips without drawing, and may be repeated without advancing time. Call it outside an enclosing reactive `batch` so geometry observers can settle, and after input routing for the displayed frame. `render()` consumes the prepared geometry, brackets the UI text-atlas pass, and may be repeated without running node updates. It does not drive tasks, advance transitions, set the camera, or flush texture deletions. `prepare_layout_in(bounds: Rect)` also accepts an explicit logical origin and available size. App owns frame scheduling; the [Scene API][scenes-guide] can submit multiple roots and interleave their controlled drawing with gameplay.
 
 ## Children and retained state
 
@@ -85,7 +80,7 @@ Tuples can mix builders, prebuilt nodes, plans, and existing child lists. Vector
 
 Use `map_keyed_prop(list, key_fn, node_fn)` when each retained node needs the latest item or its current position. The construction callback receives `KeyedItem { key, value: Prop<T>, index: Prop<usize> }` and still runs only for new keys. Bind properties through `value.map(...)` or a computed that reads `index`; event callbacks can read `value` when the event occurs:
 
-```rust
+```rust,ignore
 let rows = map_keyed_prop(items, |item| item.id, |row| {
     let value = row.value;
     let label = value.map(|item| item.name);
@@ -97,7 +92,7 @@ This variant requires `T: Clone + PartialEq` and `K: Clone + Hash + Eq`. Same-ke
 
 Use `keyed(value, node_fn)` to switch a single subtree from a scalar `Prop<T>` or signal, without wrapping the value in a one-element list. It requires `T: Clone + PartialEq`, with no hashing or separate key function. An equal value retains the current node; a different value creates a new node and releases the old node and its callback-owned resources. Switching back builds a fresh node. Like `map_keyed`, construction is deferred until mount and later builds inherit the mount context. Reads directly inside `node_fn` are snapshots and do not subscribe the selector; nested reactive bindings still track normally. For example:
 
-```rust
+```rust,ignore
 let region = keyed(phase, move |phase| match phase {
     Phase::Idle => text("Press Load to fetch data.").into_node(),
     Phase::Loading => loading_spinner(),
@@ -116,13 +111,13 @@ The node owns resources created in its synchronous construction scope. An uncons
 
 `Scope`, `Signal` and `NodeRef` handles are thread-local, non-owning handles; copying them does not extend their owner's lifetime or make them transferable to another thread. `Scope::run(|| async { ... })` installs the scope only while constructing the future. `mue_core::spawn` returns a caller-owned task with no `OwnedScope` or inherited context. Each poll and future destruction runs under `Scope::null` and `Runtime::without_effect`, with no ambient tracker or `current_effect`; the previous context is restored on normal return. Captured handles still depend on their original owners. Resources created by a plain task need an explicit owner or manual disposal.
 
-Use `scope_future(future)` to opt into an independent `OwnedScope::new_inherited()` created at wrapping time. It installs its own scope for polling and inner future destruction, and drops the inner future and owner before returning a completed output, even if the wrapper is retained. Its parent link supports weak context lookup, not keepalive or a snapshot. Only resources constructed under that scope are owned by the wrapper; capturing an existing resource does not transfer ownership. Returning a local reactive handle leaves an invalid handle after completion. The wrapper works standalone for scope ownership or in `spawn(scope_future(...))` for task execution isolation as well. Effect reruns retain their existing behavior and do not restore their creation scope. See [foreground tasks](tasks.md) for a concrete example.
+Use `scope_future(future)` to opt into an independent `OwnedScope::new_inherited()` created at wrapping time. It installs its own scope for polling and inner future destruction, and drops the inner future and owner before returning a completed output, even if the wrapper is retained. Its parent link supports weak context lookup, not keepalive or a snapshot. Only resources constructed under that scope are owned by the wrapper; capturing an existing resource does not transfer ownership. Returning a local reactive handle leaves an invalid handle after completion. The wrapper works standalone for scope ownership or in `spawn(scope_future(...))` for task execution isolation as well. Effect reruns retain their existing behavior and do not restore their creation scope. See [foreground tasks][tasks-guide] for a concrete example.
 
 Disposing the creator scope does not cancel the task. Dropping the task handle cancels it; `detach()` transfers its lifetime management to the executor. `Task<T>.await` yields `T` directly. Its handle is `Send` when `T: Send` and may cross threads for await/drop, but its future is polled and destroyed on its original UI thread, where any scoped cleanup also runs.
 
 `mue_core::task::tick(limit)` polls at most `limit` ready tasks without blocking. `sleep` / `timeout` register with the same foreground executor and are driven by `tick`; they are `!Send` and cannot be used from background tasks. `spawn_blocking` runs blocking closures on fresh threads; `JoinSet` joins foreground tasks; `block_on` is for tests and headless hosts. `mue_macroquad::App::frame` drives up to 32 task polls after timeouts and before layout. One poll is not preempted: synchronous I/O or CPU-heavy code still blocks that frame. Blocking work uses `spawn_blocking` or `AsyncResource::new_blocking`; the result is published on the UI thread. Network/IO work runs on the host's runtime and is awaited from `AsyncResource::new`. For expected failures, use a `Result<T, E>` task output or `AsyncResource<T, E>`, which owns its state owner and task and exposes `Loading` then `Ready(Result<T, E>)` as a reactive signal. Its state persists until resource drop; `new` runs the operation on the foreground executor, while `new_blocking` runs a blocking closure on a fresh OS thread. A blocking operation cannot use `scope_future`. `is_finished()` becomes true after future destruction and any opt-in scoped cleanup. Polling a completed task again panics. `Task::fallible` converts the handle into a `FallibleTask<T>` that yields `Option<T>`; `None` reports a task stopped by the executor instead of panicking. `try_spawn` / `try_tick` return `Err(ExecutorClosed)` during shutdown; panics still propagate without recovery.
 
-For application-owned tokens, `provide` / `inject`, snapshots versus bindings, scope ownership, asynchronous boundaries, explicit hover, and inherited foreground, see [application tokens and context](themes.md).
+For application-owned tokens, `provide` / `inject`, snapshots versus bindings, scope ownership, asynchronous boundaries, explicit hover, and inherited foreground, see [application tokens and context][themes-guide].
 ## Modal controls
 
 `overlay_host(open, content)` renders a full-screen modal layer. It is hidden
@@ -130,8 +125,8 @@ when `open` is false, captures pointer input while open, and keeps the content
 mounted while hidden. Content taps are swallowed; a backdrop tap only dismisses
 when `dismissible(true)` is set.
 
-```rust
-use mue_macroquad::Shadow;
+```rust,no_run
+use mue::{components::overlay_host, prelude::*, renderer::Shadow};
 
 let open = signal(false);
 overlay_host(
@@ -175,15 +170,17 @@ temporary `Shapes` or geometry `Vec`s. Material uniform snapshots and batch-buff
 growth may still allocate. Shadow-mask admission defaults to `ShadowCache::Auto`:
 
 ```rust
-flexbox().shadow(Shadow::new(18., 16.)) // Auto when unset
+use mue::{prelude::*, renderer::{Shadow, ShadowCache}};
 
-flexbox()
-    .shadow(Shadow::new(18., 16.))
-    .shadow_cache(false) // always analytic (Disabled)
+let auto = flexbox().shadow(Shadow::new(18., 16.)); // Auto when unset
 
-flexbox()
+let disabled = flexbox()
     .shadow(Shadow::new(18., 16.))
-    .shadow_cache_policy(ShadowCache::Enabled) // bypass the Auto admission heuristic
+    .shadow_cache(false); // always analytic (Disabled)
+
+let enabled = flexbox()
+    .shadow(Shadow::new(18., 16.))
+    .shadow_cache_policy(ShadowCache::Enabled); // bypass the Auto admission heuristic
 ```
 
 The existing `.shadow_cache(true/false)` API still accepts bool, `Prop<bool>` and
@@ -298,3 +295,9 @@ Macroquad 0.4's `Texture2D` is `Clone` (not `Copy`); dropping the last clone on
 a worker thread panics. Do not replace `SharedTexture` with `SafeTexture` for
 UI-thread-only work: the `!Send` bound is a useful guard, and `SafeTexture`
 adds atomic refcounting plus a deletion queue.
+
+[scenes-guide]: scenes.md
+[scene-input-guide]: scenes.md#input
+[tasks-guide]: tasks.md
+[themes-guide]: themes.md
+[components-api]: https://github.com/void-cat-0/mue/blob/main/mue-components/src/lib.rs

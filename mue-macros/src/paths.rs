@@ -17,20 +17,23 @@ pub fn host() -> syn::Result<TokenStream> {
         .or_else(|| {
             dependency("mue-components").map(|components| quote!(#components::__private::host))
         })
+        .or_else(|| dependency("mue").map(|mue| quote!(#mue::renderer)))
         .ok_or_else(|| {
             syn::Error::new(
                 Span::call_site(),
-                "add mue-macroquad or mue-components as a dependency",
+                "add mue, mue-macroquad, or mue-components as a dependency",
             )
         })
 }
 
 /// The path to the `mue-components` crate, for the token value form.
 pub fn components() -> syn::Result<TokenStream> {
-    dependency("mue-components").ok_or_else(|| {
-        syn::Error::new(
-            Span::call_site(),
-            "token!(...) needs the mue-components crate; add it as a dependency, or pass an explicit theme: token!(theme, key)",
-        )
-    })
+    dependency("mue-components")
+        .or_else(|| dependency("mue").map(|mue| quote!(#mue::components)))
+        .ok_or_else(|| {
+            syn::Error::new(
+                Span::call_site(),
+                "add mue or mue-components to use token!(key), or pass an explicit theme with token!(theme, key)",
+            )
+        })
 }

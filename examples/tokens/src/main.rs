@@ -3,14 +3,19 @@
 //! Every style property reads a token handle once. Switching a theme writes new
 //! values into the same signals, so existing bindings update without rebuilding
 //! the view and without a hand-written `computed` per property.
-use macroquad::prelude::{Conf, clear_background, next_frame};
-use mue_components::*;
-use mue_core::{FontSize, Size, prelude::*};
-use mue_macroquad::{
+use mue::{
     App,
-    color::Color,
-    shader::{Brush, solid},
-    style::{Styleable, StyleableExt},
+    components::{Theme, TokenSet, provide_theme, scroll_area, token_set},
+    core::{FontSize, Size},
+    macroquad::{
+        self,
+        prelude::{Conf, clear_background, next_frame},
+    },
+    prelude::*,
+    renderer::{
+        color::Color,
+        shader::{Brush, solid},
+    },
 };
 use std::rc::Rc;
 

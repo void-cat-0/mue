@@ -2,8 +2,8 @@
 
 `mue-core` provides a local executor backed by `async-task`. `spawn` accepts a non-`Send`, `'static` future and isolates each poll from the ambient reactive scope and effect tracker. It creates no reactive owner and does not inherit `provide` / `inject` context. Reactive handles remain `Copy` but are `!Send + !Sync`. A `Task<T>` handle is `Send` when `T: Send`, so it may move across threads for await/drop; this does not move or poll its future on the caller thread. The future is polled and destroyed on its original UI thread. Dropping a handle on another thread requests cancellation; the original thread must tick again or destroy its executor to clean up the future; setting the explicit shutdown flag alone is not a synchronous cleanup. A completed output is an ordinary owned value and may be consumed or dropped on the observer thread. `Task::ready` wraps an already-computed value. `Task::try_take` observes a result once without driving the operation: `Some(value)` when ready, `None` while pending or after consumption. It is a migration helper for synchronous `take()` loops; new code should prefer await or `AsyncResource`. Taking the result and then detaching is a no-op. `Task::fallible` converts a handle into a `FallibleTask<T>` that yields `Option<T>`; `None` reports a task stopped by the executor instead of panicking. `FallibleTask::try_take` polls once without driving the task: `Some(Some(value))` when ready, `Some(None)` when the executor stopped it, and `None` while pending or after the value/stop was taken. `Task::location` / `spawned_at` and `Debug` expose the spawn site.
 
-```rust
-use mue_core::task::{spawn, tick};
+```rust,no_run
+use mue::core::task::{spawn, tick};
 
 async fn example() {
     let task = spawn(async { Ok::<_, String>(42) });
@@ -21,10 +21,10 @@ Plain tasks should communicate with already-owned state through captured handles
 
 ## Opt into an operation scope
 
-`mue_core::scope::scope_future(future) -> ScopedFuture<F>` is also exported from the crate root and prelude. Calling it creates an independent `OwnedScope::new_inherited()` immediately, with a weak parent link for context lookup. This neither keeps the parent alive nor snapshots its context: after the parent is disposed, its values are no longer injectable. The wrapper installs its own scope while polling or destroying the inner future. It works as a standalone future or as `spawn(scope_future(...))`; standalone use controls scope and ownership only. `spawn` supplies task execution isolation from the ambient effect tracker. The wrapper itself has no `'static` requirement and can borrow local data, while passing it to `spawn` still requires a `'static` future. Its owner makes `ScopedFuture<F>` `!Send + !Sync`.
+`mue::core::scope::scope_future(future) -> ScopedFuture<F>` is also exported from the crate root and prelude. Calling it creates an independent `OwnedScope::new_inherited()` immediately, with a weak parent link for context lookup. This neither keeps the parent alive nor snapshots its context: after the parent is disposed, its values are no longer injectable. The wrapper installs its own scope while polling or destroying the inner future. It works as a standalone future or as `spawn(scope_future(...))`; standalone use controls scope and ownership only. `spawn` supplies task execution isolation from the ambient effect tracker. The wrapper itself has no `'static` requirement and can borrow local data, while passing it to `spawn` still requires a `'static` future. Its owner makes `ScopedFuture<F>` `!Send + !Sync`.
 
-```rust
-use mue_core::{prelude::*, scope::{inject, provide}, task::tick};
+```rust,no_run
+use mue::core::{prelude::*, scope::{inject, provide}, task::{spawn, tick}};
 
 #[derive(Clone)]
 struct Label(String);
@@ -55,7 +55,7 @@ Dropping `Task<T>` cancels it. Reactive scopes do not register spawned tasks for
 
 Blocking work is provided by `spawn_blocking` (see [Blocking tasks](#blocking-tasks)); there is no built-in I/O reactor, Tokio context, or automatic retry. Keep I/O on the host's runtime and await a cheap foreign handle on the foreground; map host join errors and business results explicitly. Timers use `sleep`/`timeout` and are fired by `tick` (see [Timers](#timers)).
 
-`App::frame` checks input interruptions and preplans Node targets against the last successfully displayed roots, then dispatches UI and the Scene's complete raw input before global transition/timeout/task work, host/Scene update, layout and drawing. It does not explicitly begin/end a host raw pass, but text-atlas, retained and shadow-mask paths can flush or begin their own passes: never wrap/interleave `App::frame` with a host raw miniquad pass. Macroquad-only hosts need no extra `begin_default_pass`; external renderers must complete their own pass and restore camera/state first. See the [`mue-macroquad` Rustdoc](../mue-macroquad/src/lib.rs) for the pass/camera contract.
+`App::frame` checks input interruptions and preplans Node targets against the last successfully displayed roots, then dispatches UI and the Scene's complete raw input before global transition/timeout/task work, host/Scene update, layout and drawing. It does not explicitly begin/end a host raw pass, but text-atlas, retained and shadow-mask paths can flush or begin their own passes: never wrap/interleave `App::frame` with a host raw miniquad pass. Macroquad-only hosts need no extra `begin_default_pass`; external renderers must complete their own pass and restore camera/state first. See the [`mue-macroquad` Rustdoc][renderer-api] for the pass/camera contract.
 
 `App::frame_paused` first discards UI input and cancels pointer/capture/gesture state, then advances timeouts and tasks if `SceneEvent::Pause` succeeds (or no new Pause is needed), without Scene update, Node update, layout or rendering. It does not automatically flush the SafeTexture deletion queue; a long-paused host must arrange render-thread cleanup when its context is valid. Task/timeout callbacks still need to defer GPU work while the surface is unavailable. Use futures whose wake sources are independently driven. The host wake callback requests a later frame; it must not synchronously poll tasks. It is stored in the executor's wake slot, so a callback installed after a task is spawned is still observed. `App::new` installs the Macroquad callback before materializing its root builder; tasks started before that need the callback installed explicitly when using a blocking event loop.
 
@@ -63,8 +63,8 @@ Blocking work is provided by `spawn_blocking` (see [Blocking tasks](#blocking-ta
 
 `sleep(duration)` returns a `Sleep` future that completes when the executor's clock reaches the deadline. `timeout(duration, future)` polls the inner future and the sleep together and yields `Result<T, Elapsed>`. Timers are driven by `tick`: each tick drains due deadlines before it takes its ready snapshot, so a task woken by a timer can run in the same tick. `App::frame` already calls `tick` every frame, so a timer fires on the first frame after its deadline. `next_timer_deadline()` returns the earliest pending deadline, or `None`, so an idle host can park until then and call `tick`.
 
-```rust
-use mue_core::{prelude::*, task::tick};
+```rust,no_run
+use mue::core::{prelude::*, task::{sleep, spawn, tick, timeout}};
 use std::time::Duration;
 
 async fn example() {
@@ -81,8 +81,8 @@ async fn example() {
 
 Install a clock before creating timers to make them deterministic in tests:
 
-```rust
-use mue_core::task::{set_clock, sleep, spawn, tick};
+```rust,no_run
+use mue::core::task::{set_clock, sleep, spawn, tick};
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -105,8 +105,8 @@ Dropping a `Sleep` before its deadline leaves its timer entry in the executor un
 
 `JoinSet<T>` owns foreground tasks and joins them. `spawn` adds a task; `join_next` yields outputs as tasks complete; `join_all` drains the set and returns outputs in completion order. Dropping the set, or the `join_all` future, cancels the remaining tasks. `JoinSet` is foreground-only and uses the same `tick` budget; it does not create a background pool.
 
-```rust
-use mue_core::{prelude::*, task::{JoinSet, tick}};
+```rust,no_run
+use mue::core::{prelude::*, task::{spawn, JoinSet, tick}};
 
 let mut set = JoinSet::new();
 set.spawn(async { 1u32 });
@@ -119,8 +119,8 @@ tick(32);
 
 `block_on(future)` drives the current thread's tasks and timers with `tick` while the future is pending, parking between polls. `block_with_timeout(duration, future)` returns `None` on wall-clock timeout and drops the future. These are test/headless helpers; do not call them on the UI thread while the frame loop is running. `block_on` installs a temporary executor wake callback that unparks the thread and restores the previous callback when it returns. It is not reentrant with `tick`.
 
-```rust
-use mue_core::{prelude::*, task::{block_on, sleep}};
+```rust,no_run
+use mue::core::{prelude::*, task::block_on};
 use std::time::Duration;
 
 let task = spawn(async {
@@ -132,8 +132,8 @@ assert_eq!(block_on(task), 7);
 
 A retained task can safely skip publishing when its destination is gone:
 
-```rust
-use mue_core::{prelude::*, task::{spawn, tick}};
+```rust,no_run
+use mue::core::{prelude::*, task::{spawn, tick}};
 let owner = OwnedScope::new();
 let destination = owner.run(|| Signal::new(0u32));
 let task = spawn(async move {
@@ -150,8 +150,8 @@ drop(task);
 
 ## Rendering a result
 
-```rust
-use mue_core::{prelude::*, task::{AsyncResource, AsyncState}};
+```rust,no_run
+use mue::core::prelude::*;
 let owner = OwnedScope::new();
 let resource = owner.run(|| AsyncResource::<String, String>::new(async {
     Ok("Loaded".to_owned())
@@ -223,8 +223,8 @@ them.
 
 `BlockingTask<T>` is a future yielding `T`; `.await` returns the closure's output. Dropping the handle does not cancel or join the thread: the closure runs to completion and the result is discarded. `detach()` is the explicit no-observe form. A panic in the closure wakes the handle; awaiting it panics on the awaiting thread. Each call creates one OS thread named `mue-blocking-N`; `spawn_blocking` panics if the thread cannot be spawned.
 
-```rust
-use mue_core::{prelude::*, task::spawn_blocking};
+```rust,no_run
+use mue::core::{prelude::*, task::spawn_blocking};
 
 let task = spawn_blocking(|| 21u32 * 2);
 let publisher = spawn(async move { task.await });
@@ -237,8 +237,8 @@ There is no bounded blocking pool or backpressure: one call is one thread. A blo
 
 `AsyncResource::new` packages the foreground publisher for the common loading case. `new_blocking` does the same for a blocking closure. The `Loading` / `Ready(Result<T, E>)` state is published on the UI thread.
 
-~~~rust
-use mue_core::{prelude::*, task::{AsyncResource, AsyncState}};
+~~~rust,no_run
+use mue::core::prelude::*;
 
 let resource = AsyncResource::<String, String>::new(async {
     Ok("Loaded".to_owned())
@@ -272,3 +272,6 @@ Panics propagate from polling. A blocking closure's panic is rethrown when the h
 - Blocking work uses `spawn_blocking` (one OS thread per call, no bounded pool or backpressure). There is no progress channel or background timer. Do not run long blocking work on the UI thread; use `spawn_blocking` or the host's blocking pool.
 - `AsyncResource::new_blocking` requires `T: Send` and `E: Send`. UI-only resources such as textures should be created on the foreground after loading `Send` bytes.
 - Awaiting a host-runtime future on the foreground executor is fine only when the future is cheap to poll (for example a `JoinHandle`); do not poll I/O futures that require the host runtime's context on a bare worker thread.
+
+[tasks-guide]: tasks.md
+[renderer-api]: https://github.com/void-cat-0/mue/blob/main/mue-macroquad/src/lib.rs

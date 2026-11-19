@@ -3,7 +3,7 @@
 //! Use [`component`] to compose styleable builders, [`node`] to declare a
 //! terminal node, and [`style!`](macro@style) to construct typed styles.
 //! The generated code resolves the renderer through the consuming crate's
-//! `mue-macroquad` or `mue-components` dependency.
+//! `mue`, `mue-macroquad`, or `mue-components` dependency.
 
 mod component;
 
