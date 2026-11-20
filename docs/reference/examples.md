@@ -15,6 +15,7 @@ The standalone examples package is excluded from the root workspace and its Rust
 - `portal`: a concrete external renderer, texture composition, frame-start chart input, and a modal pause UI; its input and coordinate helpers are local to the example;
 - [`input-timing`](https://github.com/void-cat-0/mue/blob/main/examples/input-timing/README.md): a 1–2 FPS visual comparison of pointer hit-testing against the last displayed Node tree versus the next layout; run with `cargo run --manifest-path examples/Cargo.toml --example input-timing --offline -- --fps 1`;
 - `nodes`, `basics`, `color`, `gestures`, `pages`, and `tab`: layout, input, graphics, and same-level page selection.
+- `vulkan-shaders`: exercises fixed SPIR-V UI and retained pipelines, runtime GLSL materials, screen snapshots, and pixel-checks Scene crossfade on desktop Vulkan; regenerate/check checked-in binaries with `cargo run --manifest-path examples/tools/Cargo.toml --features vulkan --bin precompile-vulkan-shaders [-- --check]`.
 
 Run one with `cargo run --manifest-path examples/Cargo.toml --example style-example`, `cargo run --manifest-path examples/Cargo.toml --example theme`, or `cargo run --manifest-path examples/Cargo.toml --example portal`. The theme example uses the optional token store (`Theme`, `TokenSet`, `token_set!`, `token!`, and `provide_theme`); [application tokens and context][themes-guide] explains the store and plain `Prop` / `map` / `provide` bindings.
 

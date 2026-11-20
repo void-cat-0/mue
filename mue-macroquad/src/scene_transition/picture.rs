@@ -356,36 +356,80 @@ fn blit(texture: &Texture2D, viewport: Rect) {
     );
 }
 
-fn require_opengl() -> TransitionResult<()> {
-    if unsafe { get_internal_gl() }.quad_context.info().backend != Backend::OpenGl {
+fn require_picture_backend() -> TransitionResult<()> {
+    let backend = unsafe { get_internal_gl() }.quad_context.info().backend;
+    let supported = match backend {
+        Backend::OpenGl => true,
+        #[cfg(all(
+            feature = "vulkan",
+            any(windows, all(target_os = "linux", not(target_env = "ohos")))
+        ))]
+        Backend::Vulkan => true,
+        _ => false,
+    };
+    if !supported {
         return Err(TransitionError::UnsupportedBackend);
     }
     Ok(())
 }
 
+fn picture_shader(fragment: PictureFragment) -> ShaderSource<'static> {
+    #[cfg(all(
+        feature = "vulkan",
+        any(windows, all(target_os = "linux", not(target_env = "ohos")))
+    ))]
+    if unsafe { get_internal_gl() }.quad_context.info().backend == Backend::Vulkan {
+        let (vertex, fragment) = match fragment {
+            PictureFragment::Copy => (
+                include_bytes!("shaders/vulkan/spirv/picture-copy.vert.spv").as_slice(),
+                include_bytes!("shaders/vulkan/spirv/picture-copy.frag.spv").as_slice(),
+            ),
+            PictureFragment::Opaque => (
+                include_bytes!("shaders/vulkan/spirv/picture-opaque.vert.spv").as_slice(),
+                include_bytes!("shaders/vulkan/spirv/picture-opaque.frag.spv").as_slice(),
+            ),
+            PictureFragment::Crossfade => (
+                include_bytes!("shaders/vulkan/spirv/picture-crossfade.vert.spv").as_slice(),
+                include_bytes!("shaders/vulkan/spirv/picture-crossfade.frag.spv").as_slice(),
+            ),
+        };
+        // Each pair was compiled together with the corresponding QuadGl material layout.
+        return unsafe { ShaderSource::spirv(vertex, fragment, &[], false) };
+    }
+    ShaderSource::Glsl {
+        vertex: VERTEX,
+        fragment: match fragment {
+            PictureFragment::Copy => COPY_FRAGMENT,
+            PictureFragment::Opaque => OPAQUE_FRAGMENT,
+            PictureFragment::Crossfade => CROSSFADE_FRAGMENT,
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PictureFragment {
+    Copy,
+    Opaque,
+    Crossfade,
+}
+
 fn make_copy_material() -> TransitionResult<Material> {
-    require_opengl()?;
+    require_picture_backend()?;
     // Overwrite RGBA and force alpha=1: default alpha blending would multiply
     // cached alpha again and darken later copies/frozen interrupted composites.
     load_material(
-        ShaderSource::Glsl {
-            vertex: VERTEX,
-            fragment: COPY_FRAGMENT,
-        },
+        picture_shader(PictureFragment::Copy),
         MaterialParams::default(),
     )
     .map_err(|source| TransitionError::Material {
-        operation: "compile Scene picture copy material",
+        operation: "load Scene picture copy material",
         source,
     })
 }
 
 fn make_opaque_material() -> TransitionResult<Material> {
     load_material(
-        ShaderSource::Glsl {
-            vertex: VERTEX,
-            fragment: "#version 100\nprecision mediump float;\nvoid main() { gl_FragColor = vec4(1.0); }",
-        },
+        picture_shader(PictureFragment::Opaque),
         MaterialParams {
             pipeline_params: PipelineParams {
                 // Preserve RGB with blending, not a color-write mask: GL clears
@@ -397,16 +441,13 @@ fn make_opaque_material() -> TransitionResult<Material> {
             ..Default::default()
         },
     )
-    .map_err(|source| TransitionError::Material { operation: "compile Scene picture opaque material", source })
+    .map_err(|source| TransitionError::Material { operation: "load Scene picture opaque material", source })
 }
 
 fn make_crossfade_material() -> TransitionResult<Material> {
-    require_opengl()?;
+    require_picture_backend()?;
     load_material(
-        ShaderSource::Glsl {
-            vertex: VERTEX,
-            fragment: CROSSFADE_FRAGMENT,
-        },
+        picture_shader(PictureFragment::Crossfade),
         MaterialParams {
             uniforms: vec![UniformDesc::new("Progress", UniformType::Float1)],
             textures: vec!["From".to_owned()],
@@ -414,7 +455,7 @@ fn make_crossfade_material() -> TransitionResult<Material> {
         },
     )
     .map_err(|source| TransitionError::Material {
-        operation: "compile Scene crossfade material",
+        operation: "load Scene crossfade material",
         source,
     })
 }
@@ -426,36 +467,7 @@ fn crossfade(material: &Material, frame: TransitionFrame, pictures: ScenePicture
     blit(pictures.to, frame.viewport);
 }
 
-const VERTEX: &str = r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-uniform mat4 Model;
-uniform mat4 Projection;
-varying mediump vec2 uv;
-void main() {
-    gl_Position = Projection * Model * vec4(position, 1.0);
-    uv = texcoord;
-}
-"#;
-
-const COPY_FRAGMENT: &str = r#"#version 100
-precision mediump float;
-uniform sampler2D Texture;
-varying mediump vec2 uv;
-void main() {
-    gl_FragColor = vec4(texture2D(Texture, uv).rgb, 1.0);
-}
-"#;
-
-const CROSSFADE_FRAGMENT: &str = r#"#version 100
-precision mediump float;
-uniform sampler2D Texture;
-uniform sampler2D From;
-uniform float Progress;
-varying mediump vec2 uv;
-void main() {
-    vec3 from = texture2D(From, uv).rgb;
-    vec3 to = texture2D(Texture, uv).rgb;
-    gl_FragColor = vec4(mix(from, to, Progress), 1.0);
-}
-"#;
+const VERTEX: &str = include_str!("shaders/vulkan/picture.vert.glsl");
+const OPAQUE_FRAGMENT: &str = include_str!("shaders/vulkan/picture-opaque.frag.glsl");
+const COPY_FRAGMENT: &str = include_str!("shaders/vulkan/picture-copy.frag.glsl");
+const CROSSFADE_FRAGMENT: &str = include_str!("shaders/vulkan/picture-crossfade.frag.glsl");

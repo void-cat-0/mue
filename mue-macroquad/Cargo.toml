@@ -6,6 +6,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+vulkan = ["macroquad/vulkan"]
+
 [lib]
 doctest = true
 

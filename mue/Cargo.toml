@@ -7,6 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
+vulkan = ["macroquad/vulkan", "mue-macroquad/vulkan"]
 i18n = ["dep:mue-i18n"]
 
 [dependencies]

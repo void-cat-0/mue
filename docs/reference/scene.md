@@ -338,7 +338,7 @@ The consumer submits roots with `RootInput::None` until the actual current pictu
 
 Host suspension freezes effect time; the first restoration delta is zero. Resize rebuilds picture buffers without restarting the clock or resetting input/Scene state; if an old source is gone, composites use the live picture for both inputs.
 
-GPU composition currently requires OpenGL/default-camera/full origin-zero window rendering, not arbitrary camera/pass capture. Overlay effects allocate no picture targets.
+GPU composition requires OpenGL or Vulkan plus default-camera/full origin-zero window rendering, not arbitrary camera/pass capture. Overlay effects allocate no picture targets.
 
 See [the transition tutorial][scene-transitions-guide] and the examples for exact timing, interruption, input and ownership rules.
 
@@ -497,7 +497,7 @@ Multiple requests selected while suspended retain that same frozen source until 
 
 Resize/DPI changes discard invalid pictures, **not** the phase clock or Scene/input state. If the departed Scene can no longer be captured, `from` and `to` both reference the freshly rendered live picture for the remainder; timing continues. This is a defined fallback, not an old image stretched into a mismatched viewport or a restart.
 
-Current composite restrictions: **OpenGL**, full origin-zero logical window viewport, default-camera host entry, no active raw miniquad pass, balanced model matrices and complete opaque pictures. All Scene/custom/UI rendering must retain App's target camera until returning; do not call `set_default_camera` or start a raw output pass inside a captured Scene.
+Current composite restrictions: **OpenGL or Vulkan**, full origin-zero logical window viewport, default-camera host entry, no active raw miniquad pass, balanced model matrices and complete opaque pictures. All Scene/custom/UI rendering must retain App's target camera until returning; do not call `set_default_camera` or start a raw output pass inside a captured Scene.
 
 Render-target texture copies require `flip_y: true`. Custom shader/resource setup belongs in the callback, lazily on the render thread.
 

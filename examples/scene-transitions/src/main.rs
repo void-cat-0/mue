@@ -12,6 +12,11 @@ fn window_config() -> Conf {
         window_title: "mue - Scene transitions (1/2/3, Esc, Q)".into(),
         window_width: 640,
         window_height: 400,
+        #[cfg(feature = "vulkan")]
+        platform: macroquad::miniquad::conf::Platform {
+            rendering_backend: macroquad::miniquad::conf::RenderingBackend::Vulkan,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

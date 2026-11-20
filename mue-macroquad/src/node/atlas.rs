@@ -4,6 +4,8 @@ use cosmic_text::{CacheKey, FontSystem, Placement, SwashCache, SwashContent};
 use guillotiere::euclid::{Size2D, UnknownUnit, size2};
 use guillotiere::{AllocId, AtlasAllocator};
 use macroquad::texture::{FilterMode, Image, Texture2D};
+use miniquad::TextureUpdateRegion;
+use smallvec::SmallVec;
 
 use crate::{math::Rect, shader::SharedTexture};
 
@@ -30,7 +32,7 @@ pub struct GlyphAtlasStats {
     pub rejected_exhausted: u64,
     /// Glyphs rejected because swash returned unexpected raster data.
     pub rejected_raster: u64,
-    /// Texture uploads issued (one per coalesced rectangle).
+    /// Rectangles uploaded after coalescing. One backend batch may upload several.
     pub uploads: u64,
     /// Pixels sent to the GPU by those uploads.
     pub uploaded_pixels: u64,
@@ -58,6 +60,18 @@ struct DirtyRect {
 }
 
 impl DirtyRect {
+    fn area(self) -> usize {
+        self.w as usize * self.h as usize
+    }
+
+    fn append_pixels(self, page: &[u8], side: usize, bytes: &mut Vec<u8>) {
+        let row_bytes = self.w as usize * 4;
+        for row in self.y as usize..(self.y + self.h) as usize {
+            let start = (row * side + self.x as usize) * 4;
+            bytes.extend_from_slice(&page[start..start + row_bytes]);
+        }
+    }
+
     fn union(self, x: i32, y: i32, w: i32, h: i32) -> Self {
         let x1 = self.x.min(x);
         let y1 = self.y.min(y);
@@ -76,10 +90,8 @@ struct Page {
     side: usize,
     allocator: AtlasAllocator,
     texture: Option<SharedTexture>,
-    /// CPU mirror of the page. Every write is staged here and flushed by
-    /// end_pass for the current text batch, so adjacent glyphs pay one
-    /// texture upload per page instead of one per glyph. The mirror also keeps
-    /// untouched texels correct inside a coalesced upload.
+    /// CPU mirror flushed at the end of a text batch. It keeps untouched
+    /// texels correct inside a coalesced upload.
     staging: Option<Vec<u8>>,
     /// Rectangles written since the last flush.
     pending: Vec<DirtyRect>,
@@ -122,12 +134,8 @@ impl Page {
         self.pending.push(DirtyRect { x, y, w, h });
     }
 
-    /// Flushes staged writes.
-    ///
-    /// Adjacent glyphs are coalesced into one bounding-box upload, but a
-    /// scattered set would make that box cover most of the page, so the flush
-    /// falls back to one upload per rectangle when the box is much larger than
-    /// the pixels that actually changed.
+    /// Uploads the dirty rectangles together. Nearby writes can share a
+    /// bounding box, while sparse writes keep their exact rectangles.
     fn upload(&mut self, stats: &mut GlyphAtlasStats) {
         if self.pending.is_empty() {
             return;
@@ -136,52 +144,41 @@ impl Page {
             self.pending.clear();
             return;
         };
-        let stride = self.side * 4;
         let mut union = self.pending[0];
-        let mut changed = 0usize;
+        let mut changed = 0;
         for rect in &self.pending {
             union = union.union(rect.x, rect.y, rect.w, rect.h);
-            changed += rect.w as usize * rect.h as usize;
+            changed += rect.area();
         }
-        let boxed = union.w as usize * union.h as usize;
-        if boxed <= changed.saturating_mul(4) {
-            stats.uploads += 1;
-            stats.uploaded_pixels += boxed as u64;
-            upload_rect(texture, staging, stride, union);
+        let (rects, pixels) = if union.area() <= changed.saturating_mul(4) {
+            (std::slice::from_ref(&union), union.area())
         } else {
-            stats.uploads += self.pending.len() as u64;
-            for rect in &self.pending {
-                stats.uploaded_pixels += rect.w as u64 * rect.h as u64;
-                upload_rect(texture, staging, stride, *rect);
-            }
+            (self.pending.as_slice(), changed)
+        };
+        let mut bytes = Vec::with_capacity(pixels * 4);
+        for rect in rects {
+            rect.append_pixels(staging, self.side, &mut bytes);
         }
+        let mut remaining = bytes.as_slice();
+        let regions: SmallVec<[_; 1]> = rects
+            .iter()
+            .map(|rect| {
+                let (bytes, tail) = remaining.split_at(rect.area() * 4);
+                remaining = tail;
+                TextureUpdateRegion {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.w,
+                    height: rect.h,
+                    bytes,
+                }
+            })
+            .collect();
+        texture.update_regions(&regions);
+        stats.uploads += regions.len() as u64;
+        stats.uploaded_pixels += pixels as u64;
         self.pending.clear();
     }
-}
-
-/// Uploads one rectangle of the CPU mirror to the page texture.
-fn upload_rect(texture: &SharedTexture, staging: &[u8], stride: usize, rect: DirtyRect) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let w = rect.w as usize;
-    let h = rect.h as usize;
-    let mut bytes = Vec::with_capacity(w * h * 4);
-    for row in 0..h {
-        let start = (rect.y as usize + row) * stride + rect.x as usize * 4;
-        bytes.extend_from_slice(&staging[start..start + w * 4]);
-    }
-    texture.update_part(
-        &Image {
-            bytes,
-            width: rect.w as u16,
-            height: rect.h as u16,
-        },
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-    );
 }
 
 /// A packed glyph and its location in the atlas.

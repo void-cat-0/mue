@@ -139,7 +139,7 @@ fn reveal_clearing(app: &mut App, clearing: impl Scene + 'static) {
 </figure>
 </div>
 
-Call `reveal_clearing` from the host while the path is the active Scene. Keep calling `App::frame()` and `next_frame().await`. The request queues the switch. Mue captures the path, installs the clearing, and blends from the capture into the live clearing. The outgoing Scene can leave the stack while its pixels are still visible. Picture effects require OpenGL and the default full-window target and camera.
+Call `reveal_clearing` from the host while the path is the active Scene. Keep calling `App::frame()` and `next_frame().await`. The request queues the switch. Mue captures the path, installs the clearing, and blends from the capture into the live clearing. The outgoing Scene can leave the stack while its pixels are still visible. Picture effects require OpenGL or Vulkan and the default full-window target and camera.
 
 ### Choose the switch point
 

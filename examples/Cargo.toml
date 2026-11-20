@@ -7,14 +7,18 @@ publish = false
 
 [workspace]
 resolver = "2"
+members = ["tools"]
 
 [profile.release]
 debug = true
 
+[features]
+vulkan = ["mue/vulkan"]
+
 [dependencies]
 cosmic-text = "0.18.2"
-macroquad = { git = "https://github.com/void-cat-0/macroquad", default-features = false }
-miniquad = { git = "https://github.com/void-cat-0/miniquad" }
+macroquad = { path = "../../macroquad", default-features = false }
+miniquad = { path = "../../miniquad" }
 mue = { path = "../mue" }
 mue-components = { path = "../mue-components" }
 mue-core = { path = "../mue-core" }
@@ -142,6 +146,11 @@ doc = false
 [[example]]
 name = "tokens"
 path = "tokens/src/main.rs"
+doc = false
+
+[[example]]
+name = "vulkan-shaders"
+path = "vulkan-shaders/src/main.rs"
 doc = false
 
 # Android's miniquad host loads these five cdylibs directly.

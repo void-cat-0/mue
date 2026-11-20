@@ -1,0 +1,16 @@
+[package]
+name = "mue-vulkan-shaders"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+vulkan = ["dep:miniquad", "miniquad/vulkan"]
+
+[dependencies]
+miniquad = { path = "../../../miniquad", optional = true }
+
+[[bin]]
+name = "precompile-vulkan-shaders"
+path = "precompile_vulkan_shaders.rs"
+required-features = ["vulkan"]

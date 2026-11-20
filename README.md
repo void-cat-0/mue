@@ -49,6 +49,13 @@ cargo run --manifest-path examples/Cargo.toml --example basics
 cargo run --manifest-path examples/Cargo.toml --example scenes
 cargo run --manifest-path examples/Cargo.toml --example scene-flow
 cargo run --manifest-path examples/Cargo.toml --example scene-transitions
+# Run the fixed-shader Vulkan smoke test:
+cargo run --manifest-path examples/Cargo.toml --features vulkan --example vulkan-shaders
+
+# Regenerate checked-in SPIR-V assets from the fixed GLSL sources:
+cargo run --manifest-path examples/tools/Cargo.toml --features vulkan --bin precompile-vulkan-shaders
+# Check that the committed binaries are reproducible:
+cargo run --manifest-path examples/tools/Cargo.toml --features vulkan --bin precompile-vulkan-shaders -- --check
 cargo run --manifest-path examples/Cargo.toml --example song-transition
 ```
 

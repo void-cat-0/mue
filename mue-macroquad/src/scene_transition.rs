@@ -3,8 +3,8 @@
 //! Constructors do not touch macroquad or allocate GPU resources. An overlay is
 //! drawn over the normally rendered Scene and needs no pictures. A composite
 //! receives complete, opaque source/live pictures and draws into a third target.
-//! Picture capture/composition currently requires the OpenGL backend; overlays
-//! do not impose that restriction.
+//! Picture capture/composition supports OpenGL and Vulkan; overlays do not
+//! impose a picture-backend restriction.
 //!
 //! Picture passes use the whole logical, origin-zero window. Overlays impose no
 //! picture-viewport restriction and start in the default camera. Composite and
@@ -29,7 +29,7 @@
 //! updates. These effects are presentation, not lifecycle callbacks or raw-input
 //! filters.
 //!
-//! A selected composite captures pictures lazily and currently requires OpenGL.
+//! A selected composite captures pictures lazily and requires OpenGL or Vulkan.
 //! Overlays allocate no pictures and have no picture-backend restriction. Keep
 //! callback resources owned for the full effect lifetime; a departing Scene is
 //! not retained by the transition. See [`SceneTransition::composite`] and
@@ -117,7 +117,7 @@ enum Draw {
 
 impl SceneTransition {
     /// GPU crossfade of the old complete picture and the current live picture.
-    /// Shader compilation is deferred until the first crossfade draw and cached by App.
+    /// Vulkan loads its precompiled shader; OpenGL compiles GLSL on the first draw.
     pub fn crossfade(curve: Transition) -> Self {
         Self {
             timing: TransitionTiming::AfterSwitch(curve),

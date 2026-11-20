@@ -61,7 +61,7 @@ pub enum TransitionError {
     #[error("Scene picture target dimensions overflow")]
     PictureDimensionsOverflow,
     #[error(
-        "Scene picture transitions currently require OpenGL; Metal is unsupported (use an overlay)"
+        "Scene picture transitions require OpenGL or Vulkan; Metal is unsupported (use an overlay)"
     )]
     UnsupportedBackend,
     #[error("{operation}: {source}")]

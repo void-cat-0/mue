@@ -11,6 +11,11 @@ fn main() {
             window_title: "mue - glyph atlas stress".into(),
             window_width: 900,
             window_height: 700,
+            #[cfg(feature = "vulkan")]
+            platform: macroquad::miniquad::conf::Platform {
+                rendering_backend: macroquad::miniquad::conf::RenderingBackend::Vulkan,
+                ..Default::default()
+            },
             ..Default::default()
         },
         atlas::run(options),

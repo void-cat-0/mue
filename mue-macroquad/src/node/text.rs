@@ -134,14 +134,12 @@ impl FontState {
 ///
 /// Queried once, on the rendering thread, when the first glyph needs a page.
 fn device_page_size() -> i32 {
-    let mut size = DEFAULT_PAGE_SIZE;
-    unsafe {
-        let mut queried = 0;
-        miniquad::gl::glGetIntegerv(miniquad::gl::GL_MAX_TEXTURE_SIZE, &mut queried);
-        if queried > 0 {
-            size = size.min(queried);
-        }
-    }
+    let size = unsafe { macroquad::window::get_internal_gl() }
+        .quad_context
+        .max_texture_size()
+        .and_then(|limit| i32::try_from(limit).ok())
+        .filter(|&limit| limit > 0)
+        .map_or(DEFAULT_PAGE_SIZE, |limit| DEFAULT_PAGE_SIZE.min(limit));
     size
 }
 
