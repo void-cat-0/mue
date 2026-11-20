@@ -1,6 +1,6 @@
-//! Pixel checks for fixed SPIR-V and runtime GLSL shader paths.
+//! Pixel checks for fixed SPIR-V, runtime GLSL, and texture region uploads.
 use macroquad::{
-    miniquad::{UniformDesc, UniformType},
+    miniquad::{TextureUpdateRegion, UniformDesc, UniformType},
     prelude::*,
     retained::{self, RetainedMaterial, RetainedMesh, RetainedVertex},
     ui::root_ui,
@@ -43,8 +43,6 @@ fn check_pixel(label: &str, actual: Color, expected: Color) {
 }
 
 fn check_texture_regions() {
-    use miniquad::TextureUpdateRegion;
-
     let texture = Texture2D::from_image(&Image::gen_image_color(8, 8, BLACK));
     let red = [255, 0, 0, 255].repeat(2);
     let green = [0, 255, 0, 255].repeat(6);
@@ -101,6 +99,69 @@ fn check_texture_regions() {
     check_pixel("first overlapping region", image.get_pixel(2, 2), RED);
     check_pixel("last region wins", image.get_pixel(3, 2), BLUE);
     check_pixel("previous update preserved", image.get_pixel(6, 6), GREEN);
+}
+
+fn check_ordered_texture_regions() {
+    fn texel(x: i32, bytes: &[u8; 4]) -> TextureUpdateRegion<'_> {
+        TextureUpdateRegion {
+            x,
+            y: 0,
+            width: 1,
+            height: 1,
+            bytes,
+        }
+    }
+
+    let source = Texture2D::from_image(&Image::gen_image_color(2, 1, RED));
+    source.set_filter(FilterMode::Nearest);
+    let target = render_target(8, 1);
+    let camera = Camera2D {
+        render_target: Some(target.clone()),
+        ..Camera2D::from_display_rect(Rect::new(0., 0., 8., 1.))
+    };
+    let vertices = [[0., 0.], [2., 0.], [2., 1.], [0., 1.]].map(|position| RetainedVertex {
+        position,
+        texcoord: [0.25, 0.5], // Center of the first source texel.
+        color: [1.; 4],
+    });
+    let mesh = [
+        RetainedMesh::new(&vertices, &[0, 1, 2, 0, 2, 3], source.raw_miniquad_id())
+            .expect("retained textured mesh"),
+    ];
+
+    set_camera(&camera);
+    clear_background(BLACK);
+    draw_texture(&source, 0., 0., WHITE);
+    // Immediate draws must be flushed to order them before the upload.
+    unsafe { get_internal_gl().flush() };
+    let green = [0, 255, 0, 255];
+    let mut upload_bytes = green;
+    source.update_regions(&[texel(0, &upload_bytes), texel(1, &[0, 0, 255, 255])]);
+    // The first upload must no longer depend on the caller's bytes.
+    upload_bytes = [255, 0, 0, 255];
+    draw_texture(&source, 2., 0., WHITE);
+
+    let draw_retained = |x| {
+        retained::draw_meshes_ranges(&mesh, &[], Mat4::from_translation(vec3(x, 0., 0.)), 1.);
+    };
+    draw_retained(4.);
+    // Leave the retained pass open: the Vulkan upload must end it.
+    source.update_regions(&[texel(0, &upload_bytes)]);
+    draw_retained(6.);
+    set_default_camera();
+    let rendered = target.texture.get_texture_data();
+
+    // The synchronous readback starts a fresh Vulkan command segment. No draw
+    // or clear should be needed for another upload to be visible to a readback.
+    source.update_regions(&[texel(1, &green)]);
+    let updated = source.get_texture_data();
+
+    check_pixel("immediate before upload", rendered.get_pixel(0, 0), RED);
+    check_pixel("immediate after upload", rendered.get_pixel(2, 0), GREEN);
+    check_pixel("second uploaded region", rendered.get_pixel(3, 0), BLUE);
+    check_pixel("retained before upload", rendered.get_pixel(4, 0), GREEN);
+    check_pixel("retained after upload", rendered.get_pixel(6, 0), RED);
+    check_pixel("upload-only segment", updated.get_pixel(1, 0), GREEN);
 }
 
 fn check_offscreen_shaders() {
@@ -184,6 +245,7 @@ async fn run() {
     );
     next_frame().await;
     check_texture_regions();
+    check_ordered_texture_regions();
     check_offscreen_shaders();
     let mut app = App::with_scene(SolidScene(RED));
     app.try_frame().expect("source scene");
