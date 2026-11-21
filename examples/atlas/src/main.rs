@@ -1,5 +1,7 @@
 #[path = "lib.rs"]
 mod atlas;
+#[path = "../../shared/render_backend.rs"]
+mod render_backend;
 
 fn main() {
     let options = atlas::options();
@@ -11,9 +13,8 @@ fn main() {
             window_title: "mue - glyph atlas stress".into(),
             window_width: 900,
             window_height: 700,
-            #[cfg(feature = "vulkan")]
-            platform: macroquad::miniquad::conf::Platform {
-                rendering_backend: macroquad::miniquad::conf::RenderingBackend::Vulkan,
+            platform: miniquad::conf::Platform {
+                rendering_backend: render_backend::preferred(),
                 ..Default::default()
             },
             ..Default::default()

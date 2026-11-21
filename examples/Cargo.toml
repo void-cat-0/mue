@@ -13,7 +13,7 @@ members = ["tools"]
 debug = true
 
 [features]
-vulkan = ["mue/vulkan"]
+vulkan = ["mue/vulkan", "dep:ash"]
 
 [dependencies]
 cosmic-text = "0.18.2"
@@ -27,6 +27,9 @@ mue-macroquad = { path = "../mue-macroquad" }
 mue-macros = { path = "../mue-macros" }
 taffy = "0.9.2"
 thiserror = "2.0"
+
+[target.'cfg(any(windows, all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+ash = { version = "0.37", default-features = false, features = ["loaded"], optional = true }
 
 [[example]]
 name = "animation"

@@ -1,5 +1,7 @@
 #[path = "lib.rs"]
 mod playground;
+#[path = "../../shared/render_backend.rs"]
+mod render_backend;
 
 use playground::run;
 
@@ -9,9 +11,8 @@ fn main() {
             window_title: "mue - playground".into(),
             window_width: 1120,
             window_height: 800,
-            #[cfg(feature = "vulkan")]
-            platform: macroquad::miniquad::conf::Platform {
-                rendering_backend: macroquad::miniquad::conf::RenderingBackend::Vulkan,
+            platform: miniquad::conf::Platform {
+                rendering_backend: render_backend::preferred(),
                 ..Default::default()
             },
             ..Default::default()

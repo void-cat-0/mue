@@ -2,6 +2,8 @@
 mod color_scene;
 mod effects;
 mod input;
+#[path = "../../shared/render_backend.rs"]
+mod render_backend;
 
 use color_scene::ColorScene;
 use macroquad::{prelude::Conf, window::next_frame};
@@ -12,9 +14,8 @@ fn window_config() -> Conf {
         window_title: "mue - Scene transitions (1/2/3, Esc, Q)".into(),
         window_width: 640,
         window_height: 400,
-        #[cfg(feature = "vulkan")]
-        platform: macroquad::miniquad::conf::Platform {
-            rendering_backend: macroquad::miniquad::conf::RenderingBackend::Vulkan,
+        platform: miniquad::conf::Platform {
+            rendering_backend: render_backend::preferred(),
             ..Default::default()
         },
         ..Default::default()
