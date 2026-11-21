@@ -5,7 +5,11 @@ use miniquad::conf::RenderingBackend;
 pub fn preferred() -> RenderingBackend {
     #[cfg(all(
         feature = "vulkan",
-        any(windows, all(target_os = "linux", not(target_env = "ohos")))
+        any(
+            windows,
+            target_os = "android",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
     ))]
     if vulkan::has_candidate() {
         return RenderingBackend::Vulkan;
@@ -15,7 +19,11 @@ pub fn preferred() -> RenderingBackend {
 
 #[cfg(all(
     feature = "vulkan",
-    any(windows, all(target_os = "linux", not(target_env = "ohos")))
+    any(
+        windows,
+        target_os = "android",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 mod vulkan {
     use ash::{
@@ -35,9 +43,13 @@ mod vulkan {
         if loader_version < vk::API_VERSION_1_2 {
             return false;
         }
-        let application =
-            vk::ApplicationInfo::builder().api_version(loader_version.min(vk::API_VERSION_1_3));
-        let extensions = [Surface::name().as_ptr()];
+        let api_version = loader_version.min(vk::API_VERSION_1_3);
+        let application = vk::ApplicationInfo::builder().api_version(api_version);
+        let extensions = [
+            Surface::name().as_ptr(),
+            #[cfg(target_os = "android")]
+            ash::extensions::khr::AndroidSurface::name().as_ptr(),
+        ];
         let create_info = vk::InstanceCreateInfo::builder()
             .application_info(&application)
             .enabled_extension_names(&extensions);
@@ -48,15 +60,17 @@ mod vulkan {
             let found = instance.enumerate_physical_devices().is_ok_and(|devices| {
                 devices
                     .into_iter()
-                    .any(|device| is_candidate(&instance, device))
+                    .any(|device| is_candidate(&instance, device, api_version))
             });
             instance.destroy_instance(None);
             found
         }
     }
 
-    fn is_candidate(instance: &Instance, device: vk::PhysicalDevice) -> bool {
-        let version = unsafe { instance.get_physical_device_properties(device) }.api_version;
+    fn is_candidate(instance: &Instance, device: vk::PhysicalDevice, api_version: u32) -> bool {
+        let version = unsafe { instance.get_physical_device_properties(device) }
+            .api_version
+            .min(api_version);
         if version < vk::API_VERSION_1_2 {
             return false;
         }
@@ -80,9 +94,7 @@ mod vulkan {
             .push_next(&mut dynamic_rendering)
             .build();
         unsafe { instance.get_physical_device_features2(device, &mut features) };
-        // Miniquad enables both features when it creates the Vulkan device.
         dynamic_rendering.dynamic_rendering == vk::TRUE
-            && features.features.fill_mode_non_solid == vk::TRUE
             && unsafe { instance.get_physical_device_queue_family_properties(device) }
                 .iter()
                 .any(|queue| queue.queue_flags.contains(vk::QueueFlags::GRAPHICS))

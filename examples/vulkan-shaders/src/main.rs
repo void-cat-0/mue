@@ -229,7 +229,11 @@ impl Scene for SolidScene {
 async fn run() {
     #[cfg(all(
         feature = "vulkan",
-        any(windows, all(target_os = "linux", not(target_env = "ohos")))
+        any(
+            windows,
+            target_os = "android",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
     ))]
     assert_eq!(
         unsafe { get_internal_gl() }.quad_context.info().backend,
@@ -259,23 +263,41 @@ async fn run() {
         if let Some(frame) = app.transition_state()
             && (0.2..0.8).contains(&frame.linear_progress)
         {
-            let image = get_screen_data();
-            let center = image.get_pixel(u32::from(image.width / 2), u32::from(image.height / 2));
-            check_pixel(
-                "Scene crossfade",
-                center,
-                Color::new(1. - frame.progress, 0., frame.progress, 1.),
-            );
+            // Android swapchains need not support transfer-source blits. Exercise
+            // the real Scene transition there without requiring window readback.
+            #[cfg(not(target_os = "android"))]
+            {
+                let image = get_screen_data();
+                let center =
+                    image.get_pixel(u32::from(image.width / 2), u32::from(image.height / 2));
+                check_pixel(
+                    "Scene crossfade",
+                    center,
+                    Color::new(1. - frame.progress, 0., frame.progress, 1.),
+                );
+            }
             next_frame().await;
-            println!("Shader pixel checks passed");
-            return;
+            #[cfg(not(target_os = "android"))]
+            {
+                println!("Shader pixel checks passed");
+                return;
+            }
+            #[cfg(target_os = "android")]
+            {
+                miniquad::info!("Shader pixel checks passed (offscreen); Scene crossfade rendered");
+                // Keep presenting so the same run can test resize and resume.
+                loop {
+                    app.try_frame().expect("Scene frame after shader checks");
+                    next_frame().await;
+                }
+            }
         }
         next_frame().await;
     }
     panic!("did not render an intermediate crossfade frame");
 }
 
-fn main() {
+pub(crate) fn main() {
     macroquad::Window::from_config(
         Conf {
             window_title: "mue - Shader smoke".into(),
@@ -284,7 +306,11 @@ fn main() {
             window_resizable: false,
             #[cfg(all(
                 feature = "vulkan",
-                any(windows, all(target_os = "linux", not(target_env = "ohos")))
+                any(
+                    windows,
+                    target_os = "android",
+                    all(target_os = "linux", not(target_env = "ohos"))
+                )
             ))]
             platform: miniquad::conf::Platform {
                 rendering_backend: miniquad::conf::RenderingBackend::Vulkan,

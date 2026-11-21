@@ -9,6 +9,9 @@ mod halftone;
 mod input;
 mod layout;
 mod motion;
+#[cfg(target_os = "android")]
+#[path = "../../shared/render_backend.rs"]
+mod render_backend;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 mod scrolling;
@@ -83,6 +86,10 @@ pub extern "C" fn quad_main() {
     macroquad::Window::from_config(
         macroquad::window::Conf {
             window_title: "mue - playground".into(),
+            platform: miniquad::conf::Platform {
+                rendering_backend: render_backend::preferred(),
+                ..Default::default()
+            },
             ..Default::default()
         },
         run(),

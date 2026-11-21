@@ -28,7 +28,7 @@ mue-macros = { path = "../mue-macros" }
 taffy = "0.9.2"
 thiserror = "2.0"
 
-[target.'cfg(any(windows, all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+[target.'cfg(any(windows, target_os = "android", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 ash = { version = "0.37", default-features = false, features = ["loaded"], optional = true }
 
 [[example]]
@@ -156,7 +156,7 @@ name = "vulkan-shaders"
 path = "vulkan-shaders/src/main.rs"
 doc = false
 
-# Android's miniquad host loads these five cdylibs directly.
+# Android's miniquad host loads these cdylibs directly.
 [[example]]
 name = "atlas-android"
 path = "atlas/src/lib.rs"
@@ -189,5 +189,13 @@ test = false
 name = "portal-android"
 path = "portal/src/lib.rs"
 crate-type = ["cdylib"]
+doc = false
+test = false
+
+[[example]]
+name = "vulkan-shaders-android"
+path = "vulkan-shaders/src/lib.rs"
+crate-type = ["cdylib"]
+required-features = ["vulkan"]
 doc = false
 test = false

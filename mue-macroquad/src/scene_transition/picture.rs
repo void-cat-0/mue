@@ -362,7 +362,11 @@ fn require_picture_backend() -> TransitionResult<()> {
         Backend::OpenGl => true,
         #[cfg(all(
             feature = "vulkan",
-            any(windows, all(target_os = "linux", not(target_env = "ohos")))
+            any(
+                windows,
+                target_os = "android",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         Backend::Vulkan => true,
         _ => false,
@@ -376,7 +380,11 @@ fn require_picture_backend() -> TransitionResult<()> {
 fn picture_shader(fragment: PictureFragment) -> ShaderSource<'static> {
     #[cfg(all(
         feature = "vulkan",
-        any(windows, all(target_os = "linux", not(target_env = "ohos")))
+        any(
+            windows,
+            target_os = "android",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
     ))]
     if unsafe { get_internal_gl() }.quad_context.info().backend == Backend::Vulkan {
         let (vertex, fragment) = match fragment {

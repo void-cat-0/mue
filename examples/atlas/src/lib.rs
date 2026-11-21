@@ -9,6 +9,9 @@
 //! the 8-page/32MiB budget without overload.
 use mue_components::*;
 
+#[cfg(target_os = "android")]
+#[path = "../../shared/render_backend.rs"]
+mod render_backend;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 
@@ -149,6 +152,10 @@ pub extern "C" fn quad_main() {
     macroquad::Window::from_config(
         macroquad::window::Conf {
             window_title: "mue - glyph atlas stress".into(),
+            platform: miniquad::conf::Platform {
+                rendering_backend: render_backend::preferred(),
+                ..Default::default()
+            },
             ..Default::default()
         },
         run(Options::default()),
