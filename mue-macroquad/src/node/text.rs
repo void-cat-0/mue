@@ -93,10 +93,6 @@ impl FontState {
         }
     }
 
-    fn atlas_stats(&self) -> GlyphAtlasStats {
-        self.glyph_atlas_stats().unwrap_or_default()
-    }
-
     /// Counter snapshot of the glyph atlas, or `None` before any text renders.
     pub(crate) fn glyph_atlas_stats(&self) -> Option<GlyphAtlasStats> {
         self.font_atlas.as_ref().map(Atlas::stats)
@@ -379,15 +375,24 @@ impl RetainedTextCache {
         if !same_content {
             self.glyph_keys = glyph_keys(buffer, content.style.max_lines);
         }
-        let before = fonts.atlas_stats();
-        let resident_glyphs = pin_glyphs(&self.glyph_keys, fonts);
+        let atlas = fonts
+            .font_atlas
+            .get_or_insert_with(|| Atlas::new(device_page_size()));
+        let rejected_before = atlas.stats().rejected_exhausted;
+        let resident_glyphs = atlas.pin_glyphs(
+            &mut fonts.font_system,
+            &mut fonts.swash_cache,
+            &self.glyph_keys,
+        );
+        let stats = atlas.stats();
+        self.retry_atlas = stats.rejected_exhausted != rejected_before;
         let key = RetainedTextKey {
             content,
-            atlas_evicted: fonts.atlas_stats().evicted,
+            atlas_evicted: stats.evicted,
             resident_glyphs,
         };
         if self.key.as_ref() != Some(&key) {
-            let batches = build_retained_text(buffer, fonts, position.node_y, &key.content.style);
+            let batches = build_retained_text(buffer, atlas, position.node_y, &key.content.style);
             self.meshes.clear();
             self.line_ranges.clear();
             for batch in batches {
@@ -399,13 +404,9 @@ impl RetainedTextCache {
                 }
             }
             self.block_bounds = TextBlockBounds::new(&self.line_ranges);
-            self.key = Some(RetainedTextKey {
-                atlas_evicted: fonts.atlas_stats().evicted,
-                ..key
-            });
+            self.key = Some(key);
             self.update_visible_ranges(position, clip);
         }
-        self.retry_atlas = fonts.atlas_stats().rejected_exhausted != before.rejected_exhausted;
         if self.meshes.is_empty() {
             return false;
         }
@@ -714,27 +715,6 @@ fn glyph_keys(buffer: &Buffer, max_lines: Option<usize>) -> Vec<CacheKey> {
         .collect()
 }
 
-/// Keep every atlas entry referenced by a visible mesh resident. Each key only
-/// needs to be pinned once, even if it appears throughout a long paragraph.
-fn pin_glyphs(keys: &[CacheKey], fonts: &mut FontState) -> usize {
-    if keys.is_empty() {
-        return 0;
-    }
-    let atlas = fonts
-        .font_atlas
-        .get_or_insert_with(|| Atlas::new(device_page_size()));
-    let resident = keys
-        .iter()
-        .filter(|&&key| {
-            atlas
-                .cache_glyph(&mut fonts.font_system, &mut fonts.swash_cache, key)
-                .is_some()
-        })
-        .count();
-    atlas.end_pass();
-    resident
-}
-
 #[derive(PartialEq)]
 struct RetainedTextStyle {
     y: f32,
@@ -746,9 +726,10 @@ struct RetainedTextStyle {
     color: Color,
 }
 
+/// Build mesh data from glyphs already pinned for this pass.
 fn build_retained_text(
     buffer: &Buffer,
-    fonts: &mut FontState,
+    atlas: &Atlas,
     origin_y: f32,
     style: &RetainedTextStyle,
 ) -> Vec<RetainedTextBatch> {
@@ -823,14 +804,7 @@ fn build_retained_text(
         }
         for glyph in run.glyphs.iter() {
             let physical_glyph = glyph.physical((0., 0.), 1.0);
-            let atlas = fonts
-                .font_atlas
-                .get_or_insert_with(|| Atlas::new(device_page_size()));
-            let Some(cached) = atlas.cache_glyph(
-                &mut fonts.font_system,
-                &mut fonts.swash_cache,
-                physical_glyph.cache_key,
-            ) else {
+            let Some(cached) = atlas.get_glyph(physical_glyph.cache_key) else {
                 continue;
             };
             let placement = cached.placement;
@@ -869,9 +843,6 @@ fn build_retained_text(
                 });
             }
         }
-    }
-    if let Some(atlas) = &mut fonts.font_atlas {
-        atlas.end_pass();
     }
     batches
 }

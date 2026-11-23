@@ -177,6 +177,16 @@ struct Glyph {
     last_used: u64,
 }
 
+impl Glyph {
+    fn cached(&self, page: &Page) -> CachedGlyph {
+        CachedGlyph {
+            texture: page.texture.clone(),
+            uv: self.uv,
+            placement: self.placement,
+        }
+    }
+}
+
 /// A bounded, paged glyph atlas.
 ///
 /// Pages and their GPU textures are created only when the first glyph needs
@@ -230,14 +240,35 @@ impl Atlas {
         self.candidates_pass = None;
     }
 
-    /// Uploads every staged write for the current text batch. The caller must
-    /// call this after that batch's glyphs have been drawn and before its GPU
-    /// geometry is submitted; a later call is a no-op when nothing is staged.
+    /// Uploads staged glyphs before their geometry is submitted. A later call
+    /// is a no-op when nothing is staged.
     pub(super) fn end_pass(&mut self) {
         let (pages, stats) = (&mut self.pages, &mut self.stats);
         for page in pages {
             page.upload(stats);
         }
+    }
+
+    /// Pins the batch's glyphs for this pass and uploads staged pixels. The
+    /// keys are distinct, so the return value counts resident glyphs.
+    pub(super) fn pin_glyphs(
+        &mut self,
+        font_system: &mut FontSystem,
+        cache: &mut SwashCache,
+        keys: &[CacheKey],
+    ) -> usize {
+        let resident = keys
+            .iter()
+            .filter(|&&key| self.cache_glyph(font_system, cache, key).is_some())
+            .count();
+        self.end_pass();
+        resident
+    }
+
+    /// Looks up a glyph without pinning it or modifying the atlas.
+    pub(super) fn get_glyph(&self, key: CacheKey) -> Option<CachedGlyph> {
+        let glyph = self.glyphs.get(&key)?;
+        Some(glyph.cached(&self.pages[glyph.page]))
     }
 
     pub(super) fn cache_glyph(
@@ -250,12 +281,7 @@ impl Atlas {
             glyph.last_used = self.pass;
             let page = &mut self.pages[glyph.page];
             page.last_used = self.pass;
-            let texture = page.texture.clone();
-            return Some(CachedGlyph {
-                texture,
-                uv: glyph.uv,
-                placement: glyph.placement,
-            });
+            return Some(glyph.cached(page));
         }
 
         // Deliberately bypass SwashCache's image cache: the atlas owns the
@@ -311,7 +337,6 @@ impl Atlas {
             &image,
         );
         page_data.mark_dirty(origin.x, origin.y, padded_width, padded_height);
-        let texture = page_data.texture.clone();
 
         let page_size = self.page_size as f32;
         let uv = Rect::new(
@@ -320,22 +345,17 @@ impl Atlas {
             width as f32 / page_size,
             height as f32 / page_size,
         );
-        self.stats.rasterized += 1;
-        self.glyphs.insert(
-            key,
-            Glyph {
-                page,
-                allocation,
-                uv,
-                placement,
-                last_used: self.pass,
-            },
-        );
-        Some(CachedGlyph {
-            texture,
+        let glyph = Glyph {
+            page,
+            allocation,
             uv,
             placement,
-        })
+            last_used: self.pass,
+        };
+        let cached = glyph.cached(page_data);
+        self.stats.rasterized += 1;
+        self.glyphs.insert(key, glyph);
+        Some(cached)
     }
 
     fn allocate(&mut self, requested: Size2D<i32, UnknownUnit>) -> Option<(usize, AllocId)> {

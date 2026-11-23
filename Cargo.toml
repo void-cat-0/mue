@@ -17,8 +17,8 @@ repository = "https://github.com/void-cat-0/mue"
 rust-version = "1.90.0"
 
 [workspace.dependencies]
-macroquad = { path = "../macroquad", default-features = false }
-miniquad = { path = "../miniquad" }
+macroquad = { git = "https://github.com/void-cat-0/macroquad", default-features = false, branch = "vulkan" }
+miniquad = { path = "https://github.com/void-cat-0/miniquad", branch = "vulkan" }
 cosmic-text = "0.18.2"
 slotmap = "1.1.1"
 smallvec = "1.13.2"
@@ -30,6 +30,3 @@ mue-macros = { path = "mue-macros" }
 mue-macroquad = { path = "mue-macroquad" }
 mue-components = { path = "mue-components" }
 mue-i18n = { path = "mue-i18n" }
-
-[profile.release]
-debug = true
