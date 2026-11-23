@@ -5,8 +5,8 @@ use std::{cell::RefCell, collections::HashSet, ops::Range, rc::Rc};
 pub use super::atlas::GlyphAtlasStats;
 
 use cosmic_text::{
-    Attrs, Buffer, FamilyOwned, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache,
-    Weight, Wrap,
+    Attrs, Buffer, CacheKey, FamilyOwned, FontSystem, Metrics, Shaping, Style as FontStyle,
+    SwashCache, Weight, Wrap,
 };
 use mue_core::{
     effect::{computed, watch_effect},
@@ -92,6 +92,10 @@ impl FontState {
         }
     }
 
+    fn atlas_stats(&self) -> GlyphAtlasStats {
+        self.glyph_atlas_stats().unwrap_or_default()
+    }
+
     /// Counter snapshot of the glyph atlas, or `None` before any text renders.
     pub(crate) fn glyph_atlas_stats(&self) -> Option<GlyphAtlasStats> {
         self.font_atlas.as_ref().map(Atlas::stats)
@@ -167,11 +171,27 @@ fn measured_size(buffer: &Buffer, paragraph_spacing: f32, max_lines: Option<usiz
 const RETAINED_TEXT_MIN_GLYPHS: usize = 1_024;
 
 #[derive(Clone, Copy)]
+struct LineBaseline {
+    /// Keep these as separate operands to match immediate painting's f32 rounding.
+    offset: f32,
+    layout_y: f32,
+}
+
+impl LineBaseline {
+    fn snap(self, origin_y: f32) -> f32 {
+        ((origin_y + self.offset) + self.layout_y).round()
+    }
+}
+
+#[derive(Clone, Copy)]
 struct LineRange {
     /// Tight bounds of the quads this line contributed, in text-local space.
     bounds: Rect,
     first: u32,
     count: u32,
+    baseline: LineBaseline,
+    /// Baseline baked into the mesh, relative to its original snapped node origin.
+    mesh_y: f32,
 }
 
 struct RetainedTextBatch {
@@ -181,25 +201,18 @@ struct RetainedTextBatch {
     lines: Vec<LineRange>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 struct RetainedTextContentKey {
     revision: u64,
     width: f32,
-    height: f32,
-    y: f32,
-    /// Fraction of the layout origin left after the retained model is snapped.
-    snap_phase: f32,
-    max_lines: Option<usize>,
-    strike: bool,
-    underline: bool,
-    color: Brush,
+    style: RetainedTextStyle,
 }
 
 #[derive(PartialEq)]
 struct RetainedTextKey {
     content: RetainedTextContentKey,
     atlas_evicted: u64,
-    /// Includes repeated glyphs; detects previously rejected glyphs becoming resident.
+    /// Counts resident keys; detects previously rejected glyphs becoming resident.
     resident_glyphs: usize,
 }
 
@@ -208,44 +221,458 @@ struct RetainedTextCache {
     key: Option<RetainedTextKey>,
     /// Glyph count for `key.content`; lets cache hits skip the glyph scan.
     glyph_count: usize,
+    glyph_keys: Vec<CacheKey>,
+    /// A line with no mesh today may become drawable in a less crowded pass.
+    retry_atlas: bool,
     meshes: Vec<RetainedMesh>,
     line_ranges: Vec<Vec<LineRange>>,
-    /// Scratch ranges are reused across frames rather than allocated per draw.
-    visible_ranges: Vec<Option<Range<u32>>>,
-    /// Union of every line's quad bounds, in text-local space.
-    content_bounds: Option<Rect>,
+    block_bounds: Option<TextBlockBounds>,
+    visible_ranges: Vec<TextDrawRange>,
 }
 
-/// Contiguous index range covering the lines that intersect `clip`.
-///
-/// Lines are recorded in layout order, so the range runs from the first
-/// visible line to the last one. Lines between them are kept even when they
-/// are clipped, which keeps the draw to one index range per mesh; the scissor
-/// still removes their pixels.
-fn visible_line_range(
-    lines: &[LineRange],
-    clip: Option<Rect>,
-    model: Matrix,
-) -> Option<Range<u32>> {
-    let first = lines.first()?;
-    let last = lines.last()?;
-    let Some(clip) = clip else {
-        return Some(first.first..last.first + last.count);
-    };
+#[derive(Debug, PartialEq)]
+struct TextDrawRange {
+    mesh: usize,
+    indices: Range<u32>,
+    translate_y: f32,
+}
 
-    let mut visible_first = None;
-    let mut visible_last = None;
+#[derive(Clone, Copy)]
+struct TextPosition {
+    node_x: f32,
+    node_y: f32,
+    transform: Matrix,
+}
+
+impl TextPosition {
+    fn model(self, translate_y: f32) -> Matrix {
+        self.transform * Matrix::from_translation(vec2(self.node_x, translate_y))
+    }
+}
+
+/// Bounds of the uploaded quads, plus a bound on how far re-snapping their
+/// baselines can move the model away from a plain translation by `node_y`.
+struct TextBlockBounds {
+    min: [f64; 2],
+    max: [f64; 2],
+    baseline_magnitude: f64,
+    mesh_y_magnitude: f64,
+    residual: f64,
+}
+
+impl TextBlockBounds {
+    fn new(batches: &[Vec<LineRange>]) -> Option<Self> {
+        let mut bounds: Option<Self> = None;
+        for line in batches.iter().flatten() {
+            let local = line.bounds;
+            let offset = f64::from(line.baseline.offset);
+            let layout_y = f64::from(line.baseline.layout_y);
+            let mesh_y = f64::from(line.mesh_y);
+            let values = [local.x, local.y, local.right(), local.bottom()];
+            if !values.into_iter().all(f32::is_finite)
+                || local.w < 0.
+                || local.h < 0.
+                || !offset.is_finite()
+                || !layout_y.is_finite()
+                || !mesh_y.is_finite()
+            {
+                return None;
+            }
+            let min = [f64::from(local.x), f64::from(local.y)];
+            let max = [f64::from(local.right()), f64::from(local.bottom())];
+            let baseline_magnitude = offset.abs() + layout_y.abs();
+            let residual = (offset + layout_y - mesh_y).abs();
+            match &mut bounds {
+                Some(bounds) => {
+                    for axis in 0..2 {
+                        bounds.min[axis] = bounds.min[axis].min(min[axis]);
+                        bounds.max[axis] = bounds.max[axis].max(max[axis]);
+                    }
+                    bounds.baseline_magnitude = bounds.baseline_magnitude.max(baseline_magnitude);
+                    bounds.mesh_y_magnitude = bounds.mesh_y_magnitude.max(mesh_y.abs());
+                    bounds.residual = bounds.residual.max(residual);
+                }
+                None => {
+                    bounds = Some(Self {
+                        min,
+                        max,
+                        baseline_magnitude,
+                        mesh_y_magnitude: mesh_y.abs(),
+                        residual,
+                    });
+                }
+            }
+        }
+        bounds
+    }
+
+    fn is_outside(&self, position: TextPosition, clip: Rect) -> bool {
+        let model = position.transform;
+        // Four corners bound an affine box. Don't guess for homographies or
+        // non-finite geometry; take the per-line path in those cases.
+        if !model.is_finite()
+            || model.x_axis.z != 0.
+            || model.y_axis.z != 0.
+            || model.z_axis.z != 1.
+            || !position.node_x.is_finite()
+            || !position.node_y.is_finite()
+            || ![clip.x, clip.y, clip.right(), clip.bottom()]
+                .into_iter()
+                .all(f32::is_finite)
+        {
+            return false;
+        }
+
+        let eps = f64::from(f32::EPSILON);
+        let x = f64::from(position.node_x);
+        let y = f64::from(position.node_y);
+        // |snap(y) - mesh_y - y| is bounded by the build-time residual,
+        // the half-pixel snap, and the error of the f32 adds/subtract.
+        let baseline_scale = y.abs() + self.baseline_magnitude + self.mesh_y_magnitude + 1.;
+        if baseline_scale > f64::from(f32::MAX) / 8. {
+            return false;
+        }
+        let margin_y = self.residual + 0.5 + 8. * eps * baseline_scale;
+        let [min_x, min_y] = self.min;
+        let [max_x, max_y] = self.max;
+        let span_x = min_x.abs().max(max_x.abs());
+        let span_y = min_y.abs().max(max_y.abs()) + margin_y;
+        // Bound the f32 model arithmetic by the magnitude of its terms so
+        // cancellation does not hide the error. Keep a logical pixel of slack.
+        let mut outside = false;
+        for (axis, clip_min, clip_max) in [(0, clip.x, clip.right()), (1, clip.y, clip.bottom())] {
+            let a = f64::from(model.x_axis[axis]);
+            let b = f64::from(model.y_axis[axis]);
+            let t = f64::from(model.z_axis[axis]);
+            let magnitude = a.abs() * (x.abs() + span_x) + b.abs() * (y.abs() + span_y) + t.abs();
+            if !magnitude.is_finite() || magnitude > f64::from(f32::MAX) / 8. {
+                return false;
+            }
+            let shift = a * x + b * y + t;
+            let lo = shift + (a * min_x).min(a * max_x) + (b * min_y).min(b * max_y);
+            let hi = shift + (a * min_x).max(a * max_x) + (b * min_y).max(b * max_y);
+            let slack = b.abs() * margin_y + 16. * eps * magnitude + 1.;
+            outside |= hi + slack < f64::from(clip_min) || lo - slack > f64::from(clip_max);
+        }
+        outside
+    }
+}
+
+impl RetainedTextCache {
+    /// Returns false to use the immediate path for short or empty text.
+    fn draw(
+        &mut self,
+        buffer: &Buffer,
+        fonts: &mut FontState,
+        content: RetainedTextContentKey,
+        position: TextPosition,
+        alpha: f32,
+    ) -> bool {
+        let same_content = self.key.as_ref().is_some_and(|key| key.content == content);
+        if !same_content {
+            self.glyph_count = buffer
+                .layout_runs()
+                .take(content.style.max_lines.unwrap_or(usize::MAX))
+                .map(|run| run.glyphs.len())
+                .sum();
+        }
+        if self.glyph_count < RETAINED_TEXT_MIN_GLYPHS {
+            if !same_content {
+                *self = Self {
+                    key: Some(RetainedTextKey {
+                        content,
+                        atlas_evicted: 0,
+                        resident_glyphs: 0,
+                    }),
+                    glyph_count: self.glyph_count,
+                    ..Self::default()
+                };
+            }
+            return false;
+        }
+
+        let clip = current_clip_logical();
+        if same_content && !self.meshes.is_empty() {
+            // If glyphs were rejected under atlas pressure, previously absent
+            // quads can extend beyond the cached bounds. Preserve their retry.
+            if !self.retry_atlas
+                && let Some(clip) = clip
+                && self
+                    .block_bounds
+                    .as_ref()
+                    .is_some_and(|bounds| bounds.is_outside(position, clip))
+            {
+                return true;
+            }
+            self.update_visible_ranges(position, clip);
+            if self.visible_ranges.is_empty() && !self.retry_atlas {
+                // No atlas lookups or uploads for wholly clipped cached text.
+                return true;
+            }
+        }
+        if !same_content {
+            self.glyph_keys = glyph_keys(buffer, content.style.max_lines);
+        }
+        let before = fonts.atlas_stats();
+        let resident_glyphs = pin_glyphs(&self.glyph_keys, fonts);
+        let key = RetainedTextKey {
+            content,
+            atlas_evicted: fonts.atlas_stats().evicted,
+            resident_glyphs,
+        };
+        if self.key.as_ref() != Some(&key) {
+            let batches = build_retained_text(buffer, fonts, position.node_y, &key.content.style);
+            self.meshes.clear();
+            self.line_ranges.clear();
+            for batch in batches {
+                if let Some(mesh) =
+                    RetainedMesh::new(&batch.vertices, &batch.indices, batch.texture)
+                {
+                    self.meshes.push(mesh);
+                    self.line_ranges.push(batch.lines);
+                }
+            }
+            self.block_bounds = TextBlockBounds::new(&self.line_ranges);
+            self.key = Some(RetainedTextKey {
+                atlas_evicted: fonts.atlas_stats().evicted,
+                ..key
+            });
+            self.update_visible_ranges(position, clip);
+        }
+        self.retry_atlas = fonts.atlas_stats().rejected_exhausted != before.rejected_exhausted;
+        if self.meshes.is_empty() {
+            return false;
+        }
+        for range in &self.visible_ranges {
+            // Each range has its own model, even when it shares a mesh with the
+            // previous draw. The backend reuses the open rendering pass.
+            crate::material::draw_retained_meshes_ranges(
+                std::slice::from_ref(&self.meshes[range.mesh]),
+                &[Some(range.indices.clone())],
+                crate::math::model_matrix(position.model(range.translate_y)),
+                alpha,
+            );
+        }
+        true
+    }
+
+    fn update_visible_ranges(&mut self, position: TextPosition, clip: Option<Rect>) {
+        self.visible_ranges.clear();
+        for (mesh, lines) in self.line_ranges.iter().enumerate() {
+            visible_line_ranges(mesh, lines, position, clip, &mut self.visible_ranges);
+        }
+    }
+}
+
+/// Reuse the same vertices at any scroll offset. Apply the exact snapped
+/// baseline as an integer translation and batch neighboring lines that agree.
+fn visible_line_ranges(
+    mesh: usize,
+    lines: &[LineRange],
+    position: TextPosition,
+    clip: Option<Rect>,
+    ranges: &mut Vec<TextDrawRange>,
+) {
+    let mut previous_y = f32::NAN;
+    let mut model = Matrix::IDENTITY;
+    let mut current: Option<usize> = None;
     for line in lines {
-        let screen = transform_rect(model, line.bounds);
-        if rect_visible(Some(clip), &screen) {
-            visible_first.get_or_insert(line.first);
-            visible_last = Some(line.first + line.count);
+        let translate_y = line.baseline.snap(position.node_y) - line.mesh_y;
+        if translate_y != previous_y {
+            previous_y = translate_y;
+            model = position.model(translate_y);
+            // Do not bridge a different translation, even if that line is clipped.
+            current = None;
+        }
+        if clip.is_some_and(|clip| !rect_visible(Some(clip), &transform_rect(model, line.bounds))) {
+            continue;
+        }
+        let end = line.first + line.count;
+        if let Some(index) = current {
+            ranges[index].indices.end = end;
+        } else {
+            current = Some(ranges.len());
+            ranges.push(TextDrawRange {
+                mesh,
+                indices: line.first..end,
+                translate_y,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod retained_scroll_tests {
+    use super::*;
+
+    fn position(y: f32) -> TextPosition {
+        TextPosition {
+            node_x: 8.,
+            node_y: y,
+            transform: Matrix::IDENTITY,
         }
     }
 
-    match (visible_first, visible_last) {
-        (Some(first), Some(last)) if last > first => Some(first..last),
-        _ => None,
+    fn line(first: u32, offset: f32, layout_y: f32, build_y: f32) -> LineRange {
+        let baseline = LineBaseline { offset, layout_y };
+        let mesh_y = baseline.snap(build_y) - build_y.round();
+        LineRange {
+            bounds: Rect::new(0., mesh_y - 8., 24., 11.),
+            first,
+            count: 6,
+            baseline,
+            mesh_y,
+        }
+    }
+
+    #[test]
+    fn block_bounds_survive_scroll_snap_and_parent_transform() {
+        let batches = [
+            vec![line(0, 0., 2.5, 0.25), line(6, 9.25, 31.5, 0.25)],
+            vec![line(0, 21.5, 86., 0.25)],
+        ];
+        let block = TextBlockBounds::new(&batches).unwrap();
+        let transform = Matrix::from_translation(vec2(170., 120.))
+            * Matrix::from_angle(0.72)
+            * Matrix::from_scale(vec2(-1.5, 2.));
+        for y in [0.25, -2.99, -3., -3.01, -22.75, -73.125, 340.75, 4_000_000.] {
+            let position = TextPosition {
+                transform,
+                ..position(y)
+            };
+            for line in batches.iter().flatten() {
+                let shift = line.baseline.snap(y) - line.mesh_y;
+                let projected = transform_rect(position.model(shift), line.bounds);
+                // Check the actual extrema, not only a central pixel that
+                // would also survive an incorrect undersized block bound.
+                for corner in [projected.min(), projected.max()] {
+                    assert!(!block.is_outside(position, Rect::new(corner.x, corner.y, 0., 0.)));
+                }
+            }
+        }
+        assert!(block.is_outside(
+            TextPosition {
+                transform,
+                ..position(-300.)
+            },
+            Rect::new(0., 0., 80., 60.)
+        ));
+    }
+
+    #[test]
+    fn block_cull_fails_open_for_projective_or_invalid_geometry() {
+        let mut batches = [vec![line(0, 0., 10., 0.)]];
+        let block = TextBlockBounds::new(&batches).unwrap();
+        let clip = Rect::new(-100., -100., 10., 10.);
+        assert!(block.is_outside(position(0.), clip));
+        let mut position = position(0.);
+        position.transform.x_axis.z = 0.1;
+        assert!(!block.is_outside(position, clip));
+        position.transform = Matrix::IDENTITY;
+        position.node_y = f32::INFINITY;
+        assert!(!block.is_outside(position, clip));
+        batches[0][0].bounds.y = f32::NAN;
+        assert!(TextBlockBounds::new(&batches).is_none());
+    }
+
+    #[test]
+    fn translated_geometry_keeps_global_baseline_rounding() {
+        let lines = [
+            line(0, 0., 2.5, 0.25),
+            line(6, 9.25, 11.75, 0.25),
+            line(12, 9.25, 31.5, 0.25),
+            // At y = -3.65, moving the offset add inside would turn 5.5 into
+            // 5.4999995 and snap to the wrong row.
+            line(18, 0.15, 9., 0.25),
+        ];
+        for y in [
+            0.25, -0.25, -3., -2., -3.65, -21.5, -21.499, -73.125, 340.75,
+        ] {
+            let mut ranges = Vec::new();
+            visible_line_ranges(0, &lines, position(y), None, &mut ranges);
+            for line in &lines {
+                let range = ranges
+                    .iter()
+                    .find(|range| range.indices.contains(&line.first))
+                    .unwrap();
+                let exact = ((y + line.baseline.offset) + line.baseline.layout_y).round();
+                assert_eq!(line.mesh_y + range.translate_y, exact, "origin = {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn equal_shifts_merge_and_different_shifts_do_not() {
+        // The middle line's fractional baseline requires a different shift.
+        let lines = [
+            line(0, 0., 10., 0.),
+            line(6, 0., 20.25, 0.),
+            line(12, 0., 30., 0.),
+            line(18, 0., 40., 0.),
+        ];
+        let mut ranges = Vec::new();
+        // Only the middle line is wholly outside the clip in X.
+        let mut middle = lines;
+        middle[1].bounds.x = -300.;
+        let clip = Rect::new(8., 0., 24., 60.);
+        visible_line_ranges(1, &middle, position(0.3), Some(clip), &mut ranges);
+        assert_eq!(
+            ranges,
+            [
+                TextDrawRange {
+                    mesh: 1,
+                    indices: 0..6,
+                    translate_y: 0.
+                },
+                TextDrawRange {
+                    mesh: 1,
+                    indices: 12..24,
+                    translate_y: 0.
+                }
+            ]
+        );
+        ranges.clear();
+        visible_line_ranges(1, &lines, position(0.), None, &mut ranges);
+        assert_eq!(
+            ranges,
+            [TextDrawRange {
+                mesh: 1,
+                indices: 0..24,
+                translate_y: 0.
+            }]
+        );
+    }
+
+    #[test]
+    fn culling_uses_the_shifted_line_bounds_and_parent_transform() {
+        let lines = [line(0, 0., 10., 0.), line(6, 0., 40., 0.)];
+        let mut position = position(-25.25);
+        position.transform = Matrix::from_translation(vec2(3., 10.));
+        let mut ranges = Vec::new();
+        visible_line_ranges(
+            0,
+            &lines,
+            position,
+            Some(Rect::new(11., 22., 24., 4.)),
+            &mut ranges,
+        );
+        assert_eq!(
+            ranges,
+            [TextDrawRange {
+                mesh: 0,
+                indices: 6..12,
+                translate_y: -25.
+            }]
+        );
+        ranges.clear();
+        visible_line_ranges(
+            0,
+            &lines,
+            position,
+            Some(Rect::new(11., 80., 24., 4.)),
+            &mut ranges,
+        );
+        assert!(ranges.is_empty());
     }
 }
 
@@ -300,51 +727,56 @@ fn push_quad(
         .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
-/// Keep every glyph used by a retained mesh resident in the atlas.
-fn pin_glyphs(buffer: &Buffer, fonts: &mut FontState, max_lines: Option<usize>) -> usize {
-    let mut resident_glyphs = 0;
-    for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
-        for glyph in run.glyphs.iter() {
-            let physical_glyph = glyph.physical((0., 0.), 1.0);
-            let atlas = fonts
-                .font_atlas
-                .get_or_insert_with(|| Atlas::new(device_page_size()));
-            if atlas
-                .cache_glyph(
-                    &mut fonts.font_system,
-                    &mut fonts.swash_cache,
-                    physical_glyph.cache_key,
-                )
-                .is_some()
-            {
-                resident_glyphs += 1;
-            }
-        }
-    }
-    if let Some(atlas) = &mut fonts.font_atlas {
-        atlas.end_pass();
-    }
-    resident_glyphs
+fn glyph_keys(buffer: &Buffer, max_lines: Option<usize>) -> Vec<CacheKey> {
+    let mut seen = HashSet::new();
+    buffer
+        .layout_runs()
+        .take(max_lines.unwrap_or(usize::MAX))
+        .flat_map(|run| run.glyphs.iter())
+        .map(|glyph| glyph.physical((0., 0.), 1.0).cache_key)
+        .filter(|&key| seen.insert(key))
+        .collect()
 }
 
-struct RetainedTextStyle<'a> {
-    bounds: Rect,
+/// Keep every atlas entry referenced by a visible mesh resident. Each key only
+/// needs to be pinned once, even if it appears throughout a long paragraph.
+fn pin_glyphs(keys: &[CacheKey], fonts: &mut FontState) -> usize {
+    if keys.is_empty() {
+        return 0;
+    }
+    let atlas = fonts
+        .font_atlas
+        .get_or_insert_with(|| Atlas::new(device_page_size()));
+    let resident = keys
+        .iter()
+        .filter(|&&key| {
+            atlas
+                .cache_glyph(&mut fonts.font_system, &mut fonts.swash_cache, key)
+                .is_some()
+        })
+        .count();
+    atlas.end_pass();
+    resident
+}
+
+#[derive(PartialEq)]
+struct RetainedTextStyle {
     y: f32,
     spacing: f32,
     font_size: f32,
     max_lines: Option<usize>,
     strike: bool,
     underline: bool,
-    color: &'a Brush,
+    color: Color,
 }
 
 fn build_retained_text(
     buffer: &Buffer,
     fonts: &mut FontState,
-    style: RetainedTextStyle<'_>,
+    origin_y: f32,
+    style: &RetainedTextStyle,
 ) -> Vec<RetainedTextBatch> {
     let RetainedTextStyle {
-        bounds,
         y,
         spacing,
         font_size,
@@ -352,7 +784,7 @@ fn build_retained_text(
         strike,
         underline,
         color,
-    } = style;
+    } = *style;
     let white = retained::white_texture();
     let white_uv = Rect::new(0., 0., 1., 1.);
     // Keep the solid batch first so underlines/strikes are painted before the
@@ -364,11 +796,13 @@ fn build_retained_text(
         lines: Vec::new(),
     }];
     for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
-        let origin_y = bounds.y + (y + run.line_i as f32 * spacing);
+        let baseline = LineBaseline {
+            offset: y + run.line_i as f32 * spacing,
+            layout_y: run.line_y,
+        };
         let starts: Vec<usize> = batches.iter().map(|batch| batch.indices.len()).collect();
-        // Snap the global baseline exactly as the immediate path does, then
-        // remove the origin already applied by the retained model.
-        let pen = vec2(0., (origin_y + run.line_y).round() - bounds.y.round());
+        let mesh_y = baseline.snap(origin_y) - origin_y.round();
+        let pen = vec2(0., mesh_y);
         // Tight bounds of everything this line contributes. Using the quads
         // themselves instead of the line box keeps glyphs that overhang the
         // ascent/descent from being culled while still visible.
@@ -392,7 +826,6 @@ fn build_retained_text(
                 run.line_w,
                 (font_size / 16.).max(1.),
             );
-            let color = color.color_at(rect.center() + bounds.min(), bounds);
             push_quad(&mut batches, white, rect, white_uv, color);
             add_bounds(rect);
         }
@@ -409,7 +842,6 @@ fn build_retained_text(
                 run.line_w,
                 (font_size / 16.).max(1.),
             );
-            let color = color.color_at(rect.center() + bounds.min(), bounds);
             push_quad(&mut batches, white, rect, white_uv, color);
             add_bounds(rect);
         }
@@ -433,7 +865,7 @@ fn build_retained_text(
                 placement.height as f32,
             );
             let glyph_color = glyph.color_opt.map_or_else(
-                || color.color_at(draw_rect.center() + bounds.min(), bounds),
+                || color,
                 |color| Color::from_rgba(color.r(), color.g(), color.b(), color.a()),
             );
             push_quad(
@@ -456,6 +888,8 @@ fn build_retained_text(
                     bounds: line_bounds,
                     first: start as u32,
                     count: (batch.indices.len() - start) as u32,
+                    baseline,
+                    mesh_y,
                 });
             }
         }
@@ -639,202 +1073,80 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                 metrics.get_untracked(),
                 Some(bounds.w),
             );
-            let height = measured_size(&buffer, spacing.get().max(0.), max_lines.get()).height;
-            let free = (bounds.h - height).max(0.);
+            let spacing = spacing.get().max(0.);
+            let max_lines = max_lines.get();
+            let font_size = font_size.get();
             let y = match vertical_align.get() {
                 TextVerticalAlign::Top => 0.,
-                TextVerticalAlign::Center => free / 2.,
-                TextVerticalAlign::Bottom => free,
+                align => {
+                    let height = measured_size(&buffer, spacing, max_lines).height;
+                    let free = (bounds.h - height).max(0.);
+                    if align == TextVerticalAlign::Center {
+                        free / 2.
+                    } else {
+                        free
+                    }
+                }
             };
             let color_brush = color.get_clone();
-            // Check the cheap policy gates before walking the glyph runs; on
-            // backends without retained support this avoids the scan entirely.
-            // Retained quads use one tint per glyph; gradients need the immediate
-            // path's per-vertex samples to preserve their appearance.
-            let retained_requested = matches!(&color_brush, Brush::Solid(_))
-                && retained_enabled()
-                // round() takes half ties away from zero, so translating across
-                // zero can change a half-tied baseline even with the same phase.
-                && (bounds.y >= 0.
-                    || !buffer
-                        .layout_runs()
-                        .take(max_lines.get().unwrap_or(usize::MAX))
-                        .any(|run| {
-                            let origin = bounds.y + (y + run.line_i as f32 * spacing.get().max(0.));
-                            let baseline = origin + run.line_y;
-                            baseline - baseline.floor() == 0.5
-                        }));
-            let content_key = retained_requested.then(|| RetainedTextContentKey {
-                revision: revision.get_untracked(),
-                width: bounds.w,
-                height: bounds.h,
-                y,
-                snap_phase: bounds.y - bounds.y.round(),
-                max_lines: max_lines.get(),
-                strike: strike.get(),
-                underline: text_underline.get(),
-                color: color_brush.clone(),
-            });
-            let retained_model = retained_requested.then(|| {
-                current_transform()
-                    * Matrix::from_translation(vec2(bounds.min().x.round(), bounds.min().y.round()))
-            });
-            let cache_matches_content = content_key.as_ref().is_some_and(|content_key| {
-                retained_cache
-                    .key
-                    .as_ref()
-                    .is_some_and(|key| &key.content == content_key)
-            });
-            // Block-level cull before pinning: off-screen retained blocks do not
-            // touch the atlas or scan their glyphs at all. The content key stays
-            // valid when only the atlas stats changed, so the cached bounds are
-            // still usable until the block becomes visible again.
-            if cache_matches_content
-                && let Some(model) = retained_model
-                && let Some(content) = retained_cache.content_bounds
-                && let Some(clip) = current_clip_logical()
-                && !rect_visible(Some(clip), &transform_rect(model, content))
-            {
-                return;
-            }
-            let glyph_count = if !retained_requested {
-                0
-            } else if cache_matches_content {
-                retained_cache.glyph_count
-            } else {
-                buffer
-                    .layout_runs()
-                    .take(max_lines.get().unwrap_or(usize::MAX))
-                    .map(|run| run.glyphs.len())
-                    .sum::<usize>()
-            };
-            let retained_eligible = retained_requested && glyph_count >= RETAINED_TEXT_MIN_GLYPHS;
-            if !matches!(&color_brush, Brush::Solid(_)) {
-                retained_cache = RetainedTextCache::default();
-            } else if retained_requested && !retained_eligible && !cache_matches_content {
-                // Remember short content too: skip repeated eligibility scans and
-                // release buffers left over from a previous long block.
-                retained_cache = RetainedTextCache {
-                    key: content_key.clone().map(|content| RetainedTextKey {
-                        content,
-                        atlas_evicted: 0,
-                        resident_glyphs: 0,
-                    }),
-                    glyph_count,
-                    ..Default::default()
-                };
-            }
-            if retained_eligible {
-                let content_key = content_key.expect("retained text has a content key");
-                let cache = &mut retained_cache;
-                // Keep the atlas entries referenced by the retained buffers alive
-                // even on cache hits. Off-screen blocks were culled above, so this
-                // only pins the blocks that can actually be seen.
-                let resident_glyphs = pin_glyphs(&buffer, fonts, max_lines.get());
-                let stats = fonts
-                    .font_atlas
-                    .as_ref()
-                    .map(Atlas::stats)
-                    .unwrap_or_default();
-                let key = RetainedTextKey {
-                    content: content_key,
-                    atlas_evicted: stats.evicted,
-                    resident_glyphs,
-                };
-                if cache.key.as_ref() != Some(&key) {
-                    let batches = build_retained_text(
-                        &buffer,
-                        fonts,
-                        RetainedTextStyle {
-                            bounds,
-                            y,
-                            spacing: spacing.get().max(0.),
-                            font_size: font_size.get(),
-                            max_lines: max_lines.get(),
-                            strike: strike.get(),
-                            underline: text_underline.get(),
-                            color: &color_brush,
-                        },
-                    );
-                    let mut meshes = Vec::new();
-                    let mut line_ranges = Vec::new();
-                    for batch in batches {
-                        if let Some(mesh) =
-                            RetainedMesh::new(&batch.vertices, &batch.indices, batch.texture)
-                        {
-                            meshes.push(mesh);
-                            line_ranges.push(batch.lines);
-                        }
-                    }
-                    let stats = fonts
-                        .font_atlas
-                        .as_ref()
-                        .map(Atlas::stats)
-                        .unwrap_or_default();
-                    let key = RetainedTextKey {
-                        content: key.content,
-                        atlas_evicted: stats.evicted,
-                        resident_glyphs,
-                    };
-                    // Cache empty output too, but retry after content, eviction or
-                    // glyph-residency changes instead of disabling the node forever.
-                    cache.content_bounds = line_ranges
-                        .iter()
-                        .flatten()
-                        .map(|line| line.bounds)
-                        .reduce(|bounds, line| bounds.union(&line));
-                    cache.meshes = meshes;
-                    cache.line_ranges = line_ranges;
-                    cache.key = Some(key);
-                    cache.glyph_count = glyph_count;
-                }
-                if !cache.meshes.is_empty() {
-                    let model = retained_model.expect("retained text has a model");
-                    let mut draw_retained = || {
-                        let clip = current_clip_logical();
-                        cache.visible_ranges.clear();
-                        cache.visible_ranges.extend(
-                            cache
-                                .line_ranges
-                                .iter()
-                                .map(|lines| visible_line_range(lines, clip, model)),
-                        );
-                        if cache.visible_ranges.iter().all(Option::is_none) {
-                            return;
-                        }
-                        crate::material::draw_retained_meshes_ranges(
-                            &cache.meshes,
-                            &cache.visible_ranges,
-                            crate::math::model_matrix(model),
+            let strike = strike.get();
+            let underline = text_underline.get();
+            let clip_text = max_lines.is_some() || overflow.get() != TextOverflow::Visible;
+            match &color_brush {
+                Brush::Solid(color) if retained_enabled() => {
+                    let mut draw = || {
+                        retained_cache.draw(
+                            &buffer,
+                            fonts,
+                            RetainedTextContentKey {
+                                revision: revision.get_untracked(),
+                                width: bounds.w,
+                                style: RetainedTextStyle {
+                                    y,
+                                    spacing,
+                                    font_size,
+                                    max_lines,
+                                    strike,
+                                    underline,
+                                    color: *color,
+                                },
+                            },
+                            TextPosition {
+                                node_x: bounds.x.round(),
+                                node_y: bounds.y,
+                                transform: current_transform(),
+                            },
                             paint.opacity(),
-                        );
+                        )
                     };
-                    if max_lines.get().is_some() || overflow.get() != TextOverflow::Visible {
-                        crate::paint::with_clip(bounds, draw_retained);
+                    let handled = if clip_text {
+                        crate::paint::with_clip(bounds, draw)
                     } else {
-                        draw_retained();
+                        draw()
+                    };
+                    if handled {
+                        return;
                     }
-                    return;
                 }
+                Brush::Solid(_) => {}
+                // Retained quads use a single tint. Keep gradients in the
+                // immediate path for per-vertex samples in brush coordinates.
+                _ => retained_cache = RetainedTextCache::default(),
             }
 
             let mut draw = || {
                 let clip = current_clip_logical();
                 let transform = current_transform();
                 paint.draw(|p| {
-                    for run in buffer
-                        .layout_runs()
-                        .take(max_lines.get().unwrap_or(usize::MAX))
-                    {
-                        let origin = bounds.min()
-                            + crate::math::vec2(0., y + run.line_i as f32 * spacing.get().max(0.));
-                        // Snap the glyph pen to whole pixels. Fractional layout
-                        // positions would otherwise resample the 1:1 raster through
-                        // the linear filter and soften every stem; cosmic-text keeps
-                        // the subpixel offset inside the cache key, so nothing is lost.
-                        let pen =
-                            crate::math::vec2(origin.x.round(), (origin.y + run.line_y).round());
-                        if strike.get() {
+                    for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
+                        // The atlas is rasterized for a pixel grid. Snap the
+                        // same baseline in immediate and retained rendering.
+                        let baseline = LineBaseline {
+                            offset: y + run.line_i as f32 * spacing,
+                            layout_y: run.line_y,
+                        };
+                        let pen = vec2(bounds.x.round(), baseline.snap(bounds.y));
+                        if strike {
                             let left = run
                                 .glyphs
                                 .iter()
@@ -843,15 +1155,15 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 .unwrap_or(0.);
                             let rule = Rect::new(
                                 pen.x + left,
-                                pen.y - font_size.get() * 0.3,
+                                pen.y - font_size * 0.3,
                                 run.line_w,
-                                (font_size.get() / 16.).max(1.),
+                                (font_size / 16.).max(1.),
                             );
                             if rect_visible(clip, &transform_rect(transform, rule)) {
                                 p.fill_rect(rule, color_brush.shader(bounds));
                             }
                         }
-                        if text_underline.get() {
+                        if underline {
                             let left = run
                                 .glyphs
                                 .iter()
@@ -862,7 +1174,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 pen.x + left,
                                 pen.y + 2.,
                                 run.line_w,
-                                (font_size.get() / 16.).max(1.),
+                                (font_size / 16.).max(1.),
                             );
                             if rect_visible(clip, &transform_rect(transform, underline)) {
                                 p.fill_rect(underline, color_brush.shader(bounds));
@@ -912,7 +1224,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                     }
                 })
             };
-            if max_lines.get().is_some() || overflow.get() != TextOverflow::Visible {
+            if clip_text {
                 crate::paint::with_clip(bounds, draw);
             } else {
                 draw();
