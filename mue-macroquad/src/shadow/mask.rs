@@ -1,5 +1,5 @@
-//! Policy-controlled, native-GL shadow masks. Slots are reused rather than repeatedly
-//! creating/deleting miniquad textures (whose metadata is append-only).
+//! Policy-controlled shadow masks. OpenGL reuses individual textures. Vulkan
+//! keeps fixed backing pages so scroll/cache churn never resizes GPU storage.
 
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -11,21 +11,22 @@ use macroquad::{
     miniquad::{
         self as mq, Backend, BufferId, BufferLayout, BufferSource, BufferType, BufferUsage,
         PassAction, Pipeline, PipelineParams, RenderPass, RenderingBackend, ShaderId, ShaderMeta,
-        ShaderSource, TextureId, TextureParams, UniformBlockLayout, UniformDesc, UniformType,
+        ShaderSource, TextureId, UniformBlockLayout, UniformDesc, UniformType,
         UniformsSource, VertexAttribute, VertexFormat,
     },
     texture::Texture2D,
     window::get_internal_gl,
 };
 
-use mue_core::signal::Access;
+use super::{Shadow, ShadowCache, ShadowProjection};
 
-use super::{Shadow, ShadowCache};
+mod vulkan_atlas;
 use crate::{
     material::UiMaterial,
     math::{Matrix, Rect, model_matrix},
     paint::Paint,
 };
+use vulkan_atlas::VulkanAtlas;
 
 const MAX_SLOTS: usize = 8;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -72,8 +73,7 @@ void main() {
 // a cached shadow into a transparent panel. Only the expensive soft integral
 // is sampled. These equations match roundedBoxShadow before its y shift.
 const SAMPLE_FRAGMENT_PREFIX: &str = concat!(
-    r#"#version 100
-precision highp float;
+    r#"precision highp float;
 varying highp vec2 v_pos;
 uniform highp vec4 rect;
 uniform highp vec4 mask_bounds;
@@ -86,7 +86,7 @@ uniform sampler2D Texture;
     "\n",
 );
 
-const SAMPLE_FRAGMENT_SUFFIX: &str = r#"
+const GL_SAMPLE_FRAGMENT: &str = r#"
 void main() {
     vec2 point = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
     float factor = roundedBoxCutout(rect.xy, rect.zw, point, radius);
@@ -97,9 +97,31 @@ void main() {
 }
 "#;
 
+const ATLAS_SAMPLE_FRAGMENT: &str = r#"
+uniform highp vec4 atlas_region;
+uniform highp vec2 atlas_texel;
+void main() {
+    float clip = combined_clip_mask(v_pos);
+    vec2 point = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
+    float factor = roundedBoxCutout(rect.xy, rect.zw, point, radius);
+    if (factor == 0.0 || clip == 0.0) {
+        gl_FragColor = vec4(color.rgb, 0.0);
+        return;
+    }
+    vec2 uv = (point - rect.xy - mask_bounds.xy) / mask_bounds.zw;
+    uv.y = 1.0 - uv.y;
+    // Reproduce Clamp/Linear on an individual texture. Never sample a neighboring mask.
+    vec2 half_texel = atlas_texel * 0.5;
+    uv = atlas_region.xy + clamp(uv * atlas_region.zw, half_texel, atlas_region.zw - half_texel);
+    // Some invocations returned above; no implicit derivatives in this branch.
+    float alpha = texture2DLodEXT(Texture, uv, 0.0).a * factor;
+    gl_FragColor = vec4(color.rgb, alpha * color.a * clip);
+}
+"#;
+
 /// Cumulative diagnostics for the render thread's bounded mask pool.
-/// Bytes include all allocated RGBA8 slots, even empty 1x1 slots; driver
-/// storage retained for in-flight commands is not a strict physical-memory cap.
+/// Bytes count RGBA8 backing storage, including unused OpenGL slots and free
+/// space in Vulkan pages. They do not include driver overhead.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShadowMaskCacheStats {
     pub slots: usize,
@@ -175,24 +197,50 @@ impl ShadowMaskState {
         self.tracking = None;
     }
 
-    pub(crate) fn draw(
+    pub(crate) fn cull(&mut self) {
+        self.reset();
+        POOL.with_borrow_mut(|pool| pool.stats.culled += 1);
+    }
+
+    pub(super) fn draw(
         &mut self,
         paint: &Paint,
         rect: Rect,
+        expanded: Rect,
         shadow: Shadow,
         transform: Matrix,
         inverse: Matrix,
         policy: ShadowCache,
+        projection: Option<ShadowProjection>,
     ) -> bool {
-        let Some(candidate) = candidate_for(paint, rect, shadow, transform) else {
+        let Some((backend, candidate)) = projection.and_then(|projection| {
+            Some((
+                MaskBackend::current()?,
+                candidate_for(rect, expanded, shadow, transform, projection)?,
+            ))
+        }) else {
             self.reset();
             POOL.with_borrow_mut(|pool| pool.stats.fallbacks += 1);
             return false;
         };
-        if candidate.visible_pixels <= 0. {
-            // Zero physical coverage cannot justify a bake or keep a slot alive.
-            self.reset();
-            POOL.with_borrow_mut(|pool| pool.stats.culled += 1);
+        // GL retains its existing area/knockout culling. Vulkan draws unless
+        // the independent conservative reject proved it wholly outside;
+        // polygon area is only an admission heuristic, never a Vulkan cull.
+        let gl_area = (backend == MaskBackend::Gl).then(|| {
+            if clip_inside_box(
+                candidate.projection,
+                candidate.viewport,
+                candidate.clip,
+                rect,
+                candidate.key.radius,
+            ) {
+                0.
+            } else {
+                candidate.visible_pixels(expanded)
+            }
+        });
+        if gl_area.is_some_and(|area| area <= 0.) {
+            self.cull();
             return true;
         }
         let key = candidate.key;
@@ -214,11 +262,13 @@ impl ShadowMaskState {
         POOL.with_borrow_mut(|pool| {
             // Matching pixels are already correct; only new bakes need stability
             // or profitability. This also lets new scroll rows reuse immediately.
-            let texture = if let Some(texture) = pool.find(key, now) {
-                texture
+            let sample = if let Some(sample) = pool.find(backend, key, now) {
+                sample
             } else {
-                let admitted = policy == ShadowCache::Enabled
-                    || pool.observe(key, self.id, candidate.halo_pixels(rect), now);
+                let admitted = policy == ShadowCache::Enabled || {
+                    let visible = gl_area.unwrap_or_else(|| candidate.visible_pixels(expanded));
+                    pool.observe(key, self.id, candidate.halo_pixels(rect, visible), now)
+                };
                 if state.resident {
                     // An evicted node waits again rather than rebaking every draw.
                     state.resident = false;
@@ -231,55 +281,31 @@ impl ShadowMaskState {
                     pool.stats.fallbacks += 1;
                     return false;
                 }
-                let Some(texture) = pool.bake(key, now) else {
+                let Some(sample) = pool.bake(backend, key, now) else {
                     state.since = now;
                     pool.stats.fallbacks += 1;
                     return false;
                 };
                 pool.forget_demand(key);
-                texture
+                sample
             };
             state.resident = true;
             let resources = pool.resources.get().and_then(Option::as_ref).unwrap();
-            let clip_depth = crate::clip::active_clip_depth();
-            let material = if clip_depth == 0 {
-                resources.sampler.clone()
-            } else {
-                let mut samplers = resources.clip_samplers.borrow_mut();
-                let sampler = samplers.entry(clip_depth).or_insert_with(|| {
-                    let mut uniforms = vec![
-                        UniformDesc::new("rect", UniformType::Float4),
-                        UniformDesc::new("mask_bounds", UniformType::Float4),
-                        UniformDesc::new("radius", UniformType::Float1),
-                        UniformDesc::new("color", UniformType::Float4),
-                        UniformDesc::new("inverse_model", UniformType::Mat4),
-                    ];
-                    uniforms.extend(crate::clip::clip_uniforms(clip_depth));
-                    let mut fragment = String::from(SAMPLE_FRAGMENT_PREFIX);
-                    fragment.push_str(&crate::clip::clip_shader_helpers(clip_depth));
-                    fragment.push_str(SAMPLE_FRAGMENT_SUFFIX);
-                    UiMaterial::new(&fragment, uniforms, Vec::new()).ok()
-                });
-                let Some(sampler) = sampler.as_ref() else {
-                    return false;
-                };
-                sampler.clone()
+            let Some(material) = resources.sampler(backend, crate::clip::active_clip_depth())
+            else {
+                return false;
             };
-            let reach = shadow.elevation * 3.;
-            let expanded = Rect::new(
-                rect.x - reach,
-                rect.y - reach,
-                rect.w + 2. * reach,
-                rect.h + 2. * reach,
-            );
-            // Unmanaged wrapper: the fixed slot owns the texture and is flushed
-            // before being resized/reused. It is never handed to callers.
-            let texture = Texture2D::from_miniquad_texture(texture);
+            // An unmanaged wrapper: the pool owns the physical texture.
+            let texture = Texture2D::from_miniquad_texture(sample.texture);
             material.with(|| {
                 crate::clip::apply_active_clip_uniforms(&material, None);
                 material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
                 let bounds = key.bounds();
                 material.set_uniform("mask_bounds", vec4(bounds.x, bounds.y, bounds.w, bounds.h));
+                if let Some((region, texel)) = sample.atlas {
+                    material.set_uniform("atlas_region", macroquad::math::Vec4::from_array(region));
+                    material.set_uniform("atlas_texel", macroquad::math::Vec2::from_array(texel));
+                }
                 material.set_uniform("radius", key.radius);
                 material.set_uniform(
                     "color",
@@ -300,33 +326,35 @@ impl ShadowMaskState {
 
 struct Candidate {
     key: Key,
-    visible_pixels: f64,
     projection: macroquad::math::Mat4,
     viewport: Rect,
     clip: Rect,
 }
 impl Candidate {
-    fn halo_pixels(&self, rect: Rect) -> f64 {
-        (self.visible_pixels
-            - projected_area(self.projection, rect, self.viewport, self.clip)
-                .unwrap_or(self.visible_pixels))
+    fn visible_pixels(&self, rect: Rect) -> f64 {
+        projected_area(self.projection, rect, self.viewport, self.clip).unwrap_or(0.)
+    }
+
+    fn halo_pixels(&self, rect: Rect, visible: f64) -> f64 {
+        (visible
+            - projected_area(self.projection, rect, self.viewport, self.clip).unwrap_or(visible))
         .max(0.)
     }
 }
 
 fn candidate_for(
-    paint: &Paint,
     rect: Rect,
+    expanded: Rect,
     shadow: Shadow,
     transform: Matrix,
+    raster: ShadowProjection,
 ) -> Option<Candidate> {
-    // Outside node mounting, Paint may bake a separate transform which the
-    // legacy shadow shader does not include in inverse_model. Preserve that path.
-    if cfg!(target_arch = "wasm32")
-        || transform.x_axis.z != 0.
+    // The shader maps pixels back using Mue's transform, not a host's extra
+    // model transform. Only cache when that mapping matches the submitted quad.
+    if transform.x_axis.z != 0.
         || transform.y_axis.z != 0.
         || transform.z_axis.z != 1.
-        || paint.transform.get() != Matrix::IDENTITY
+        || raster.model != model_matrix(transform)
         || ![
             rect.x,
             rect.y,
@@ -341,45 +369,23 @@ fn candidate_for(
     {
         return None;
     }
-    let gl = unsafe { get_internal_gl() };
-    let supported = SUPPORTED.with(|supported| {
-        *supported.get_or_init(|| gl.quad_context.info().backend == Backend::OpenGl)
-    });
-    if !supported {
-        return None;
-    }
-    let (width, height) = if let Some(pass) = gl.quad_gl.get_active_render_pass() {
-        let attachments = gl.quad_context.render_pass_color_attachments(pass);
-        if attachments.len() != 1 {
-            return None;
-        }
-        gl.quad_context.texture_size(attachments[0])
-    } else {
-        let (width, height) = mq::window::screen_size();
-        (width.max(0.) as u32, height.max(0.) as u32)
-    };
-    let (vx, vy, vw, vh) =
-        gl.quad_gl
-            .get_viewport_raw()
-            .unwrap_or((0, 0, width as i32, height as i32));
-    let m = gl.quad_gl.get_projection_matrix() * model_matrix(transform);
+    let viewport = raster.viewport;
+    let clip = raster.clip?;
+    let m = raster.projection * raster.model;
     // A local texture is not a perspective-adaptive cache. Keep projective
     // transformations analytic rather than undersampling their nearest edge.
     if !m.is_finite()
         || m.x_axis.w != 0.
         || m.y_axis.w != 0.
         || m.w_axis.w <= f32::EPSILON
-        // This cache/cull models a 2D affine plane, not variable near/far clipping.
-        || m.x_axis.z != 0. || m.y_axis.z != 0. || m.w_axis.z.abs() > m.w_axis.w
-        || vw <= 0
-        || vh <= 0
+        || m.x_axis.z != 0.
+        || m.y_axis.z != 0.
+        || m.w_axis.z.abs() > m.w_axis.w
     {
         return None;
     }
-    let x =
-        macroquad::math::vec2(m.x_axis.x * vw as f32, m.x_axis.y * vh as f32) / (2. * m.w_axis.w);
-    let y =
-        macroquad::math::vec2(m.y_axis.x * vw as f32, m.y_axis.y * vh as f32) / (2. * m.w_axis.w);
+    let x = crate::math::vec2(m.x_axis.x * viewport.w, m.x_axis.y * viewport.h) / (2. * m.w_axis.w);
+    let y = crate::math::vec2(m.y_axis.x * viewport.w, m.y_axis.y * viewport.h) / (2. * m.w_axis.w);
     let (a, b, c) = (x.length_squared(), x.dot(y), y.length_squared());
     let scale = ((a + c + ((a - c) * (a - c) + 4. * b * b).sqrt()) * 0.5).sqrt();
     if !scale.is_finite() || scale <= 0. || scale > 4. {
@@ -387,8 +393,8 @@ fn candidate_for(
     }
     // Two samples/device pixel; quantized density avoids tiny scale jitter.
     let density = (scale.max(1.) * 4. - 0.0001).ceil() * 0.5;
-    let w = ((rect.w + 6. * shadow.elevation) * density).ceil() + 2.;
-    let h = ((rect.h + 6. * shadow.elevation) * density).ceil() + 2.;
+    let w = (expanded.w * density).ceil() + 2.;
+    let h = (expanded.h * density).ceil() + 2.;
     if w < 3. || h < 3. || w > MAX_SIDE as f32 || h > MAX_SIDE as f32 {
         return None;
     }
@@ -402,41 +408,8 @@ fn candidate_for(
     if key.bytes() > MAX_MASK_BYTES {
         return None;
     }
-    let target = Rect::new(0., 0., width as f32, height as f32);
-    // QuadGl viewport is bottom-left GL pixels; scissor is top-left pixels.
-    let viewport = Rect::new(
-        vx as f32,
-        height as f32 - vy as f32 - vh as f32,
-        vw as f32,
-        vh as f32,
-    );
-    let clip = target.intersect(&viewport).unwrap_or_default();
-    let clip = if let Some((x, y, w, h)) = gl.quad_gl.get_scissor() {
-        clip.intersect(&Rect::new(
-            x as f32,
-            y as f32,
-            w.max(0) as f32,
-            h.max(0) as f32,
-        ))
-        .unwrap_or_default()
-    } else {
-        clip
-    };
-    let reach = shadow.elevation * 3.;
-    let expanded = Rect::new(
-        rect.x - reach,
-        rect.y - reach,
-        rect.w + 2. * reach,
-        rect.h + 2. * reach,
-    );
-    let visible_pixels = if clip_inside_box(m, viewport, clip, rect, key.radius) {
-        0.
-    } else {
-        projected_area(m, expanded, viewport, clip)?
-    };
     Some(Candidate {
         key,
-        visible_pixels,
         projection: m,
         viewport,
         clip,
@@ -453,9 +426,6 @@ fn clip_inside_box(
     rect: Rect,
     radius: f32,
 ) -> bool {
-    if clip.w <= 0. || clip.h <= 0. {
-        return true;
-    }
     // Invert the canvas plane only. A full 4x4 inverse at clip z=0 is not
     // the inverse of a tilted 2D plane under an orthographic camera.
     let plane = Matrix::from_cols_array(&[
@@ -491,9 +461,6 @@ fn clip_inside_box(
 // halo estimate subtracts the full box (including rounded corners), so it is a
 // conservative lower bound and never credits a clip wholly inside the box.
 fn projected_area(m: macroquad::math::Mat4, rect: Rect, viewport: Rect, clip: Rect) -> Option<f64> {
-    if clip.w <= 0. || clip.h <= 0. {
-        return Some(0.);
-    }
     let mut points = [macroquad::math::Vec2::ZERO; 12];
     for (i, p) in [
         rect.min(),
@@ -663,6 +630,7 @@ impl Slot {
 #[derive(Default)]
 struct Pool {
     slots: Vec<Slot>,
+    atlas: VulkanAtlas,
     demands: Vec<Demand>,
     // Some(None) remembers an initialization failure without repeating GPU work.
     resources: OnceCell<Option<Resources>>,
@@ -671,7 +639,53 @@ struct Pool {
 }
 thread_local! {
     static POOL: RefCell<Pool> = RefCell::default();
-    static SUPPORTED: OnceCell<bool> = const { OnceCell::new() };
+    static BACKEND: OnceCell<Option<MaskBackend>> = const { OnceCell::new() };
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaskBackend {
+    Gl,
+    Vulkan,
+}
+
+impl MaskBackend {
+    fn current() -> Option<Self> {
+        if cfg!(target_arch = "wasm32") {
+            return None;
+        }
+        BACKEND.with(|backend| {
+            *backend.get_or_init(|| {
+                match unsafe { get_internal_gl() }.quad_context.info().backend {
+                    Backend::OpenGl => Some(Self::Gl),
+                    #[cfg(all(
+                        feature = "vulkan",
+                        any(
+                            windows,
+                            target_os = "android",
+                            all(target_os = "linux", not(target_env = "ohos"))
+                        )
+                    ))]
+                    Backend::Vulkan => Some(Self::Vulkan),
+                    _ => None,
+                }
+            })
+        })
+    }
+}
+
+struct MaskSample {
+    texture: TextureId,
+    // Normalized origin and extent, plus texel size, for the Vulkan atlas.
+    atlas: Option<([f32; 4], [f32; 2])>,
+}
+
+impl MaskSample {
+    fn full(texture: TextureId) -> Self {
+        Self {
+            texture,
+            atlas: None,
+        }
+    }
 }
 
 impl Pool {
@@ -704,7 +718,12 @@ impl Pool {
         self.demands.retain(|entry| entry.key != key);
     }
 
-    fn find(&mut self, key: Key, now: Instant) -> Option<TextureId> {
+    fn find(&mut self, backend: MaskBackend, key: Key, now: Instant) -> Option<MaskSample> {
+        if backend == MaskBackend::Vulkan {
+            let sample = self.atlas.find(key, now)?;
+            self.stats.hits += 1;
+            return Some(sample);
+        }
         if let Some(slot) = self
             .slots
             .iter_mut()
@@ -712,12 +731,12 @@ impl Pool {
         {
             slot.touched = now;
             self.stats.hits += 1;
-            return Some(slot.texture);
+            return Some(MaskSample::full(slot.texture));
         }
         None
     }
 
-    fn bake(&mut self, key: Key, now: Instant) -> Option<TextureId> {
+    fn bake(&mut self, backend: MaskBackend, key: Key, now: Instant) -> Option<MaskSample> {
         if self.resources.get().is_some_and(|resources| {
             resources.as_ref().is_none_or(|resources| {
                 key.pixels.0 > resources.max_side || key.pixels.1 > resources.max_side
@@ -727,6 +746,24 @@ impl Pool {
             .is_some_and(|last| now.duration_since(last) < BAKE_INTERVAL)
         {
             return None;
+        }
+        if backend == MaskBackend::Vulkan {
+            if !self.atlas.can_bake(key, now) {
+                return None;
+            }
+            let resources = self
+                .resources
+                .get_or_init(|| Resources::new(backend))
+                .as_ref()?;
+            let result = self.atlas.bake(
+                key,
+                now,
+                &resources.baker,
+                resources.max_side,
+                &mut self.stats,
+            );
+            self.last_attempt = Some(Instant::now());
+            return result;
         }
         // Reuse invalid slots first, including failed storage. Never allocate
         // more metadata to work around a transient failure in an existing slot.
@@ -771,7 +808,7 @@ impl Pool {
         // Failed GPU work is throttled too; node-local stability is not a
         // global attempt budget. Pure CPU rejections above do not spend it.
         self.last_attempt = Some(Instant::now());
-        texture
+        texture.map(MaskSample::full)
     }
 
     fn bake_planned(
@@ -783,11 +820,14 @@ impl Pool {
         // Submit old sampling before reusing any storage; this is an ordering
         // boundary, not a GPU fence or restoration of a host raw pass.
         unsafe { get_internal_gl() }.flush();
-        // Do not attribute an earlier GL error to mask resource setup.
+        // Do not attribute an earlier GL error to this texture allocation.
         if !gl_ok() {
             return None;
         }
-        let resources = self.resources.get_or_init(Resources::new).as_ref()?;
+        let resources = self
+            .resources
+            .get_or_init(|| Resources::new(MaskBackend::Gl))
+            .as_ref()?;
         if key.pixels.0 > resources.max_side || key.pixels.1 > resources.max_side {
             return None;
         }
@@ -795,7 +835,7 @@ impl Pool {
         let index = if let Some(index) = planned {
             index
         } else {
-            let texture = ctx.try_new_render_texture(TextureParams {
+            let texture = ctx.try_new_render_texture(mq::TextureParams {
                 width: 1,
                 height: 1,
                 ..Default::default()
@@ -877,26 +917,16 @@ struct Resources {
     max_side: u32,
 }
 impl Resources {
-    fn new() -> Option<Self> {
+    fn new(backend: MaskBackend) -> Option<Self> {
         let max_side = unsafe { get_internal_gl() }
             .quad_context
             .max_texture_size()?
             .min(MAX_SIDE);
-        let sampler_uniforms = vec![
-            UniformDesc::new("rect", UniformType::Float4),
-            UniformDesc::new("mask_bounds", UniformType::Float4),
-            UniformDesc::new("radius", UniformType::Float1),
-            UniformDesc::new("color", UniformType::Float4),
-            UniformDesc::new("inverse_model", UniformType::Mat4),
-        ];
-        let mut sampler_fragment = String::from(SAMPLE_FRAGMENT_PREFIX);
-        sampler_fragment.push_str(&crate::clip::clip_shader_helpers(0));
-        sampler_fragment.push_str(SAMPLE_FRAGMENT_SUFFIX);
-        let sampler = UiMaterial::new(&sampler_fragment, sampler_uniforms, Vec::new()).ok()?;
-        if !gl_ok() {
+        let sampler = new_sampler(backend, 0)?;
+        if backend == MaskBackend::Gl && !gl_ok() {
             return None;
         }
-        let baker = Baker::new(unsafe { get_internal_gl() }.quad_context)?;
+        let baker = Baker::new(unsafe { get_internal_gl() }.quad_context, backend)?;
         Some(Self {
             sampler,
             clip_samplers: RefCell::new(std::collections::HashMap::new()),
@@ -904,6 +934,96 @@ impl Resources {
             max_side,
         })
     }
+
+    fn sampler(&self, backend: MaskBackend, depth: usize) -> Option<UiMaterial> {
+        if depth == 0 {
+            return Some(self.sampler.clone());
+        }
+        self.clip_samplers
+            .borrow_mut()
+            .entry(depth)
+            .or_insert_with(|| new_sampler(backend, depth))
+            .clone()
+    }
+}
+
+fn sampler_source(backend: MaskBackend, depth: usize) -> (String, Vec<UniformDesc>) {
+    let mut uniforms = vec![
+        UniformDesc::new("rect", UniformType::Float4),
+        UniformDesc::new("mask_bounds", UniformType::Float4),
+        UniformDesc::new("radius", UniformType::Float1),
+        UniformDesc::new("color", UniformType::Float4),
+        UniformDesc::new("inverse_model", UniformType::Mat4),
+    ];
+    let fragment_main = if backend == MaskBackend::Vulkan {
+        uniforms.extend([
+            UniformDesc::new("atlas_region", UniformType::Float4),
+            UniformDesc::new("atlas_texel", UniformType::Float2),
+        ]);
+        ATLAS_SAMPLE_FRAGMENT
+    } else {
+        GL_SAMPLE_FRAGMENT
+    };
+    uniforms.extend(crate::clip::clip_uniforms(depth));
+    let mut fragment = String::from("#version 100\n");
+    if backend == MaskBackend::Vulkan {
+        // Miniquad translates the ESSL extension's texture2DLodEXT to textureLod.
+        fragment.push_str("#extension GL_EXT_shader_texture_lod : require\n");
+    }
+    fragment.push_str(SAMPLE_FRAGMENT_PREFIX);
+    fragment.push_str(&crate::clip::clip_shader_helpers(depth));
+    fragment.push_str(fragment_main);
+    (fragment, uniforms)
+}
+
+fn new_sampler(backend: MaskBackend, depth: usize) -> Option<UiMaterial> {
+    let (fragment, uniforms) = sampler_source(backend, depth);
+    UiMaterial::new(&fragment, uniforms, Vec::new()).ok()
+}
+
+#[cfg(all(
+    test,
+    feature = "vulkan",
+    any(
+        windows,
+        target_os = "android",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
+))]
+#[test]
+fn vulkan_mask_sampling_uses_explicit_lod() {
+    let (fragment, uniforms) = sampler_source(MaskBackend::Vulkan, 2);
+    // Match the standard uniforms/images prepended by QuadGl.
+    let mut layout = vec![
+        UniformDesc::new("Projection", UniformType::Mat4),
+        UniformDesc::new("Model", UniformType::Mat4),
+        UniformDesc::new("_Time", UniformType::Float4),
+    ];
+    layout.extend(uniforms);
+    let (_, spirv) = mq::graphics::vulkan::compile_glsl(
+        crate::material::UI_VERTEX,
+        &fragment,
+        &ShaderMeta {
+            uniforms: UniformBlockLayout { uniforms: layout },
+            images: vec!["Texture".into(), "_ScreenTexture".into()],
+        },
+    )
+    .unwrap();
+    const OP_IMAGE_SAMPLE_IMPLICIT_LOD: u32 = 87;
+    const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u32 = 88;
+    let mut instructions = &spirv[5..];
+    let mut explicit_samples = 0;
+    while let Some(&header) = instructions.first() {
+        let count = (header >> 16) as usize;
+        assert!(count > 0);
+        let opcode = header & 0xffff;
+        assert_ne!(opcode, OP_IMAGE_SAMPLE_IMPLICIT_LOD);
+        if opcode == OP_IMAGE_SAMPLE_EXPLICIT_LOD {
+            explicit_samples += 1;
+        }
+        instructions = &instructions[count..];
+    }
+    assert_eq!(explicit_samples, 1);
 }
 
 #[repr(C)]
@@ -920,7 +1040,7 @@ struct Baker {
     _shader: ShaderId,
 }
 impl Baker {
-    fn new(ctx: &mut dyn RenderingBackend) -> Option<Self> {
+    fn new(ctx: &mut dyn RenderingBackend, backend: MaskBackend) -> Option<Self> {
         let shader = ctx
             .new_shader(
                 ShaderSource::Glsl {
@@ -956,7 +1076,7 @@ impl Baker {
             BufferUsage::Immutable,
             BufferSource::slice(&[0u16, 1, 3, 0, 3, 2]),
         );
-        if !gl_ok() {
+        if backend == MaskBackend::Gl && !gl_ok() {
             ctx.delete_buffer(vertices);
             ctx.delete_buffer(indices);
             ctx.delete_pipeline(pipeline);
@@ -977,32 +1097,74 @@ impl Baker {
                 == mq::gl::GL_FRAMEBUFFER_COMPLETE
         };
         if complete {
-            ctx.apply_pipeline(&self.pipeline);
-            ctx.apply_viewport(0, 0, key.pixels.0 as i32, key.pixels.1 as i32);
-            ctx.apply_scissor_rect(0, 0, key.pixels.0 as i32, key.pixels.1 as i32);
-            ctx.clear(Some((0., 0., 0., 0.)), None, None);
-            ctx.apply_bindings_from_slice(&[self.vertices], self.indices, &[]);
-            let bounds = key.bounds();
-            ctx.apply_uniforms(UniformsSource::table(&BakeUniforms {
-                bounds: [bounds.x, bounds.y, bounds.w, bounds.h],
-                rect: [0., 0., key.width, key.height],
-                elevation: key.elevation,
-                radius: key.radius,
-            }));
-            ctx.draw(0, 6, 1);
+            self.draw_region(
+                ctx,
+                key,
+                [0, 0, key.pixels.0 as i32, key.pixels.1 as i32],
+                true,
+            );
         }
         ctx.end_render_pass();
         let clean = gl_ok();
         complete && clean
+    }
+
+    fn bake_atlas(
+        &self,
+        ctx: &mut dyn RenderingBackend,
+        pass: RenderPass,
+        texture: TextureId,
+        key: Key,
+        region: [i32; 4],
+        first: bool,
+    ) {
+        // Only the first bake clears; a later clear would wipe other masks.
+        // The unblended draw fills its whole allocated region, including padding.
+        let action = if first {
+            PassAction::clear_color(0., 0., 0., 0.)
+        } else {
+            PassAction::Nothing
+        };
+        ctx.begin_pass(Some(pass), action);
+        self.draw_region(ctx, key, region, false);
+        ctx.end_render_pass();
+        ctx.prepare_render_texture_for_sampling(texture);
+    }
+
+    fn draw_region(
+        &self,
+        ctx: &mut dyn RenderingBackend,
+        key: Key,
+        [x, y, w, h]: [i32; 4],
+        clear_gl: bool,
+    ) {
+        ctx.apply_pipeline(&self.pipeline);
+        ctx.apply_viewport(x, y, w, h);
+        ctx.apply_scissor_rect(x, y, w, h);
+        if clear_gl {
+            // GL clears use the bound pipeline's color mask and the scissor.
+            ctx.clear(Some((0., 0., 0., 0.)), None, None);
+        }
+        ctx.apply_bindings_from_slice(&[self.vertices], self.indices, &[]);
+        let bounds = key.bounds();
+        ctx.apply_uniforms(UniformsSource::table(&BakeUniforms {
+            bounds: [bounds.x, bounds.y, bounds.w, bounds.h],
+            rect: [0., 0., key.width, key.height],
+            elevation: key.elevation,
+            radius: key.radius,
+        }));
+        ctx.draw(0, 6, 1);
     }
 }
 
 /// Read this render thread's mask pool without allocating GPU resources.
 pub fn shadow_mask_cache_stats() -> ShadowMaskCacheStats {
     POOL.with_borrow(|pool| ShadowMaskCacheStats {
-        slots: pool.slots.len(),
-        resident_masks: pool.slots.iter().filter(|slot| slot.key.is_some()).count(),
-        allocated_bytes: pool.slots.iter().map(Slot::bytes).sum(),
+        slots: pool.slots.len() + pool.atlas.len(),
+        resident_masks: pool.slots.iter().filter(|slot| slot.key.is_some()).count()
+            + pool.atlas.len(),
+        allocated_bytes: pool.slots.iter().map(Slot::bytes).sum::<usize>()
+            + pool.atlas.allocated_bytes(),
         pending_keys: pool
             .demands
             .iter()
@@ -1014,12 +1176,14 @@ pub fn shadow_mask_cache_stats() -> ShadowMaskCacheStats {
     })
 }
 
-/// Flush queued sampling, invalidate masks and shrink slots to 1x1. Call only
-/// on the live render thread, outside a host raw pass. The fixed pool/baker
-/// persists until context teardown so repeated clears do not grow driver metadata.
+/// Invalidate masks and admission history on the live render thread, outside
+/// a host raw pass. OpenGL flushes and shrinks its slots to 1x1; Vulkan keeps
+/// its fixed pages (later overwrites are ordered on the graphics queue).
+/// Backing objects and shaders persist until context teardown.
 pub fn clear_shadow_mask_cache() {
     POOL.with_borrow_mut(|pool| {
         pool.demands.clear();
+        pool.atlas.clear();
         if pool.slots.is_empty() {
             return;
         }

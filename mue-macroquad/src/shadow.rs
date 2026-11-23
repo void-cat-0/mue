@@ -5,9 +5,11 @@
 //! box shadow adapted from Phira's prpr shadow.
 
 mod mask;
+mod visibility;
 
 pub(crate) use mask::ShadowMaskState;
 pub use mask::{ShadowMaskCacheStats, clear_shadow_mask_cache, shadow_mask_cache_stats};
+use visibility::ShadowProjection;
 
 use macroquad::math::vec4;
 use mue_core::prop::PropValue;
@@ -67,7 +69,7 @@ impl Shadow {
 
 impl PropValue for Shadow {}
 
-/// Admission policy for the shared, bounded native-OpenGL shadow-mask cache.
+/// Admission policy for the shared, bounded native OpenGL and Vulkan shadow-mask cache.
 /// All policies preserve the analytic fallback and the same quality/resource limits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ShadowCache {
@@ -195,13 +197,6 @@ pub(crate) fn draw_shadow(
         return;
     }
 
-    let clip_depth = crate::clip::active_clip_depth();
-    if cache == ShadowCache::Disabled {
-        mask.reset();
-    } else if mask.draw(paint, rect, shadow, transform, inverse, cache) {
-        return;
-    }
-
     let reach = elevation * 3.;
     let expanded = Rect::new(
         rect.x - reach,
@@ -210,7 +205,20 @@ pub(crate) fn draw_shadow(
         rect.h + 2. * reach,
     );
 
-    let material = shadow_material(clip_depth);
+    let projection = ShadowProjection::for_draw(paint);
+    if projection.is_some_and(|projection| projection.outside(expanded)) {
+        mask.cull();
+        return;
+    }
+    if cache == ShadowCache::Disabled {
+        mask.reset();
+    } else if mask.draw(
+        paint, rect, expanded, shadow, transform, inverse, cache, projection,
+    ) {
+        return;
+    }
+
+    let material = shadow_material(crate::clip::active_clip_depth());
     material.with(|| {
         crate::clip::apply_active_clip_uniforms(&material, None);
         material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));

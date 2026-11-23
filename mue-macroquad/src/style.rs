@@ -402,7 +402,7 @@ define_style! {
     shadow: Shadow;
     /// Select shared mask admission (Auto by default). Exact resident masks reuse immediately;
     /// new masks require stable parameters, and Auto also requires substantial recent coverage.
-    /// Currently native OpenGL only; unsupported, small or changing shadows stay analytic.
+    /// Available on Vulkan and native OpenGL; unsupported, small or changing shadows stay analytic.
     shadow_cache: ShadowCache = ShadowCache::Auto;
     /// Clip children to a rounded rectangle with this radius (px/vw/vh;
     /// percent is not resolved).

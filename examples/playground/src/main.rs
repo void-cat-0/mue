@@ -11,10 +11,7 @@ fn main() {
             window_title: "mue - playground".into(),
             window_width: 1120,
             window_height: 800,
-            platform: miniquad::conf::Platform {
-                rendering_backend: render_backend::preferred(),
-                ..Default::default()
-            },
+            platform: render_backend::platform(),
             ..Default::default()
         },
         run(),

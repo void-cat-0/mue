@@ -101,41 +101,39 @@ heuristics, not a GPU-profit guarantee or a frame snapshot. Enabled bypasses the
 economic checks, but not stability/backend/quality/storage limits. Small shadows
 and overloaded pending sets may stay analytic indefinitely.
 
-Zero physical coverage or a clip strictly within the knockout core does not
-count demand, sample or bake. Uncertain rounded edges/corners still draw. Auto
-does not infer occlusion by other widgets/materials, and native projected or
-non-normalized homographies fall back rather than applying unsafe culling.
-The sharp interior cutout is still evaluated per fragment, preventing filtered
-mask texels from leaking into a transparent panel; this is not a full pixel
-snapshot or a retained mesh. RGBA8 quantization/filtering can cause small visual
-differences from the analytic shader.
+The paint path skips a shadow when its expanded quad is provably outside the
+viewport and scissor, even with caching disabled. Uncertain transforms still
+draw. Analytic shading skips the blur integral where the clip, rounded cutout,
+or integration interval gives zero coverage. Native OpenGL's mask path also
+skips demand when its clip lies strictly inside the knockout core. Auto does
+not infer occlusion by other widgets or materials.
 
-The render-thread pool has at most 8 reusable slots and a 16 MiB logical storage
-budget, with a 4 MiB/2048-pixel limit per mask. It uses native OpenGL only; blur
-below 1 logical pixel, projective transforms, excessive scale/size, unsupported
-backends, resource failure or cache pressure fall back to the analytic path.
-Continuously changing parameters do not bake every frame; a slow step animation
-that rests longer than the stable window can still bake. Missing/evicted nodes wait again,
-recently sampled masks are protected from eviction for 100 ms, and GPU bake
-attempts (including failures) are throttled to one per 16 ms after completion.
-A full actively used pool leaves extra shadows analytic instead of rotating all
-masks through repeated bakes. These are heuristics, not GPU-time budgets. No WebGL or Metal support is added by this option.
+The pool allows at most 8 resident masks and 16 MiB of logical RGBA8 backing
+storage, with a limit of 4 MiB and 2048 pixels per side per mask. Native OpenGL
+keeps resizable slots; Vulkan packs masks into fixed-size backing pages, with
+capability-checked, fallible page allocation. It never resizes or frees pages
+on a cache miss or eviction. The first bake clears a page; later bakes write
+only their region. Samples clamp to the region's texel centers. If the fixed
+pages are full, fragmented, or cannot fit a shape, extra shadows stay analytic.
+The sharp interior cutout remains analytic; RGBA8 quantization and filtering
+can produce small visual differences from the full analytic shader.
 
-First bake, slot reuse and `shadow::clear_shadow_mask_cache()` flush queued work
-before an offscreen pass or texture resize. They leave macroquad's camera, model,
-material, viewport and scissor state intact, but cannot resume an arbitrary host
-raw miniquad pass. Keep mue drawing outside host raw passes. Read
-`shadow::shadow_mask_cache_stats()` for hits, bakes, fallbacks, Auto rejections,
-culled draws, bounded pending keys and logical bytes;
-clear on the live render thread to discard demand history, invalidate masks and
-shrink valid slots to 1x1 (the 16 ms attempt throttle remains). Failed storage or
-passes can reuse their existing slot after the wait; failed texture/FBO object
-creation is never repaired by a resize or drawn through. Known shader initialization
-failures fall back without repeating GPU work. The bounded pool and its baker live
-until context teardown, not node drop.
-In-flight driver storage may temporarily exceed the logical budget. Built-in rounded/sector
-clip stacks are applied to both analytic and cached shadow sampling; arbitrary external
-materials remain outside that stack.
+Only stable keys are baked. Blur below one logical pixel, perspective,
+excessive scale/size, unsupported backends, failed texture allocation or mask
+shader initialization, and cache pressure are reasons to use the analytic
+path. Recently sampled masks are protected from eviction for 100 ms. Bake
+attempts are throttled to one per 16 ms after completion. These are heuristics,
+not GPU-time budgets. No WebGL or Metal cache support is implied.
+
+Before overwriting mask storage, the baker flushes queued Macroquad draws. On
+Vulkan, sampling and rebaking are ordered by barriers in the existing graphics
+command stream, without a queue-idle wait. `shadow::clear_shadow_mask_cache()`
+invalidates keys and demand history; it shrinks valid OpenGL slots to 1×1 but
+retains Vulkan backing pages until context teardown. Keep mue drawing outside
+a host raw miniquad pass. `shadow::shadow_mask_cache_stats()` reports hits,
+bakes, fallbacks, culled draws, pending demand and logical backing bytes (not
+driver memory overhead). The built-in rounded/sector clip stack applies to
+both paths.
 
 `Style::clip_radius(Size::Px(12.))` clips the node's children to a rounded
 rectangle. It does not clip the node's own background; use `border-radius` for

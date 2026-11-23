@@ -13,10 +13,7 @@ fn main() {
             window_title: "mue - glyph atlas stress".into(),
             window_width: 900,
             window_height: 700,
-            platform: miniquad::conf::Platform {
-                rendering_backend: render_backend::preferred(),
-                ..Default::default()
-            },
+            platform: render_backend::platform(),
             ..Default::default()
         },
         atlas::run(options),

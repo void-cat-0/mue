@@ -42,6 +42,8 @@ The `mue::guide` module collects the application guides in Rustdoc. The same gui
 
 ## Examples
 
+On the Vulkan development branch, first check out the matching Miniquad and Macroquad forks beside Mue. See [paired checkouts and Vulkan testing](docs/reference/examples.md#vulkan-development-checkout) for setup.
+
 Run an example from the standalone examples package with Cargo, for example:
 
 ```sh

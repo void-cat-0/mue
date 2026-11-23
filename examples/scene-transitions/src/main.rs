@@ -14,10 +14,7 @@ fn window_config() -> Conf {
         window_title: "mue - Scene transitions (1/2/3, Esc, Q)".into(),
         window_width: 640,
         window_height: 400,
-        platform: miniquad::conf::Platform {
-            rendering_backend: render_backend::preferred(),
-            ..Default::default()
-        },
+        platform: render_backend::platform(),
         ..Default::default()
     }
 }

@@ -156,6 +156,18 @@ name = "vulkan-shaders"
 path = "vulkan-shaders/src/main.rs"
 doc = false
 
+[[example]]
+name = "vulkan-startup"
+path = "vulkan-startup/src/main.rs"
+required-features = ["vulkan"]
+doc = false
+
+[[example]]
+name = "shadow-probe"
+path = "shadow-probe/src/main.rs"
+required-features = ["vulkan"]
+doc = false
+
 # Android's miniquad host loads these cdylibs directly.
 [[example]]
 name = "atlas-android"
@@ -195,6 +207,14 @@ test = false
 [[example]]
 name = "vulkan-shaders-android"
 path = "vulkan-shaders/src/lib.rs"
+crate-type = ["cdylib"]
+required-features = ["vulkan"]
+doc = false
+test = false
+
+[[example]]
+name = "shadow-probe-android"
+path = "shadow-probe/src/lib.rs"
 crate-type = ["cdylib"]
 required-features = ["vulkan"]
 doc = false

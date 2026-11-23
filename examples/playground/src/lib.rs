@@ -86,10 +86,7 @@ pub extern "C" fn quad_main() {
     macroquad::Window::from_config(
         macroquad::window::Conf {
             window_title: "mue - playground".into(),
-            platform: miniquad::conf::Platform {
-                rendering_backend: render_backend::preferred(),
-                ..Default::default()
-            },
+            platform: render_backend::platform(),
             ..Default::default()
         },
         run(),

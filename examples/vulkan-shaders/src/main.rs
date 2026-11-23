@@ -1,4 +1,6 @@
-//! Pixel checks for fixed SPIR-V, runtime GLSL, and texture region uploads.
+//! Offscreen pixel checks for shaders, texture uploads, and scene composition.
+use std::{cell::Cell, rc::Rc};
+
 use macroquad::{
     miniquad::{TextureUpdateRegion, UniformDesc, UniformType},
     prelude::*,
@@ -6,8 +8,14 @@ use macroquad::{
     ui::root_ui,
 };
 use mue_macroquad::{
-    App, CallbackResult, Scene, SceneRender, SceneTransition, UiMaterial, transition::Transition,
+    App, CallbackResult, Scene, SceneRender, SceneTransition, transition::Transition,
 };
+
+#[path = "regressions.rs"]
+mod regressions;
+#[cfg(feature = "vulkan")]
+#[path = "shadow.rs"]
+mod shadow;
 
 const RED: Color = Color::new(1., 0., 0., 1.);
 const BLUE: Color = Color::new(0., 0., 1., 1.);
@@ -18,15 +26,6 @@ precision mediump float;
 uniform vec4 Tint;
 void main() {
     gl_FragColor = Tint;
-}
-"#;
-
-const SNAPSHOT_FRAGMENT: &str = r#"#version 100
-precision mediump float;
-uniform sampler2D _ScreenTexture;
-varying lowp vec2 v_uv;
-void main() {
-    gl_FragColor = vec4(texture2D(_ScreenTexture, v_uv).bgr, 1.0);
 }
 "#;
 
@@ -99,28 +98,6 @@ fn check_texture_regions() {
     check_pixel("first overlapping region", image.get_pixel(2, 2), RED);
     check_pixel("last region wins", image.get_pixel(3, 2), BLUE);
     check_pixel("previous update preserved", image.get_pixel(6, 6), GREEN);
-}
-
-fn check_texture_transfer_lengths() {
-    let ctx = unsafe { get_internal_gl() }.quad_context;
-    // A larger caller buffer must not change the texel format or the amount copied.
-    let texture = ctx.new_texture_from_data_and_format(
-        &[255, 0, 0, 123],
-        miniquad::TextureParams {
-            width: 1,
-            height: 1,
-            format: miniquad::TextureFormat::RGB8,
-            ..Default::default()
-        },
-    );
-    let mut bytes = [123; 4];
-    ctx.texture_read_pixels(texture, &mut bytes);
-    assert_eq!(bytes, [255, 0, 0, 123]);
-    ctx.texture_resize(texture, 1, 2, Some(&[0, 255, 0, 0, 0, 255, 123]));
-    let mut bytes = [123; 7];
-    ctx.texture_read_pixels(texture, &mut bytes);
-    assert_eq!(bytes, [0, 255, 0, 0, 0, 255, 123]);
-    ctx.delete_texture(texture);
 }
 
 fn check_ordered_texture_regions() {
@@ -224,33 +201,6 @@ fn check_offscreen_shaders() {
     let image = texture.get_texture_data();
     check_pixel("default retained shader", image.get_pixel(16, 32), WHITE);
     check_pixel("runtime retained shader", image.get_pixel(48, 32), GREEN);
-
-    let snapshot = UiMaterial::new(SNAPSHOT_FRAGMENT, Vec::new(), Vec::new())
-        .expect("runtime snapshot material");
-    set_camera(&camera);
-    clear_background(RED);
-    snapshot.with(|| draw_rectangle(0., 0., 64., 64., WHITE));
-    set_default_camera();
-    check_pixel(
-        "snapshotter shader",
-        texture.get_texture_data().get_pixel(32, 32),
-        BLUE,
-    );
-
-    set_camera(&camera);
-    clear_background(GREEN);
-    retained::draw_meshes_ranges(&mesh, &[], Mat4::IDENTITY, 1.);
-    // The new texture closes Vulkan's rendering instance, not the retained target.
-    let _texture = Texture2D::from_rgba8(1, 1, &[255; 4]);
-    set_default_camera();
-    let ctx = unsafe { get_internal_gl() }.quad_context;
-    ctx.clear(Some((0., 0., 1., 1.)), None, None);
-    ctx.end_render_pass();
-    check_pixel(
-        "ending retained rendering releases the offscreen target",
-        texture.get_texture_data().get_pixel(48, 32),
-        GREEN,
-    );
 }
 
 struct SolidScene(Color);
@@ -285,11 +235,55 @@ async fn run() {
         Some(RED),
     );
     next_frame().await;
+    #[cfg(all(
+        feature = "vulkan",
+        any(windows, all(target_os = "linux", not(target_env = "ohos")))
+    ))]
+    if let Some(cache) = std::env::args()
+        .skip(1)
+        .find_map(|mode| match mode.as_str() {
+            "--shadow-analytic" => Some(false),
+            "--shadow-mask" => Some(true),
+            _ => None,
+        })
+    {
+        let result = shadow::profile(cache, 180).await;
+        println!(
+            "shadow {}: cpu_draw={:.3} ms, gpu_draw={}, draw_and_wait={:.3} ms, hits={}, bakes={}",
+            if cache { "mask" } else { "analytic" },
+            result.cpu_draw.as_secs_f64() * 1000.,
+            result.gpu_draw.map_or_else(
+                || "unsupported".into(),
+                |gpu| format!("{:.3} ms", gpu.as_secs_f64() * 1000.)
+            ),
+            result.draw_and_wait.as_secs_f64() * 1000.,
+            result.hits,
+            result.bakes,
+        );
+        return;
+    }
     check_texture_regions();
-    check_texture_transfer_lengths();
     check_ordered_texture_regions();
     check_offscreen_shaders();
+    regressions::check().await;
+    #[cfg(feature = "vulkan")]
+    shadow::check().await;
     let mut app = App::with_scene(SolidScene(RED));
+    check_scene_crossfade(&mut app).await;
+    #[cfg(not(target_os = "android"))]
+    println!("Shader pixel checks passed");
+    #[cfg(target_os = "android")]
+    {
+        miniquad::info!("Shader pixel checks passed (offscreen); Scene crossfade rendered");
+        // Keep presenting so the same run can test resize and resume.
+        loop {
+            app.try_frame().expect("Scene frame after shader checks");
+            next_frame().await;
+        }
+    }
+}
+
+async fn check_scene_crossfade(app: &mut App) {
     app.try_frame().expect("source scene");
     next_frame().await;
     app.push_scene(SolidScene(BLUE))
@@ -301,34 +295,37 @@ async fn run() {
         if let Some(frame) = app.transition_state()
             && (0.2..0.8).contains(&frame.linear_progress)
         {
-            // Android swapchains need not support transfer-source blits. Exercise
-            // the real Scene transition there without requiring window readback.
-            #[cfg(not(target_os = "android"))]
-            {
-                let image = get_screen_data();
-                let center =
-                    image.get_pixel(u32::from(image.width / 2), u32::from(image.height / 2));
-                check_pixel(
-                    "Scene crossfade",
-                    center,
-                    Color::new(1. - frame.progress, 0., frame.progress, 1.),
-                );
-            }
+            let expected = Color::new(1. - frame.progress, 0., frame.progress, 1.);
+            // Interrupting a composite makes its last output the new source.
+            // This checks the built-in crossfade's actual pixels without using
+            // the window framebuffer or duplicating the crossfade shader.
+            next_frame().await; // Present the sampled intermediate frame first.
+            let actual = Rc::new(Cell::new(None));
+            let mut probe = Some(actual.clone());
+            app.replace_scene(SolidScene(GREEN))
+                .transition(SceneTransition::composite(
+                    Transition::linear(0.25),
+                    move |frame, pictures| {
+                        if let Some(probe) = probe.take() {
+                            let image = pictures.from.get_texture_data();
+                            probe.set(Some(image.get_pixel(
+                                u32::from(image.width / 2),
+                                u32::from(image.height / 2),
+                            )));
+                        }
+                        let bounds = frame.viewport;
+                        draw_rectangle(bounds.x, bounds.y, bounds.w, bounds.h, GREEN);
+                        Ok(())
+                    },
+                ));
+            app.try_frame().expect("interrupted crossfade frame");
+            check_pixel(
+                "interrupted Scene crossfade source",
+                actual.get().expect("composite callback published a pixel"),
+                expected,
+            );
             next_frame().await;
-            #[cfg(not(target_os = "android"))]
-            {
-                println!("Shader pixel checks passed");
-                return;
-            }
-            #[cfg(target_os = "android")]
-            {
-                miniquad::info!("Shader pixel checks passed (offscreen); Scene crossfade rendered");
-                // Keep presenting so the same run can test resize and resume.
-                loop {
-                    app.try_frame().expect("Scene frame after shader checks");
-                    next_frame().await;
-                }
-            }
+            return;
         }
         next_frame().await;
     }
@@ -336,24 +333,35 @@ async fn run() {
 }
 
 pub(crate) fn main() {
+    let platform = miniquad::conf::Platform {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        linux_backend: std::env::args()
+            .find_map(|arg| match arg.as_str() {
+                "--wayland" => Some(miniquad::conf::LinuxBackend::WaylandOnly),
+                "--x11-with-wayland-fallback" => {
+                    Some(miniquad::conf::LinuxBackend::X11WithWaylandFallback)
+                }
+                _ => None,
+            })
+            .unwrap_or_default(),
+        #[cfg(all(
+            feature = "vulkan",
+            any(
+                windows,
+                target_os = "android",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
+        ))]
+        rendering_backend: miniquad::conf::RenderingBackend::Vulkan,
+        ..Default::default()
+    };
     macroquad::Window::from_config(
         Conf {
             window_title: "mue - Shader smoke".into(),
             window_width: 256,
             window_height: 192,
             window_resizable: false,
-            #[cfg(all(
-                feature = "vulkan",
-                any(
-                    windows,
-                    target_os = "android",
-                    all(target_os = "linux", not(target_env = "ohos"))
-                )
-            ))]
-            platform: miniquad::conf::Platform {
-                rendering_backend: miniquad::conf::RenderingBackend::Vulkan,
-                ..Default::default()
-            },
+            platform,
             ..Default::default()
         },
         run(),
