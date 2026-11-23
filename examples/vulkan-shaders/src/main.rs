@@ -101,6 +101,28 @@ fn check_texture_regions() {
     check_pixel("previous update preserved", image.get_pixel(6, 6), GREEN);
 }
 
+fn check_texture_transfer_lengths() {
+    let ctx = unsafe { get_internal_gl() }.quad_context;
+    // A larger caller buffer must not change the texel format or the amount copied.
+    let texture = ctx.new_texture_from_data_and_format(
+        &[255, 0, 0, 123],
+        miniquad::TextureParams {
+            width: 1,
+            height: 1,
+            format: miniquad::TextureFormat::RGB8,
+            ..Default::default()
+        },
+    );
+    let mut bytes = [123; 4];
+    ctx.texture_read_pixels(texture, &mut bytes);
+    assert_eq!(bytes, [255, 0, 0, 123]);
+    ctx.texture_resize(texture, 1, 2, Some(&[0, 255, 0, 0, 0, 255, 123]));
+    let mut bytes = [123; 7];
+    ctx.texture_read_pixels(texture, &mut bytes);
+    assert_eq!(bytes, [0, 255, 0, 0, 0, 255, 123]);
+    ctx.delete_texture(texture);
+}
+
 fn check_ordered_texture_regions() {
     fn texel(x: i32, bytes: &[u8; 4]) -> TextureUpdateRegion<'_> {
         TextureUpdateRegion {
@@ -214,6 +236,21 @@ fn check_offscreen_shaders() {
         texture.get_texture_data().get_pixel(32, 32),
         BLUE,
     );
+
+    set_camera(&camera);
+    clear_background(GREEN);
+    retained::draw_meshes_ranges(&mesh, &[], Mat4::IDENTITY, 1.);
+    // The new texture closes Vulkan's rendering instance, not the retained target.
+    let _texture = Texture2D::from_rgba8(1, 1, &[255; 4]);
+    set_default_camera();
+    let ctx = unsafe { get_internal_gl() }.quad_context;
+    ctx.clear(Some((0., 0., 1., 1.)), None, None);
+    ctx.end_render_pass();
+    check_pixel(
+        "ending retained rendering releases the offscreen target",
+        texture.get_texture_data().get_pixel(48, 32),
+        GREEN,
+    );
 }
 
 struct SolidScene(Color);
@@ -249,6 +286,7 @@ async fn run() {
     );
     next_frame().await;
     check_texture_regions();
+    check_texture_transfer_lengths();
     check_ordered_texture_regions();
     check_offscreen_shaders();
     let mut app = App::with_scene(SolidScene(RED));

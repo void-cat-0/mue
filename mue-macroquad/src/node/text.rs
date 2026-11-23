@@ -134,13 +134,12 @@ impl FontState {
 ///
 /// Queried once, on the rendering thread, when the first glyph needs a page.
 fn device_page_size() -> i32 {
-    let size = unsafe { macroquad::window::get_internal_gl() }
+    let preferred = DEFAULT_PAGE_SIZE as u32;
+    unsafe { macroquad::window::get_internal_gl() }
         .quad_context
         .max_texture_size()
-        .and_then(|limit| i32::try_from(limit).ok())
-        .filter(|&limit| limit > 0)
-        .map_or(DEFAULT_PAGE_SIZE, |limit| DEFAULT_PAGE_SIZE.min(limit));
-    size
+        .unwrap_or(preferred)
+        .min(preferred) as i32
 }
 
 impl Default for FontState {
@@ -531,22 +530,23 @@ mod retained_scroll_tests {
         let lines = [line(0, 0., 10., 0.)];
         let clip = Rect::new(90., 40., 20., 20.);
         let mut position = position(0.);
-        assert_eq!(text_cull_clip(position.transform, Some(clip)), Some(clip));
+        let mut ranges = Vec::new();
+        let cull_clip = text_cull_clip(position.transform, Some(clip));
+        visible_line_ranges(0, &lines, position, cull_clip, &mut ranges);
+        assert!(ranges.is_empty());
+
         position.transform.x_axis.z = -0.1;
         // The quad straddles W=0: its projected corners miss the clip,
         // but a point inside it projects to (100, 50) with positive W.
         let model = position.model(0.);
-        assert!(!rect_visible(
-            Some(clip),
-            &transform_rect(model, lines[0].bounds)
-        ));
+        assert!(!text_rect_visible(Some(clip), model, lines[0].bounds));
         assert!(clip.contains(&crate::math::project_point(
             model,
             vec2(100. / 11. - 8., 50. / 11.)
         )));
         let cull_clip = text_cull_clip(position.transform, Some(clip));
         assert!(cull_clip.is_none());
-        let mut ranges = Vec::new();
+        assert!(text_rect_visible(cull_clip, model, lines[0].bounds));
         visible_line_ranges(0, &lines, position, cull_clip, &mut ranges);
         assert_eq!(ranges[0].indices, 0..6);
     }

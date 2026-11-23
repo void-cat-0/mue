@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use cosmic_text::{CacheKey, FontSystem, Placement, SwashCache, SwashContent};
+use cosmic_text::{CacheKey, FontSystem, Placement, SwashCache, SwashContent, SwashImage};
 use guillotiere::euclid::{Size2D, UnknownUnit, size2};
 use guillotiere::{AllocId, AtlasAllocator};
-use macroquad::texture::{FilterMode, Image, Texture2D};
+use macroquad::texture::{FilterMode, Texture2D};
 use miniquad::TextureUpdateRegion;
 use smallvec::SmallVec;
 
@@ -89,10 +89,10 @@ impl DirtyRect {
 struct Page {
     side: usize,
     allocator: AtlasAllocator,
-    texture: Option<SharedTexture>,
+    texture: SharedTexture,
     /// CPU mirror flushed at the end of a text batch. It keeps untouched
     /// texels correct inside a coalesced upload.
-    staging: Option<Vec<u8>>,
+    staging: Vec<u8>,
     /// Rectangles written since the last flush.
     pending: Vec<DirtyRect>,
     /// Any allocation or cache hit pins the entire page against resets.
@@ -102,31 +102,19 @@ struct Page {
 }
 
 impl Page {
-    fn new(page_size: i32) -> Self {
+    fn new(allocator: AtlasAllocator, last_used: u64) -> Self {
+        let side = allocator.size().width as usize;
+        let staging = vec![0; side * side * 4];
+        let texture = Texture2D::from_rgba8(side as u16, side as u16, &staging);
+        texture.set_filter(FilterMode::Linear);
         Self {
-            side: page_size as usize,
-            allocator: AtlasAllocator::new(size2(page_size, page_size)),
-            texture: None,
-            staging: None,
+            side,
+            allocator,
+            texture: texture.into(),
+            staging,
             pending: Vec::new(),
-            last_used: 0,
+            last_used,
             candidates: Vec::new(),
-        }
-    }
-
-    fn ensure_assets(&mut self) {
-        if self.staging.is_none() {
-            self.staging = Some(vec![0; self.side * self.side * 4]);
-        }
-        if self.texture.is_none() {
-            let texture: SharedTexture = Texture2D::from_image(&Image {
-                bytes: vec![0; self.side * self.side * 4],
-                width: self.side as u16,
-                height: self.side as u16,
-            })
-            .into();
-            texture.set_filter(FilterMode::Linear);
-            self.texture = Some(texture);
         }
     }
 
@@ -140,24 +128,21 @@ impl Page {
         if self.pending.is_empty() {
             return;
         }
-        let (Some(texture), Some(staging)) = (&self.texture, &self.staging) else {
-            self.pending.clear();
-            return;
-        };
         let mut union = self.pending[0];
         let mut changed = 0;
         for rect in &self.pending {
             union = union.union(rect.x, rect.y, rect.w, rect.h);
             changed += rect.area();
         }
-        let (rects, pixels) = if union.area() <= changed.saturating_mul(4) {
+        // Dirty slots remain pinned and disjoint until this upload.
+        let (rects, pixels) = if union.area() <= changed * 4 {
             (std::slice::from_ref(&union), union.area())
         } else {
             (self.pending.as_slice(), changed)
         };
         let mut bytes = Vec::with_capacity(pixels * 4);
         for rect in rects {
-            rect.append_pixels(staging, self.side, &mut bytes);
+            rect.append_pixels(&self.staging, self.side, &mut bytes);
         }
         let mut remaining = bytes.as_slice();
         let regions: SmallVec<[_; 1]> = rects
@@ -174,7 +159,7 @@ impl Page {
                 }
             })
             .collect();
-        texture.update_regions(&regions);
+        self.texture.update_regions(&regions);
         stats.uploads += regions.len() as u64;
         stats.uploaded_pixels += pixels as u64;
         self.pending.clear();
@@ -265,7 +250,7 @@ impl Atlas {
             glyph.last_used = self.pass;
             let page = &mut self.pages[glyph.page];
             page.last_used = self.pass;
-            let texture = page.texture.as_ref()?.clone();
+            let texture = page.texture.clone();
             return Some(CachedGlyph {
                 texture,
                 uv: glyph.uv,
@@ -277,54 +262,35 @@ impl Atlas {
         // lifetime of this raster and cache churn must not grow unboundedly.
         let image = cache.get_image_uncached(font_system, key)?;
         let placement = image.placement;
-        let width = match i32::try_from(placement.width) {
-            Ok(width) => width,
-            Err(_) => {
-                self.stats.rejected_oversized += 1;
-                return None;
-            }
-        };
-        let height = match i32::try_from(placement.height) {
-            Ok(height) => height,
-            Err(_) => {
-                self.stats.rejected_oversized += 1;
-                return None;
-            }
-        };
-        if width <= 0 || height <= 0 {
+        let (width, height) = (placement.width, placement.height);
+        if width == 0 || height == 0 {
             // Whitespace and other empty glyphs have nothing to upload.
             return None;
         }
-        let padded_width = match width.checked_add(PADDING * 2) {
-            Some(width) => width,
-            None => {
-                self.stats.rejected_oversized += 1;
-                return None;
-            }
-        };
-        let padded_height = match height.checked_add(PADDING * 2) {
-            Some(height) => height,
-            None => {
-                self.stats.rejected_oversized += 1;
-                return None;
-            }
-        };
-        if padded_width > self.page_size || padded_height > self.page_size {
+        let max_glyph_side = (self.page_size - 2 * PADDING).max(0) as u32;
+        if width > max_glyph_side || height > max_glyph_side {
             self.stats.rejected_oversized += 1;
             if self.stats.rejected_oversized == 1 {
                 eprintln!(
-                    "mue glyph atlas: rejected non-empty glyph {}x{} (page size {})",
-                    padded_width, padded_height, self.page_size
+                    "mue glyph atlas: rejected glyph {width}x{height} plus padding (page size {})",
+                    self.page_size
                 );
             }
             return None;
         }
-        if !raster_data_valid(image.content, &image.data, width as usize, height as usize) {
+        // Dimensions now fit on a page, so the signed sizes and byte count fit too.
+        let bytes_per_pixel = match image.content {
+            SwashContent::Mask => 1,
+            SwashContent::Color | SwashContent::SubpixelMask => 4,
+        };
+        if image.data.len() != width as usize * height as usize * bytes_per_pixel {
             self.stats.rejected_raster += 1;
             return None;
         }
+        let padded_width = width as i32 + 2 * PADDING;
+        let padded_height = height as i32 + 2 * PADDING;
 
-        let Some((page, allocation)) = self.allocate(padded_width, padded_height) else {
+        let Some((page, allocation)) = self.allocate(size2(padded_width, padded_height)) else {
             self.stats.rejected_exhausted += 1;
             if self.stats.rejected_exhausted == 1 {
                 eprintln!(
@@ -335,44 +301,22 @@ impl Atlas {
             return None;
         };
 
-        let rect = self.pages[page].allocator[allocation];
-        let x = rect.min.x + PADDING;
-        let y = rect.min.y + PADDING;
-        let staged = {
-            let page = &mut self.pages[page];
-            page.ensure_assets();
-            let staging = page.staging.as_mut().expect("staging was just initialized");
-            blit_glyph(
-                staging,
-                page.side,
-                x,
-                y,
-                Raster {
-                    content: image.content,
-                    data: &image.data,
-                    width: width as usize,
-                    height: height as usize,
-                },
-            )
-        };
-        if !staged {
-            self.pages[page].allocator.deallocate(allocation);
-            self.stats.rejected_raster += 1;
-            return None;
-        }
-
         let page_data = &mut self.pages[page];
-        page_data.mark_dirty(x - PADDING, y - PADDING, padded_width, padded_height);
-        let texture = page_data
-            .texture
-            .as_ref()
-            .expect("texture was just initialized")
-            .clone();
+        let origin = page_data.allocator[allocation].min;
+        blit_glyph(
+            &mut page_data.staging,
+            page_data.side,
+            origin.x as usize,
+            origin.y as usize,
+            &image,
+        );
+        page_data.mark_dirty(origin.x, origin.y, padded_width, padded_height);
+        let texture = page_data.texture.clone();
 
         let page_size = self.page_size as f32;
         let uv = Rect::new(
-            x as f32 / page_size,
-            y as f32 / page_size,
+            (origin.x + PADDING) as f32 / page_size,
+            (origin.y + PADDING) as f32 / page_size,
             width as f32 / page_size,
             height as f32 / page_size,
         );
@@ -394,11 +338,7 @@ impl Atlas {
         })
     }
 
-    fn allocate(&mut self, width: i32, height: i32) -> Option<(usize, AllocId)> {
-        if width <= 0 || height <= 0 || width > self.page_size || height > self.page_size {
-            return None;
-        }
-        let requested = size2(width, height);
+    fn allocate(&mut self, requested: Size2D<i32, UnknownUnit>) -> Option<(usize, AllocId)> {
         if let Some(slot) = self.allocate_in_existing_pages(requested) {
             return Some(slot);
         }
@@ -446,15 +386,14 @@ impl Atlas {
         }
 
         // All existing entries are in use this pass. Grow lazily only now.
-        if self.pages.len() < self.max_pages {
-            let page = self.pages.len();
-            self.pages.push(Page::new(self.page_size));
-            if let Some(allocation) = self.pages[page].allocator.allocate(requested) {
-                self.pages[page].last_used = self.pass;
-                return Some((page, allocation.id));
-            }
+        if self.pages.len() == self.max_pages {
+            return None;
         }
-        None
+        let mut allocator = AtlasAllocator::new(size2(self.page_size, self.page_size));
+        let allocation = allocator.allocate(requested)?;
+        let page = self.pages.len();
+        self.pages.push(Page::new(allocator, self.pass));
+        Some((page, allocation.id))
     }
 
     fn build_candidates(&mut self) {
@@ -505,56 +444,25 @@ impl Atlas {
     }
 }
 
-/// One rasterized glyph handed to the page mirror.
-struct Raster<'a> {
-    content: SwashContent,
-    data: &'a [u8],
-    width: usize,
-    height: usize,
-}
-
-fn raster_data_valid(content: SwashContent, data: &[u8], width: usize, height: usize) -> bool {
-    let Some(pixels) = width.checked_mul(height) else {
-        return false;
-    };
-    match content {
-        SwashContent::Mask => data.len() == pixels,
-        SwashContent::Color | SwashContent::SubpixelMask => {
-            pixels.checked_mul(4).is_some_and(|len| data.len() == len)
-        }
-    }
-}
-
-/// Writes one padded glyph raster into the CPU page mirror.
+/// Writes one validated glyph raster into its padded slot in the CPU page mirror.
 ///
 /// The one-pixel border is cleared first: a reused slot still holds the
 /// previous glyph's texels, and the border must not inherit them.
-fn blit_glyph(staging: &mut [u8], side: usize, x: i32, y: i32, raster: Raster<'_>) -> bool {
-    if !raster_data_valid(raster.content, raster.data, raster.width, raster.height) {
-        return false;
-    }
-    let w = raster.width;
-    let h = raster.height;
+fn blit_glyph(staging: &mut [u8], side: usize, left: usize, top: usize, raster: &SwashImage) {
+    let w = raster.placement.width as usize;
+    let h = raster.placement.height as usize;
     let stride = side * 4;
     let pad = PADDING as usize;
-    let left = x as usize - pad;
-    let top = y as usize - pad;
-    let padded_width = w + pad * 2;
+    let padded_width = w + 2 * pad;
 
-    for row in 0..h + pad * 2 {
+    for row in 0..h + 2 * pad {
         let start = (top + row) * stride + left * 4;
         staging[start..start + padded_width * 4].fill(0);
     }
 
-    let Some(pixels) = w.checked_mul(h) else {
-        return false;
-    };
     let glyph_start = |row: usize| (top + pad + row) * stride + (left + pad) * 4;
     match raster.content {
         SwashContent::Mask => {
-            if raster.data.len() != pixels {
-                return false;
-            }
             for row in 0..h {
                 let start = glyph_start(row);
                 let source = &raster.data[row * w..(row + 1) * w];
@@ -567,26 +475,18 @@ fn blit_glyph(staging: &mut [u8], side: usize, x: i32, y: i32, raster: Raster<'_
                     *dest = [255, 255, 255, alpha];
                 }
             }
-            true
         }
         SwashContent::Color => {
-            if raster.data.len() != pixels * 4 {
-                return false;
-            }
             for row in 0..h {
                 let start = glyph_start(row);
                 let source = row * w * 4;
                 staging[start..start + w * 4].copy_from_slice(&raster.data[source..source + w * 4]);
             }
-            true
         }
         // Swash describes this as four bytes containing RGB coverage. Treat
         // the strongest channel as coverage and render it as white alpha;
         // this is deterministic and avoids panicking on an uncommon format.
         SwashContent::SubpixelMask => {
-            if raster.data.len() != pixels * 4 {
-                return false;
-            }
             for row in 0..h {
                 let start = glyph_start(row);
                 let row_data = &raster.data[row * w * 4..(row + 1) * w * 4];
@@ -600,7 +500,36 @@ fn blit_glyph(staging: &mut [u8], side: usize, x: i32, y: i32, raster: Raster<'_
                     *dest = [255, 255, 255, alpha];
                 }
             }
-            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blit_places_the_glyph_inside_its_padded_slot() {
+        let mut page = [42; 5 * 5 * 4];
+        let glyph = SwashImage {
+            content: SwashContent::Mask,
+            placement: Placement {
+                width: 2,
+                height: 1,
+                ..Default::default()
+            },
+            data: vec![63, 191],
+            ..Default::default()
+        };
+        blit_glyph(&mut page, 5, 1, 1, &glyph);
+        for (index, &pixel) in page.as_chunks::<4>().0.iter().enumerate() {
+            let expected = match (index % 5, index / 5) {
+                (2, 2) => [255, 255, 255, 63],
+                (3, 2) => [255, 255, 255, 191],
+                (1..=4, 1..=3) => [0; 4],
+                _ => [42; 4],
+            };
+            assert_eq!(pixel, expected);
         }
     }
 }

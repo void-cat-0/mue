@@ -212,6 +212,7 @@ impl PictureCache {
         }
         // Verify backend and compile materials before allocating any targets.
         if self.materials.is_none() {
+            require_picture_backend()?;
             self.materials = Some(PictureMaterials {
                 copy: make_copy_material()?,
                 opaque: make_opaque_material()?,
@@ -357,9 +358,8 @@ fn blit(texture: &Texture2D, viewport: Rect) {
 }
 
 fn require_picture_backend() -> TransitionResult<()> {
-    let backend = unsafe { get_internal_gl() }.quad_context.info().backend;
-    let supported = match backend {
-        Backend::OpenGl => true,
+    match unsafe { get_internal_gl() }.quad_context.info().backend {
+        Backend::OpenGl => Ok(()),
         #[cfg(all(
             feature = "vulkan",
             any(
@@ -368,13 +368,9 @@ fn require_picture_backend() -> TransitionResult<()> {
                 all(target_os = "linux", not(target_env = "ohos"))
             )
         ))]
-        Backend::Vulkan => true,
-        _ => false,
-    };
-    if !supported {
-        return Err(TransitionError::UnsupportedBackend);
+        Backend::Vulkan => Ok(()),
+        _ => Err(TransitionError::UnsupportedBackend),
     }
-    Ok(())
 }
 
 fn picture_shader(fragment: PictureFragment) -> ShaderSource<'static> {
@@ -422,7 +418,6 @@ enum PictureFragment {
 }
 
 fn make_copy_material() -> TransitionResult<Material> {
-    require_picture_backend()?;
     // Overwrite RGBA and force alpha=1: default alpha blending would multiply
     // cached alpha again and darken later copies/frozen interrupted composites.
     load_material(
@@ -453,7 +448,6 @@ fn make_opaque_material() -> TransitionResult<Material> {
 }
 
 fn make_crossfade_material() -> TransitionResult<Material> {
-    require_picture_backend()?;
     load_material(
         picture_shader(PictureFragment::Crossfade),
         MaterialParams {
