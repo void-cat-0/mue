@@ -47,6 +47,9 @@ float roundedBoxShadowIntegral(vec2 lower, vec2 upper, vec2 point, float sigma, 
     float high = point.y + halfSize.y;
     float start = clamp(-3.0 * sigma, low, high);
     float end = clamp(3.0 * sigma, low, high);
+    if (start == end) {
+        return 0.0;
+    }
 
     float s = (end - start) / 4.0;
     float y = start + s * 0.5;
@@ -61,5 +64,8 @@ float roundedBoxShadowIntegral(vec2 lower, vec2 upper, vec2 point, float sigma, 
 
 float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner) {
     float factor = roundedBoxCutout(lower, upper, point, corner);
+    if (factor == 0.0) {
+        return 0.0;
+    }
     return roundedBoxShadowIntegral(lower, upper, point, sigma, corner) * factor;
 }

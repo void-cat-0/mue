@@ -107,9 +107,14 @@ uniform highp mat4 inverse_model;
 
 const SHADOW_FRAGMENT_SUFFIX: &str = r#"
 void main() {
+    float clip = combined_clip_mask(v_pos);
+    if (clip == 0.0) {
+        gl_FragColor = vec4(color.rgb, 0.0);
+        return;
+    }
     vec2 local = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
     float alpha = roundedBoxShadow(rect.xy, rect.zw, local, elevation, radius);
-    gl_FragColor = vec4(color.rgb, alpha * color.a * combined_clip_mask(v_pos));
+    gl_FragColor = vec4(color.rgb, alpha * color.a * clip);
 }
 "#;
 
