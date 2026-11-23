@@ -98,7 +98,7 @@ void main() {
 "#;
 
 /// Cumulative diagnostics for the render thread's bounded mask pool.
-/// Bytes include all allocated RGBA8 slots, even invalid 1x1 slots; driver
+/// Bytes include all allocated RGBA8 slots, even empty 1x1 slots; driver
 /// storage retained for in-flight commands is not a strict physical-memory cap.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShadowMaskCacheStats {
@@ -647,20 +647,16 @@ struct Slot {
     texture: TextureId,
     pass: RenderPass,
     pixels: (u32, u32),
-    allocated_bytes: usize,
     touched: Instant,
-    // Storage may be retried; failed texture/FBO object creation may not.
-    metadata_valid: bool,
     usable: bool,
 }
 impl Slot {
     fn bytes(&self) -> usize {
-        self.allocated_bytes
+        self.pixels.0 as usize * self.pixels.1 as usize * 4
     }
 
     fn reusable(&self, now: Instant) -> bool {
-        self.metadata_valid
-            && (self.key.is_none() || now.duration_since(self.touched) >= STABLE_FOR)
+        self.key.is_none() || now.duration_since(self.touched) >= STABLE_FOR
     }
 }
 
@@ -738,7 +734,7 @@ impl Pool {
             .slots
             .iter()
             .enumerate()
-            .filter(|(_, slot)| slot.metadata_valid && slot.key.is_none())
+            .filter(|(_, slot)| slot.key.is_none())
             .min_by_key(|(_, slot)| slot.touched)
             .map(|(i, _)| i)
             .or_else(|| {
@@ -787,7 +783,7 @@ impl Pool {
         // Submit old sampling before reusing any storage; this is an ordering
         // boundary, not a GPU fence or restoration of a host raw pass.
         unsafe { get_internal_gl() }.flush();
-        // Do not attribute an earlier GL error to this texture allocation.
+        // Do not attribute an earlier GL error to mask resource setup.
         if !gl_ok() {
             return None;
         }
@@ -799,28 +795,27 @@ impl Pool {
         let index = if let Some(index) = planned {
             index
         } else {
-            let texture = ctx.new_render_texture(TextureParams {
+            let texture = ctx.try_new_render_texture(TextureParams {
                 width: 1,
                 height: 1,
                 ..Default::default()
-            });
+            })?;
             let pass = ctx.new_render_pass(texture, None);
-            let metadata_valid = gl_ok();
+            if !gl_ok() {
+                ctx.delete_render_pass(pass);
+                ctx.delete_texture(texture);
+                return None;
+            }
             self.slots.push(Slot {
                 key: None,
                 texture,
                 pass,
                 pixels: (1, 1),
-                allocated_bytes: 4,
                 touched: now,
-                metadata_valid,
-                usable: metadata_valid,
+                usable: true,
             });
             self.slots.len() - 1
         };
-        if !self.slots[index].metadata_valid {
-            return None;
-        }
         while self.slots.iter().map(Slot::bytes).sum::<usize>() - self.slots[index].bytes()
             + key.bytes()
             > MAX_BYTES
@@ -865,29 +860,11 @@ fn gl_ok() -> bool {
     unsafe { mq::gl::glGetError() == mq::gl::GL_NO_ERROR }
 }
 fn resize(ctx: &mut dyn RenderingBackend, slot: &mut Slot, pixels: (u32, u32)) -> bool {
-    // A failed FBO allocation could be name zero (the default framebuffer).
-    // Resizing storage cannot validate that object; never draw through it.
-    if !slot.metadata_valid {
-        return false;
-    }
     if slot.pixels != pixels || !slot.usable {
-        let requested = pixels.0 as usize * pixels.1 as usize * 4;
-        ctx.texture_resize(slot.texture, pixels.0, pixels.1, None);
-        if !gl_ok() {
-            // An unrelated GL error may accompany successful storage replacement.
-            // Keep a conservative byte charge, and try releasing the storage.
-            slot.allocated_bytes = slot.allocated_bytes.max(requested);
-            slot.key = None;
-            slot.usable = false;
-            ctx.texture_resize(slot.texture, 1, 1, None);
-            if gl_ok() {
-                slot.pixels = (1, 1);
-                slot.allocated_bytes = 4;
-            }
+        if !ctx.try_texture_resize(slot.texture, pixels.0, pixels.1, None) {
             return false;
         }
         slot.pixels = pixels;
-        slot.allocated_bytes = requested;
         slot.usable = true;
     }
     true
@@ -901,11 +878,10 @@ struct Resources {
 }
 impl Resources {
     fn new() -> Option<Self> {
-        let mut limit = 0;
-        unsafe { mq::gl::glGetIntegerv(mq::gl::GL_MAX_TEXTURE_SIZE, &mut limit) };
-        if !gl_ok() || limit < 3 {
-            return None;
-        }
+        let max_side = unsafe { get_internal_gl() }
+            .quad_context
+            .max_texture_size()?
+            .min(MAX_SIDE);
         let sampler_uniforms = vec![
             UniformDesc::new("rect", UniformType::Float4),
             UniformDesc::new("mask_bounds", UniformType::Float4),
@@ -925,7 +901,7 @@ impl Resources {
             sampler,
             clip_samplers: RefCell::new(std::collections::HashMap::new()),
             baker,
-            max_side: (limit as u32).min(MAX_SIDE),
+            max_side,
         })
     }
 }
