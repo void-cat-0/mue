@@ -8,6 +8,7 @@ use cosmic_text::{
     Attrs, Buffer, CacheKey, FamilyOwned, FontSystem, Metrics, Shaping, Style as FontStyle,
     SwashCache, Weight, Wrap,
 };
+use glam::{DVec2, Vec3};
 use mue_core::{
     effect::{computed, watch_effect},
     prop::Prop,
@@ -250,111 +251,79 @@ impl TextPosition {
     }
 }
 
+fn text_cull_clip(transform: Matrix, clip: Option<Rect>) -> Option<Rect> {
+    // Projecting the corners can miss visible text across a perspective horizon.
+    // Leave clipping to the scissor in that case.
+    clip.filter(|_| transform.row(2) == Vec3::Z)
+}
+
+fn text_rect_visible(clip: Option<Rect>, transform: Matrix, bounds: Rect) -> bool {
+    clip.is_none_or(|clip| rect_visible(Some(clip), &transform_rect(transform, bounds)))
+}
+
 /// Bounds of the uploaded quads, plus a bound on how far re-snapping their
 /// baselines can move the model away from a plain translation by `node_y`.
 struct TextBlockBounds {
-    min: [f64; 2],
-    max: [f64; 2],
-    baseline_magnitude: f64,
-    mesh_y_magnitude: f64,
-    residual: f64,
+    min: DVec2,
+    max: DVec2,
+    snap_margin: f64,
 }
 
 impl TextBlockBounds {
+    const BASELINE_ROUNDING: f64 = 8. * f32::EPSILON as f64;
+
     fn new(batches: &[Vec<LineRange>]) -> Option<Self> {
-        let mut bounds: Option<Self> = None;
-        for line in batches.iter().flatten() {
-            let local = line.bounds;
-            let offset = f64::from(line.baseline.offset);
-            let layout_y = f64::from(line.baseline.layout_y);
-            let mesh_y = f64::from(line.mesh_y);
-            let values = [local.x, local.y, local.right(), local.bottom()];
-            if !values.into_iter().all(f32::is_finite)
-                || local.w < 0.
-                || local.h < 0.
-                || !offset.is_finite()
-                || !layout_y.is_finite()
-                || !mesh_y.is_finite()
-            {
-                return None;
-            }
-            let min = [f64::from(local.x), f64::from(local.y)];
-            let max = [f64::from(local.right()), f64::from(local.bottom())];
-            let baseline_magnitude = offset.abs() + layout_y.abs();
-            let residual = (offset + layout_y - mesh_y).abs();
-            match &mut bounds {
-                Some(bounds) => {
-                    for axis in 0..2 {
-                        bounds.min[axis] = bounds.min[axis].min(min[axis]);
-                        bounds.max[axis] = bounds.max[axis].max(max[axis]);
-                    }
-                    bounds.baseline_magnitude = bounds.baseline_magnitude.max(baseline_magnitude);
-                    bounds.mesh_y_magnitude = bounds.mesh_y_magnitude.max(mesh_y.abs());
-                    bounds.residual = bounds.residual.max(residual);
+        batches
+            .iter()
+            .flatten()
+            .map(|line| {
+                let offset = f64::from(line.baseline.offset);
+                let layout_y = f64::from(line.baseline.layout_y);
+                let mesh_y = f64::from(line.mesh_y);
+                // The residual, half-pixel snap and f32 arithmetic can all
+                // affect the translation. Only the node origin varies on scroll.
+                let snap_margin = (offset + layout_y - mesh_y).abs()
+                    + 0.5
+                    + Self::BASELINE_ROUNDING * (offset.abs() + layout_y.abs() + mesh_y.abs() + 1.);
+                Self {
+                    min: line.bounds.min().as_dvec2(),
+                    max: line.bounds.max().as_dvec2(),
+                    snap_margin,
                 }
-                None => {
-                    bounds = Some(Self {
-                        min,
-                        max,
-                        baseline_magnitude,
-                        mesh_y_magnitude: mesh_y.abs(),
-                        residual,
-                    });
-                }
-            }
-        }
-        bounds
+            })
+            .reduce(|a, b| Self {
+                min: a.min.min(b.min),
+                max: a.max.max(b.max),
+                snap_margin: a.snap_margin.max(b.snap_margin),
+            })
     }
 
+    /// Test an affine clip selected by `text_cull_clip`.
     fn is_outside(&self, position: TextPosition, clip: Rect) -> bool {
         let model = position.transform;
-        // Four corners bound an affine box. Don't guess for homographies or
-        // non-finite geometry; take the per-line path in those cases.
-        if !model.is_finite()
-            || model.x_axis.z != 0.
-            || model.y_axis.z != 0.
-            || model.z_axis.z != 1.
-            || !position.node_x.is_finite()
-            || !position.node_y.is_finite()
-            || ![clip.x, clip.y, clip.right(), clip.bottom()]
-                .into_iter()
-                .all(f32::is_finite)
-        {
-            return false;
-        }
-
-        let eps = f64::from(f32::EPSILON);
         let x = f64::from(position.node_x);
         let y = f64::from(position.node_y);
-        // |snap(y) - mesh_y - y| is bounded by the build-time residual,
-        // the half-pixel snap, and the error of the f32 adds/subtract.
-        let baseline_scale = y.abs() + self.baseline_magnitude + self.mesh_y_magnitude + 1.;
-        if baseline_scale > f64::from(f32::MAX) / 8. {
-            return false;
-        }
-        let margin_y = self.residual + 0.5 + 8. * eps * baseline_scale;
-        let [min_x, min_y] = self.min;
-        let [max_x, max_y] = self.max;
-        let span_x = min_x.abs().max(max_x.abs());
-        let span_y = min_y.abs().max(max_y.abs()) + margin_y;
+        let margin_y = self.snap_margin + Self::BASELINE_ROUNDING * y.abs();
+        let a = model.x_axis.truncate().as_dvec2();
+        let b = model.y_axis.truncate().as_dvec2();
+        let t = model.z_axis.truncate().as_dvec2();
+        let x1 = a * self.min.x;
+        let x2 = a * self.max.x;
+        let y1 = b * (self.min.y - margin_y);
+        let y2 = b * (self.max.y + margin_y);
+        let shift = a * x + b * y + t;
+        let min = shift + x1.min(x2) + y1.min(y2);
+        let max = shift + x1.max(x2) + y1.max(y2);
         // Bound the f32 model arithmetic by the magnitude of its terms so
         // cancellation does not hide the error. Keep a logical pixel of slack.
-        let mut outside = false;
-        for (axis, clip_min, clip_max) in [(0, clip.x, clip.right()), (1, clip.y, clip.bottom())] {
-            let a = f64::from(model.x_axis[axis]);
-            let b = f64::from(model.y_axis[axis]);
-            let t = f64::from(model.z_axis[axis]);
-            let magnitude = a.abs() * (x.abs() + span_x) + b.abs() * (y.abs() + span_y) + t.abs();
-            if !magnitude.is_finite() || magnitude > f64::from(f32::MAX) / 8. {
-                return false;
-            }
-            let shift = a * x + b * y + t;
-            let lo = shift + (a * min_x).min(a * max_x) + (b * min_y).min(b * max_y);
-            let hi = shift + (a * min_x).max(a * max_x) + (b * min_y).max(b * max_y);
-            let slack = b.abs() * margin_y + 16. * eps * magnitude + 1.;
-            outside |= hi + slack < f64::from(clip_min) || lo - slack > f64::from(clip_max);
-        }
-        outside
+        let magnitude = a.abs() * x.abs()
+            + b.abs() * y.abs()
+            + t.abs()
+            + x1.abs().max(x2.abs())
+            + y1.abs().max(y2.abs());
+        let slack = magnitude * (16. * f32::EPSILON as f64) + DVec2::ONE;
+        (max + slack).cmplt(clip.min().as_dvec2()).any()
+            || (min - slack).cmpgt(clip.max().as_dvec2()).any()
     }
 }
 
@@ -391,7 +360,7 @@ impl RetainedTextCache {
             return false;
         }
 
-        let clip = current_clip_logical();
+        let clip = text_cull_clip(position.transform, current_clip_logical());
         if same_content && !self.meshes.is_empty() {
             // If glyphs were rejected under atlas pressure, previously absent
             // quads can extend beyond the cached bounds. Preserve their retry.
@@ -484,7 +453,7 @@ fn visible_line_ranges(
             // Do not bridge a different translation, even if that line is clipped.
             current = None;
         }
-        if clip.is_some_and(|clip| !rect_visible(Some(clip), &transform_rect(model, line.bounds))) {
+        if !text_rect_visible(clip, model, line.bounds) {
             continue;
         }
         let end = line.first + line.count;
@@ -560,19 +529,28 @@ mod retained_scroll_tests {
     }
 
     #[test]
-    fn block_cull_fails_open_for_projective_or_invalid_geometry() {
-        let mut batches = [vec![line(0, 0., 10., 0.)]];
-        let block = TextBlockBounds::new(&batches).unwrap();
-        let clip = Rect::new(-100., -100., 10., 10.);
-        assert!(block.is_outside(position(0.), clip));
+    fn projective_text_skips_corner_culling() {
+        let lines = [line(0, 0., 10., 0.)];
+        let clip = Rect::new(90., 40., 20., 20.);
         let mut position = position(0.);
-        position.transform.x_axis.z = 0.1;
-        assert!(!block.is_outside(position, clip));
-        position.transform = Matrix::IDENTITY;
-        position.node_y = f32::INFINITY;
-        assert!(!block.is_outside(position, clip));
-        batches[0][0].bounds.y = f32::NAN;
-        assert!(TextBlockBounds::new(&batches).is_none());
+        assert_eq!(text_cull_clip(position.transform, Some(clip)), Some(clip));
+        position.transform.x_axis.z = -0.1;
+        // The quad straddles W=0: its projected corners miss the clip,
+        // but a point inside it projects to (100, 50) with positive W.
+        let model = position.model(0.);
+        assert!(!rect_visible(
+            Some(clip),
+            &transform_rect(model, lines[0].bounds)
+        ));
+        assert!(clip.contains(&crate::math::project_point(
+            model,
+            vec2(100. / 11. - 8., 50. / 11.)
+        )));
+        let cull_clip = text_cull_clip(position.transform, Some(clip));
+        assert!(cull_clip.is_none());
+        let mut ranges = Vec::new();
+        visible_line_ranges(0, &lines, position, cull_clip, &mut ranges);
+        assert_eq!(ranges[0].indices, 0..6);
     }
 
     #[test]
@@ -1135,8 +1113,8 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
             }
 
             let mut draw = || {
-                let clip = current_clip_logical();
                 let transform = current_transform();
+                let clip = text_cull_clip(transform, current_clip_logical());
                 paint.draw(|p| {
                     for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
                         // The atlas is rasterized for a pixel grid. Snap the
@@ -1159,7 +1137,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 run.line_w,
                                 (font_size / 16.).max(1.),
                             );
-                            if rect_visible(clip, &transform_rect(transform, rule)) {
+                            if text_rect_visible(clip, transform, rule) {
                                 p.fill_rect(rule, color_brush.shader(bounds));
                             }
                         }
@@ -1176,7 +1154,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 run.line_w,
                                 (font_size / 16.).max(1.),
                             );
-                            if rect_visible(clip, &transform_rect(transform, underline)) {
+                            if text_rect_visible(clip, transform, underline) {
                                 p.fill_rect(underline, color_brush.shader(bounds));
                             }
                         }
@@ -1199,7 +1177,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                                 placement.width as f32,
                                 placement.height as f32,
                             );
-                            if !rect_visible(clip, &transform_rect(transform, draw_rect)) {
+                            if !text_rect_visible(clip, transform, draw_rect) {
                                 continue;
                             }
                             let glyph_brush = glyph.color_opt.map(|color| {
