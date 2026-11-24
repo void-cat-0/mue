@@ -12,6 +12,9 @@
 //! Scene alone is scheduled; covered instances retain their state and resources.
 //! For lifecycle and raw-input details, see the [`scene`] module. Optional
 //! draw-only effects are described by [`SceneTransition`].
+//! An optional [`App::set_overlay_root`] tree is owned by the App, not its
+//! Scenes. It draws above the transition result and does not receive input.
+//! [`App::set_modal_root`] mounts a separate, interactive layer above it.
 //!
 //! External renderers should finish their target draws, close raw passes, and
 //! restore the default camera before the App frame. [`crate::RenderStateGuard`]
@@ -22,13 +25,14 @@
 use crate::{
     AppError, CallbackError, CallbackResult, Result, SceneError,
     event::pointer::PointerManager,
-    input::InputBatch,
+    input::{InputBatch, InputEvent},
     math::{Rect, Vector},
-    node::{GeometrySnapshot, IntoNode, NodeRef},
+    node::{GeometrySnapshot, IntoNode, Node, NodeRef},
+    render::DrawBoundary,
     runtime::{Runtime, TimeoutKey, get_time},
     scene::{
-        NodeScene, Scene, SceneCommand, SceneContext, SceneEvent, SceneFrame, SceneRender,
-        SceneRequest, SceneRequestData, SceneResult, SceneRoot, TransitionChoice,
+        NodeScene, RootInput, Scene, SceneCommand, SceneContext, SceneEvent, SceneFrame,
+        SceneRender, SceneRequest, SceneRequestData, SceneResult, SceneRoot, TransitionChoice,
     },
     scene_transition::{
         PhaseClock, PictureCache, SceneTransition, TransitionFrame, TransitionPhase,
@@ -36,7 +40,8 @@ use crate::{
     },
     transition,
 };
-use mue_core::{batch, task};
+use miniquad::KeyCode;
+use mue_core::{batch, prop::Prop, signal::Access, task};
 use ordered_float::NotNan;
 use std::{
     any::Any,
@@ -101,6 +106,50 @@ impl ActiveTransition {
     }
 }
 
+/// One App-owned modal tree, drawn above the input-transparent overlay.
+///
+/// The tree is prepared and updated even when closed, but is drawn and routed
+/// only when open. Keep its state independent of the Scene stack.
+pub struct ModalRoot {
+    node: Node,
+    open: Prop<bool>,
+    on_escape: Option<Box<dyn FnMut()>>,
+}
+
+impl ModalRoot {
+    /// Take ownership of an independent Node tree. The window viewport is its
+    /// layout constraint; the root's own styles determine what it draws.
+    pub fn new(root: impl IntoNode, open: impl Into<Prop<bool>>) -> Self {
+        Self {
+            node: root.into_node(),
+            open: open.into(),
+            on_escape: None,
+        }
+    }
+
+    /// Handle a fresh Escape press while this root is the presented modal.
+    /// The callback runs after Node pointer dispatch, before Scene raw input.
+    pub fn on_escape(mut self, action: impl FnMut() + 'static) -> Self {
+        self.on_escape = Some(Box::new(action));
+        self
+    }
+}
+
+#[derive(Default)]
+struct DisplayedRoots {
+    scene: Vec<SceneRoot>,
+    modal: Option<SceneRoot>,
+}
+
+impl DisplayedRoots {
+    fn input_roots(&self) -> &[SceneRoot] {
+        match &self.modal {
+            Some(modal) => std::slice::from_ref(modal),
+            None => &self.scene,
+        }
+    }
+}
+
 /// Retains a Scene stack and schedules its top for each normal frame.
 ///
 /// Covered instances keep their resources, but receive no ordinary Scene or Node
@@ -117,7 +166,9 @@ pub struct App {
     active_transition: Option<ActiveTransition>,
     default_transition: Option<Box<dyn FnMut() -> SceneTransition>>,
     pictures: PictureCache,
-    displayed: Vec<SceneRoot>,
+    displayed: DisplayedRoots,
+    overlay_root: Option<Node>,
+    modal_root: Option<ModalRoot>,
     layout: SceneLayout,
     pointer_manager: PointerManager,
 }
@@ -180,7 +231,7 @@ impl App {
         let root_ref = *root;
         let mut app = Self::from_scene(NodeScene { root });
         // Preserve explicit custom hit bounds before the first Node layout.
-        app.displayed.push(SceneRoot::new(root_ref, viewport));
+        app.displayed.scene.push(SceneRoot::new(root_ref, viewport));
         app
     }
 
@@ -202,16 +253,63 @@ impl App {
             active_transition: None,
             default_transition: None,
             pictures: PictureCache::new(),
-            displayed: Vec::new(),
+            displayed: DisplayedRoots::default(),
+            overlay_root: None,
+            modal_root: None,
             layout: SceneLayout::default(),
             pointer_manager: PointerManager::new(),
         }
     }
 
-    /// Test the roots drawn in the last successful frame, in actual drawing order.
+    /// Install or replace the App's independent, input-transparent overlay tree.
+    ///
+    /// The App owns the node. Do not also attach its tree to a Scene or bind it
+    /// to Scene-owned state. Its available layout space is the logical window.
+    /// The overlay uses the default camera. As with a transition, any custom
+    /// Scene drawing must close raw passes and balance model transforms.
+    /// Scene stack changes, including reset, leave it installed. On drawable
+    /// normal frames it receives Node updates with the App delta, even on a
+    /// switching frame. It draws after Scene effects, outside their pictures.
+    /// Neither pointer routing nor [`Self::hit_test_ui`] includes the overlay.
+    pub fn set_overlay_root(&mut self, root: impl IntoNode) {
+        self.overlay_root = Some(root.into_node());
+    }
+
+    /// Remove and drop the installed App overlay. The last presented frame is
+    /// not changed until a later draw.
+    pub fn clear_overlay_root(&mut self) {
+        self.overlay_root = None;
+    }
+
+    /// Install or replace a full-window modal layer above the Scene and Toasts.
+    ///
+    /// It survives Scene switches and is excluded from transition pictures.
+    /// A presented modal is the only root eligible for Node input. Scene raw
+    /// input is still delivered unchanged; use [`SceneContext::is_modal_open`]
+    /// to suspend gameplay or shortcuts while the modal is on screen.
+    pub fn set_modal_root(&mut self, root: ModalRoot) {
+        self.modal_root = Some(root);
+    }
+
+    /// Remove the modal tree. The previously presented modal still blocks
+    /// lower roots until a successful draw without it.
+    pub fn clear_modal_root(&mut self) {
+        self.modal_root = None;
+    }
+
+    /// Whether the last successfully drawn frame showed an App modal.
+    pub fn is_modal_open(&self) -> bool {
+        self.displayed.modal.is_some()
+    }
+
+    /// Test UI in the last successful frame, in drawing order. A modal owns
+    /// the whole window; the input-transparent overlay is never tested.
     /// Positions are logical window pixels. Use before frame/update mutates UI.
     pub fn hit_test_ui(&self, pos: Vector) -> bool {
-        !crate::event::pointer::hit_scene_roots(&self.displayed, pos).is_empty()
+        if let Some(modal) = self.displayed.modal {
+            return modal.bounds.contains(&pos);
+        }
+        !crate::event::pointer::hit_scene_roots(&self.displayed.scene, pos).is_empty()
     }
 
     /// Set a factory for fresh default effects. Called only at request selection.
@@ -356,13 +454,17 @@ impl App {
         } else {
             // Freeze Node targets before results, lifecycle or input callbacks
             // write signals. Node capture and Scene raw input are independent.
-            let plan = self.pointer_manager.plan_roots(&self.displayed, &input);
+            let plan = self
+                .pointer_manager
+                .plan_roots(self.displayed.input_roots(), &input);
             self.activate(frame)?;
             self.pointer_manager
-                .dispatch_roots(plan, &self.displayed, &input);
+                .dispatch_roots(plan, self.displayed.input_roots(), &input);
+            self.dispatch_modal_escape(&input);
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
                 frame,
+                modal_open: self.displayed.modal.is_some(),
                 transition: self
                     .active_transition
                     .as_ref()
@@ -381,7 +483,8 @@ impl App {
             Self::publish_viewport(frame.viewport);
             transition::advance(frame.dt);
         });
-        self.pointer_manager.reconcile_roots(&self.displayed);
+        self.pointer_manager
+            .reconcile_roots(self.displayed.input_roots());
         self.drive_tasks();
         batch(update);
         let switch_ready = can_present
@@ -393,6 +496,7 @@ impl App {
             let entry = self.scenes.last_mut().unwrap();
             let mut ctx = SceneContext {
                 frame,
+                modal_open: self.displayed.modal.is_some(),
                 transition: self
                     .active_transition
                     .as_ref()
@@ -411,34 +515,74 @@ impl App {
         if self.state == AppState::Exited || !can_present {
             return Ok(());
         }
-        if switched {
-            // The new top may draw now, but receives neither the old input batch
-            // nor a Scene update. Its one Node update must not advance time either.
-            frame.dt = 0.;
-        }
-        self.render_scene(frame)
+        self.present_frame(frame, switched)
     }
 
-    fn prepare_scene(&mut self, frame: SceneFrame, update_nodes: bool) -> Result<()> {
-        let scene = self.scenes.last_mut().unwrap().scene.as_mut();
-        self.layout.collect(scene, &frame)?;
-        self.layout.prepare()?;
-        if update_nodes {
-            batch(|| {
-                Runtime::with(|rt| {
-                    for node in self
-                        .layout
-                        .snapshots
-                        .iter()
-                        .flat_map(GeometrySnapshot::nodes)
-                    {
-                        rt.invoke_hook(node.id, |hooks| &mut hooks.update, &frame.dt);
+    fn dispatch_modal_escape(&mut self, input: &InputBatch) {
+        if let Some(shown) = self.displayed.modal
+            && let Some(modal) = &mut self.modal_root
+            && *modal.node == shown.node
+            && let Some(action) = &mut modal.on_escape
+            && input.events().iter().any(|sample| {
+                matches!(
+                    sample.event,
+                    InputEvent::KeyDown {
+                        keycode: KeyCode::Escape,
+                        repeat: false,
+                        ..
                     }
-                })
-            });
-            self.layout.collect(scene, &frame)?;
-            self.layout.prepare()?;
+                )
+            })
+        {
+            batch(action);
         }
+    }
+
+    fn present_frame(&mut self, frame: SceneFrame, switched: bool) -> Result<()> {
+        let mut scene_frame = frame;
+        if switched {
+            // Only the newly active Scene freezes on a switch, not the App layers.
+            scene_frame.dt = 0.;
+        }
+        let overlay = self
+            .overlay_root
+            .as_ref()
+            .map(|root| SceneRoot::new(**root, frame.viewport).input(RootInput::None));
+        let modal = self.modal_root.as_ref().map(|modal| {
+            (
+                modal.open,
+                SceneRoot::new(*modal.node, frame.viewport).input(RootInput::Modal),
+            )
+        });
+        let scene = self.scenes.last_mut().unwrap().scene.as_mut();
+        self.layout.prepare_frame(
+            scene,
+            &scene_frame,
+            frame.dt,
+            overlay.into_iter().chain(modal.map(|(_, root)| root)),
+        )?;
+        let modal = modal.and_then(|(open, root)| open.get_untracked().then_some(root));
+        let drawn = self.render_scene(scene_frame)?;
+        if overlay.is_some() || modal.is_some() {
+            let _boundary = DrawBoundary::default_camera();
+            for root in overlay.into_iter().chain(modal) {
+                root.node.render();
+            }
+        }
+        self.displayed = DisplayedRoots {
+            scene: drawn,
+            modal,
+        };
+        self.pointer_manager.mark_undisplayed_captures(
+            self.displayed.input_roots(),
+            |parent, child| {
+                self.layout
+                    .forest
+                    .nodes
+                    .get(&child)
+                    .is_some_and(|location| location.parent == Some(parent))
+            },
+        );
         Ok(())
     }
 
@@ -462,15 +606,14 @@ impl App {
         Ok(render.drawn)
     }
 
-    fn render_scene(&mut self, frame: SceneFrame) -> Result<()> {
-        self.prepare_scene(frame, true)?;
-        let roots = &self.layout.roots;
+    fn render_scene(&mut self, frame: SceneFrame) -> Result<Vec<SceneRoot>> {
+        let roots = self.layout.scene_roots();
         let scene = self.scenes.last_mut().unwrap().scene.as_mut();
         let draw_normal = |scene, sample| {
             Self::draw_scene(scene, frame, roots, sample, false)
                 .inspect_err(|_| PictureCache::cleanup_scene_error())
         };
-        self.displayed = if let Some(active) = &mut self.active_transition {
+        if let Some(active) = &mut self.active_transition {
             let sample = active.clock.frame(frame.dt, frame.viewport);
             let drawn = if active.effect.is_composite() {
                 self.pictures
@@ -484,26 +627,18 @@ impl App {
             };
             active.clock.did_present(sample);
             active.sample = sample;
-            drawn
+            Ok(drawn)
         } else {
-            draw_normal(scene, None)?
-        };
-        self.pointer_manager
-            .mark_undisplayed_captures(&self.displayed, |parent, child| {
-                self.layout
-                    .forest
-                    .nodes
-                    .get(&child)
-                    .is_some_and(|location| location.parent == Some(parent))
-            });
-        Ok(())
+            draw_normal(scene, None)
+        }
     }
 
     fn capture_source(&mut self, mut frame: SceneFrame) -> Result<()> {
         frame.dt = 0.;
-        self.prepare_scene(frame, false)?;
-        let roots = &self.layout.roots;
         let scene = self.scenes.last_mut().unwrap().scene.as_mut();
+        self.layout.collect(scene, &frame, None)?;
+        self.layout.prepare()?;
+        let roots = self.layout.scene_roots();
         // Current retained picture, not last-screen pixels. No input eligibility or updates.
         self.pictures.capture_source(frame.viewport, || {
             Self::draw_scene(scene, frame, roots, None, true).map(|_| ())
@@ -517,6 +652,7 @@ impl App {
         let entry = self.scenes.last_mut().unwrap();
         let mut ctx = SceneContext {
             frame,
+            modal_open: self.displayed.modal.is_some(),
             command: &mut self.command,
             transition: self
                 .active_transition
@@ -559,6 +695,7 @@ impl App {
             entry.state = SceneState::Paused;
             let mut ctx = SceneContext {
                 frame,
+                modal_open: self.displayed.modal.is_some(),
                 command: &mut command,
                 transition: self
                     .active_transition
@@ -728,7 +865,11 @@ impl App {
         let pause_request = if self.host_paused {
             suspended_pause_request
         } else {
-            self.pointer_manager.cancel_input();
+            // A presented modal is the only eligible input tree. Its captures
+            // belong to the App and can continue across this Scene switch.
+            if !self.is_modal_open() {
+                self.pointer_manager.cancel_input();
+            }
             match self.pause_top(frame) {
                 Ok(request) => request,
                 Err(error) => {
@@ -739,7 +880,7 @@ impl App {
                 }
             }
         };
-        self.displayed.clear();
+        self.displayed.scene.clear();
         if matches!(command, SceneCommand::Push(_)) {
             if let Some(request) = pause_request {
                 self.command = Some(request);
@@ -772,6 +913,9 @@ impl App {
                 // before the Scene owners their destructors might reference.
                 drop(terminal);
                 drop(self.command.take());
+                if self.displayed.modal.take().is_some() {
+                    self.pointer_manager.cancel_input();
+                }
                 self.drop_scenes();
                 self.state = AppState::Exited;
                 return Ok(());
@@ -793,7 +937,7 @@ impl App {
         self.state = AppState::Faulted;
         self.command = None;
         self.cancel_transition();
-        self.displayed.clear();
+        self.displayed = DisplayedRoots::default();
         self.pointer_manager.cancel_input();
     }
 
@@ -874,16 +1018,56 @@ impl App {
 #[derive(Default)]
 struct SceneLayout {
     roots: Vec<SceneRoot>,
+    scene_root_count: usize,
     snapshots: Vec<GeometrySnapshot>,
     forest: SceneForest,
 }
 
 impl SceneLayout {
-    fn collect(&mut self, scene: &mut dyn Scene, frame: &SceneFrame) -> Result<()> {
+    // App layers share layout validation, but are not drawable Scene roots.
+    fn scene_roots(&self) -> &[SceneRoot] {
+        &self.roots[..self.scene_root_count]
+    }
+
+    fn prepare_frame(
+        &mut self,
+        scene: &mut dyn Scene,
+        frame: &SceneFrame,
+        app_dt: f32,
+        app_roots: impl IntoIterator<Item = SceneRoot> + Clone,
+    ) -> Result<()> {
+        self.collect(scene, frame, app_roots.clone())?;
+        self.prepare()?;
+        batch(|| {
+            Runtime::with(|rt| {
+                for (index, snapshot) in self.snapshots.iter().enumerate() {
+                    let dt = if index < self.scene_root_count {
+                        frame.dt
+                    } else {
+                        app_dt
+                    };
+                    for node in snapshot.nodes() {
+                        rt.invoke_hook(node.id, |hooks| &mut hooks.update, &dt);
+                    }
+                }
+            })
+        });
+        self.collect(scene, frame, app_roots)?;
+        self.prepare()?;
+        Ok(())
+    }
+
+    fn collect(
+        &mut self,
+        scene: &mut dyn Scene,
+        frame: &SceneFrame,
+        app_roots: impl IntoIterator<Item = SceneRoot>,
+    ) -> Result<()> {
         self.roots.clear();
         scene
             .layout(frame, &mut self.roots)
             .map_err(|error| CallbackError::new("layout", error))?;
+        self.scene_root_count = self.roots.len();
         for root in &self.roots {
             if !(root.bounds.min().is_finite()
                 && root.bounds.size().is_finite()
@@ -893,6 +1077,7 @@ impl SceneLayout {
                 return Err(SceneError::InvalidRootBounds.into());
             }
         }
+        self.roots.extend(app_roots);
         Ok(())
     }
 
@@ -1029,5 +1214,136 @@ impl SceneForest {
             }
             Ok(self.nodes.len() == count)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        layout::use_layout,
+        node::flexbox,
+        style::{Style, Styleable},
+    };
+    use mue_core::{
+        scope::OwnedScope,
+        signal::{Access, signal},
+    };
+    use std::cell::Cell;
+
+    struct TestScene(NodeRef);
+
+    impl Scene for TestScene {
+        fn layout(&mut self, frame: &SceneFrame, roots: &mut Vec<SceneRoot>) -> CallbackResult<()> {
+            roots.push(SceneRoot::new(self.0, frame.viewport));
+            Ok(())
+        }
+    }
+
+    fn frame() -> SceneFrame {
+        SceneFrame {
+            dt: 0.,
+            time: 5.,
+            viewport: Rect::new(0., 0., 400., 300.),
+        }
+    }
+
+    #[test]
+    fn app_layers_update_with_app_delta_before_final_scene_layout() {
+        let scope = OwnedScope::new();
+        let width = scope.run(|| signal(30.));
+        let scene_rect = Rc::new(Cell::new(Rect::default()));
+        let scene_updates = Rc::new(Cell::new((0, 0.)));
+        let overlay_updates = Rc::new(Cell::new((0, 0.)));
+        let scene_root = Node::leaf(
+            Style::new().width(width).height(15.).on_update({
+                let updates = scene_updates.clone();
+                move |dt| updates.set((updates.get().0 + 1, *dt))
+            }),
+            |style| {
+                let rect = use_layout(style).rect;
+                let scene_rect = scene_rect.clone();
+                style.on_layout.append(move |_| scene_rect.set(rect.get()));
+            },
+        );
+        let overlay_root = flexbox()
+            .width(100.)
+            .height(40.)
+            .on_update({
+                let updates = overlay_updates.clone();
+                move |dt| {
+                    updates.set((updates.get().0 + 1, *dt));
+                    width.set(54.);
+                }
+            })
+            .into_node();
+        let modal_updates = Rc::new(Cell::new((0, 0.)));
+        let modal_root = flexbox()
+            .on_update({
+                let updates = modal_updates.clone();
+                move |dt| updates.set((updates.get().0 + 1, *dt))
+            })
+            .into_node();
+        let frame = frame();
+        let overlay = SceneRoot::new(*overlay_root, frame.viewport).input(RootInput::None);
+        let modal = SceneRoot::new(*modal_root, frame.viewport).input(RootInput::Modal);
+        let mut scene = TestScene(*scene_root);
+        let mut layout = SceneLayout::default();
+        layout
+            .prepare_frame(&mut scene, &frame, 0.125, [overlay, modal])
+            .unwrap();
+
+        assert_eq!(scene_updates.get(), (1, 0.));
+        assert_eq!(overlay_updates.get(), (1, 0.125));
+        assert_eq!(modal_updates.get(), (1, 0.125));
+        assert_eq!(scene_rect.get().w, 54.);
+        assert_eq!(layout.scene_roots().len(), 1);
+        assert!(layout.scene_roots()[0].node == *scene_root);
+
+        layout.collect(&mut scene, &frame, None).unwrap();
+        layout.prepare().unwrap();
+        assert_eq!(overlay_updates.get(), (1, 0.125));
+        assert_eq!(modal_updates.get(), (1, 0.125));
+        assert_eq!(layout.roots.len(), 1);
+    }
+
+    #[test]
+    fn presented_app_modal_excludes_scene_roots_from_pointer_routing() {
+        use crate::{event::pointer::hit_scene_roots, math::vec2};
+        let frame = frame();
+        let scene = flexbox()
+            .width(400.)
+            .height(300.)
+            .on_tap(|_| {})
+            .into_node();
+        scene.prepare_layout_in(frame.viewport);
+        let modal = Node::empty();
+        let point = vec2(30., 30.);
+        let mut displayed = DisplayedRoots {
+            scene: vec![SceneRoot::new(*scene, frame.viewport)],
+            modal: Some(SceneRoot::new(*modal, frame.viewport).input(RootInput::Modal)),
+        };
+        assert!(hit_scene_roots(displayed.input_roots(), point).contains(&*modal));
+        assert!(!hit_scene_roots(displayed.input_roots(), point).contains(&*scene));
+
+        // If the host removes its Node before presenting a new frame, the old
+        // modal still shields the Scene without an actionable target.
+        drop(modal);
+        assert!(hit_scene_roots(displayed.input_roots(), point).is_empty());
+        displayed.modal = None;
+        assert!(hit_scene_roots(displayed.input_roots(), point).contains(&*scene));
+    }
+
+    #[test]
+    fn app_overlay_cannot_be_submitted_as_a_scene_root() {
+        let root = flexbox().into_node();
+        let frame = frame();
+        let mut scene = TestScene(*root);
+        let overlay = SceneRoot::new(*root, frame.viewport).input(RootInput::None);
+        let result = SceneLayout::default().prepare_frame(&mut scene, &frame, 0.125, Some(overlay));
+        assert!(matches!(
+            result,
+            Err(AppError::Scene(SceneError::DuplicateNode))
+        ));
     }
 }

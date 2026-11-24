@@ -2,6 +2,7 @@ use crate::{
     input::{self, SettingsAction},
     localization::ReadTranslations,
     settings::SettingsEditor,
+    toast::{Notice, Notices},
     view::SettingsView,
 };
 use macroquad::prelude::draw_rectangle;
@@ -18,11 +19,17 @@ pub struct SettingsScene {
     settings: SettingsEditor,
     i18n: Rc<I18n>,
     commands: Rc<Cell<Option<SettingsAction>>>,
+    notices: Notices,
     input_enabled: bool,
 }
 
 impl SettingsScene {
-    pub fn new(settings: SettingsEditor, translations: ReadTranslations, i18n: Rc<I18n>) -> Self {
+    pub fn new(
+        settings: SettingsEditor,
+        translations: ReadTranslations,
+        i18n: Rc<I18n>,
+        notices: Notices,
+    ) -> Self {
         let commands = Rc::new(Cell::new(None));
         let view = SettingsView::new(settings.read(), translations, commands.clone());
         Self {
@@ -30,6 +37,7 @@ impl SettingsScene {
             settings,
             i18n,
             commands,
+            notices,
             input_enabled: false,
         }
     }
@@ -39,6 +47,7 @@ impl Scene for SettingsScene {
     fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.input_enabled = !ctx.is_transitioning();
         match event {
+            SceneEvent::Input(_) if ctx.is_modal_open() => {}
             SceneEvent::Input(batch) => match input::settings(batch) {
                 Some(SettingsAction::Quit) => {
                     ctx.exit().without_transition();
@@ -62,8 +71,14 @@ impl Scene for SettingsScene {
             return Ok(());
         }
         match action {
-            Some(SettingsAction::CycleTheme) => self.settings.toggle_theme(),
-            Some(SettingsAction::ToggleMotion) => self.settings.toggle_reduce_motion(),
+            Some(SettingsAction::CycleTheme) => {
+                self.settings.toggle_theme();
+                self.notices.show(Notice::SettingsUpdated);
+            }
+            Some(SettingsAction::ToggleMotion) => {
+                self.settings.toggle_reduce_motion();
+                self.notices.show(Notice::SettingsUpdated);
+            }
             Some(SettingsAction::CycleLocale) => {
                 // The Scene holds the write capability; this callback uses no ambient UI context.
                 let locales = self.i18n.available_locales();
@@ -74,6 +89,7 @@ impl Scene for SettingsScene {
                     .unwrap_or(0);
                 let next = locales[(index + 1) % locales.len()].clone();
                 self.i18n.set_locale(next)?;
+                self.notices.show(Notice::SettingsUpdated);
             }
             Some(SettingsAction::Back) => {
                 self.input_enabled = false;

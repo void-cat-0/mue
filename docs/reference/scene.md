@@ -5,6 +5,8 @@
 - [Scene interface](#scene-interface)
 - [Frame scheduling](#frame-scheduling)
 - [Layout roots and drawing](#layout-roots-and-drawing)
+- [Application overlay root](#application-overlay-root)
+- [Application dialogs](#application-dialogs)
 - [Input](#input)
 - [Lifecycle and commands](#lifecycle-and-commands)
 - [Errors](#errors)
@@ -118,6 +120,52 @@ During Scene rendering, call this entry point rather than bypassing it with `Nod
 
 Neither a borrowed root list nor reactive `batch` is a full display snapshot: keep hit-test state unchanged from drawing until the next preplanning phase.
 
+## Application overlay root
+
+Use `App::set_overlay_root(builder_or_node)` for one independent, input-transparent tree such as notifications or a debug HUD. App takes ownership of the `Node`; it is neither a Scene nor a child of one. Use its styles to position content within the logical window. Replacing it or calling `clear_overlay_root()` drops the previous tree. Push, pop, replace and `reset_scene` leave it installed. Keep its shared dependencies alive for the App, not just for the Scene that sent a message.
+
+```rust,no_run
+use mue::{App, components::{ToastKind, toast_host}};
+
+fn notify(app: &mut App) {
+    let (host, toasts) = toast_host();
+    app.set_overlay_root(host);
+    toasts.show(ToastKind::Info, "Library ready");
+}
+```
+
+On a normal drawable frame the Scene roots and the application root share the layout/update/geometry stabilization passes. The overlay's Node hooks receive the App delta rather than the Scene switch's zero delta. Host suspension, or a window without drawable area, skips Node updates and drawing for both. Wall-clock deadlines can still expire while suspended.
+
+The overlay is not passed to `SceneRender` and never participates in input planning or `App::hit_test_ui`. It draws once in window space after Scene and transition composition, never into outgoing, live or cached transition pictures. This path does not require an extra render target. Use a Scene-local root if the UI belongs to one Scene or should be included in the effect.
+
+## Application dialogs
+
+Mount `dialog_host()` once with `App::set_modal_root`. Keep its `DialogSender` wherever application-wide messages originate. Dialogs are not Scenes: one can open while a Scene switch is already in progress and stay until dismissed. App draws the Scene and its effect, then the transparent overlay (for example Toast), then the modal and its backdrop. Neither App layer is captured in transition pictures. For a modal that belongs to one Scene, keep using `overlay_host` or a Scene-local modal root.
+
+```rust,no_run
+use mue::{App, components::{Dialog, DialogResult, dialog_host}};
+
+fn install_dialogs(app: &mut App) {
+    let (host, dialogs) = dialog_host();
+    app.set_modal_root(host);
+    dialogs.show(
+        Dialog::new("Network unavailable", "Check your connection before retrying.")
+            .buttons(["Cancel", "Retry"]),
+        |result| {
+            if result == DialogResult::Button(1) {
+                // Ask an application-owned service to retry.
+            }
+        },
+    );
+}
+```
+
+The host queues requests in order and shows one at a time. A button returns its index; Escape or a backdrop tap returns `Dismissed` unless the dialog disables those paths. Removing the host drops queued requests and result callbacks without running them. Its bindings and callback captures must outlive the sending Scene. A custom `ModalRoot` can use its own tree, visibility property and Escape callback; it still receives normal Node updates while closed so it can prepare to open.
+
+**Input uses the last presented modal.** While one is visible it is the only eligible Node tree, including for hover and the wheel, and `App::hit_test_ui` reports a hit anywhere inside the window. Presses on lower roots are cancelled when the modal becomes visible, not resumed when it closes. A modal's own capture can continue across Scene switches; host suspension still cancels it. The batch that dismisses a modal is not rerouted to the Scene's Node trees.
+
+`SceneEvent::Input` still delivers the complete raw batch. In the Scene, use `ctx.is_modal_open()` to suppress shortcuts or gameplay handling. It remains true for the entire batch that dismissed the dialog, so Escape cannot also navigate back. Hosts with a separate raw-input subscriber can test `app.is_modal_open()` before the frame. This is not an automatic game pause or a keyboard focus system.
+
 ## Input
 
 Root input policy applies only to routing between Node trees. None of these policies filters `SceneEvent::Input`:
@@ -154,7 +202,7 @@ fn add_roots(
 
 Detaching or hiding a node with `show_if` on the captured path, or omitting its root from drawing, revokes the capture without filtering Scene raw events. A path absent from a presented frame cannot regain the press by reappearing before the next input.
 
-Existing Node capture does not depend on current pointer bounds or a newly visible modal layer.
+Existing Node capture does not depend on current pointer bounds. A newly visible Scene-local `RootInput::Modal` does not revoke an existing capture; the application modal above makes the lower roots ineligible.
 
 The `SceneEvent::Input` arm receives the complete original batch in its original event order, with physical positions and touch timestamps unchanged. This includes Down on UI, wheel over UI, events inside a modal root and Move/Up without a matching Down in that Scene.
 
@@ -304,7 +352,7 @@ Stacks are released top-down. Optional draw-only [Scene transitions][scene-trans
 
 ## Application-owned resources and settings
 
-The [song-transition application](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/README.md) demonstrates a concrete ownership pattern with existing APIs, not a new framework container. Its [host](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/src/application.rs) owns App, an immutable `Rc<Catalog>` and Settings; Settings keeps an independent `OwnedScope` alive for theme/reduced-motion signals.
+The [song-transition application](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/README.md) demonstrates explicit ownership without a framework service locator. Its [host](https://github.com/void-cat-0/mue/blob/main/examples/song-transition/src/application.rs) owns App, an immutable `Rc<Catalog>` and Settings; Settings keeps an independent `OwnedScope` alive for theme/reduced-motion signals. The host installs Toast as the App overlay root and Dialog as the App modal root.
 
 App is the first field and therefore drops before those external resources. Library/Details constructors receive read-only settings and an editor-Scene factory; only SettingsScene receives writable access.
 

@@ -52,6 +52,7 @@ impl Scene for DetailsScene {
     fn event(&mut self, event: SceneEvent<'_>, ctx: &mut SceneContext<'_>) -> CallbackResult<()> {
         self.input_enabled = !ctx.is_transitioning();
         match event {
+            SceneEvent::Input(_) if ctx.is_modal_open() => {}
             SceneEvent::Input(batch) => match input::details(batch) {
                 Some(DetailsAction::Quit) => {
                     ctx.exit().without_transition();

@@ -7,6 +7,7 @@ mod input;
 mod localization;
 mod scene;
 mod settings;
+mod toast;
 mod ui;
 mod view;
 

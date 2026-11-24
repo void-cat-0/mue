@@ -1,4 +1,4 @@
-# Song artwork transition, settings and reactive localization
+# Song artwork transition, settings and application notifications
 
 An ordinary interactive song-library → details application, with a settings Scene shared by both. The selected illustration expands from its card; returning shrinks it back without rebuilding the library or losing its selection/scroll position. The retained UI consumes `mue-i18n` in English (`en-US`) and Simplified Chinese (`zh-CN`).
 
@@ -12,10 +12,23 @@ Click an artwork to open details. Wheel, touch/mouse drag or Up/Down arrows scro
 
 Click **Settings** or press **S** in either library or details. **T** switches Dark/Light theme, **M** toggles reduced artwork motion, **L** switches English/Simplified Chinese (also available as the language button), and **Esc** returns to the same Scene. Changes apply immediately and remain in memory for this application run; no settings file or OS preference integration is provided. Settings navigation itself is immediate. With reduced motion on, the next artwork open/return bypasses animation; with it off, the original expansion/shrink returns.
 
+## Toasts across scenes
+
+Open a visible song: a notification slides in at the upper right and keeps counting down over the artwork effect and the details page. Press **Esc** or **S** before it expires to see the same notification survive another Scene change. Press **3** while the third card is offscreen to see a warning. Change a setting and return immediately to see a success notification on the previous page.
+
+The host shows up to three notifications at a time; queued messages start their two-second countdown when a slot opens, then slide out. Toasts never receive input. They use the current theme and language, even while already on screen. Reduced artwork motion still only affects artwork navigation.
+
+## Application dialog
+
+From the library, press **Shift+1** (or Shift+2/3 for another visible card). The song opens as usual, but an App-owned dialog stays above the artwork effect and then the details page. The Toast countdown continues underneath the dimming backdrop. Try clicking the underlying Back or Settings button: it cannot activate through the modal. **Esc** or a backdrop click dismisses only the dialog; the next **Esc** returns to the library. **Got it** closes the dialog and sends a success Toast.
+
+The host installs the dialog once with `App::set_modal_root`. Library sends localized text and an application-lived result callback; the dialog holds no Library `NodeRef` or Scene-local signal. Keyboard shortcuts are ignored by the Scenes while `ctx.is_modal_open()` is true, without changing the raw input batch.
+
 ## Source organization
 
 - [main](<src/main.rs>): font initialization and window entry point.
-- [application](<src/application.rs>): owns App, `Rc<Catalog>`, `Settings` and `Rc<I18n>`, and runs the ordinary App/next_frame loop. Field order drops App before its application resources. There is no validation mode, deadline or automatic navigation script.
+- [application](<src/application.rs>): owns App, `Rc<Catalog>`, `Settings` and `Rc<I18n>`. It installs `toast_host()` via `App::set_overlay_root` and `dialog_host()` via `App::set_modal_root`. App updates both with the other Node trees and draws them above the artwork effect, dialog last; the host loop is unchanged. Field order drops App and its layers before their shared resources.
+- [toast](<src/toast.rs>): the demo's typed notices map actions to tones and to Fluent bindings. `ToastSender::show_with` builds those bindings in the retained card's scope. The reusable component owns the queue, layout and countdown.
 - [settings](<src/settings.rs>): an independent application-level `OwnedScope` owns theme and reduced-motion signals. `ReadSettings` exposes read-only handles; only `SettingsScene` receives `SettingsEditor`. Plain application palettes are projected into `Brush` bindings, not a new framework theme container.
 - [localization](<src/localization.rs>): embeds the eight Fluent resources, builds the catalog and provides `ReadTranslations` (four strong read-only namespace translators and the locale signal).
 - [catalog](<src/catalog.rs>): immutable song metadata, localized description keys and owned, reusable artwork assets. Library gets an owning `Rc<Catalog>`; Details gets one `Song`, and effects own the artwork they need.
@@ -32,13 +45,16 @@ Click **Settings** or press **S** in either library or details. **T** switches D
 
 ```text
 Application
-├── App: retained Library / Details / Settings Scenes and active effect
+├── App
+│   ├── Retained Library / Details / Settings Scenes and active effect
+│   ├── Overlay root: Toast nodes, pending notices and countdowns
+│   └── Modal root: the active dialog and its queued requests
 ├── Rc<Catalog>: immutable songs and reusable Rc artwork assets
 ├── Settings: application OwnedScope with two signals
 └── Rc<I18n>: immutable Fluent catalog and owned locale signal
 ```
 
-Scenes receive the dependencies they need through constructors. Library/Details carry `ReadSettings`, `ReadTranslations` and a narrow `SettingsFactory` capability to open the editor; they do not receive writable setting/locale handles or the whole Application. The factory captures writable `Rc<I18n>` only to construct `SettingsScene`; none is installed in UI context. Each detached view owner explicitly `provide`s `ReadSettings` and `ReadTranslations` before constructing its subtree. UI context follows the scope construction chain, not the Scene stack. `inject` is not called from later Scene/effect callbacks.
+Scenes receive the dependencies they need through constructors. Library/Details carry `ReadSettings`, `ReadTranslations` and a narrow `SettingsFactory` capability to open the editor; they do not receive writable setting/locale handles or the whole Application. Library and Settings also receive a local `Notices` wrapper over `ToastSender`; Library gets a `DialogSender` for the application dialog. None can access the application layer nodes directly. The factory captures writable `Rc<I18n>` only to construct `SettingsScene`; none is installed in UI context. Each detached view owner explicitly `provide`s `ReadSettings` and `ReadTranslations` before constructing its subtree. UI context follows the scope construction chain, not the Scene stack. `inject` is not called from later Scene/effect callbacks.
 
 Copying `Signal`/`ReadSignal` does **not** keep the corresponding owner alive; cloning `Rc<Artwork>` **does** keep that asset alive, and cloning `Translator` **does** keep the i18n service and its locale owner alive. `ReadTranslations` is Clone, not Copy; `ReadSettings` and `SettingsEditor` remain the original non-owning Copy handles. View-derived signals and translation Props are created in the view owner or individual node build scope, not the application/i18n scope. Node trees drop before their view owner; App drops before Settings and I18n, including pending destinations and effects. This demo has no asynchronous tasks. If one is added, its cancellation/completion and foreground cleanup must finish before global settings are released; field order alone is not a general task-join mechanism.
 
@@ -74,4 +90,4 @@ Three original images are generated by [the deterministic offline generator](<as
 
 ## Integration limits
 
-Use the normal application above to exercise artwork navigation, shared settings, theme/locale changes and selected-card/scroll preservation. The example does not implement full Phira formats or audio, device touch, arbitrary transformed shared-element matching, or other GPU backends. See [Scene transitions](<../../docs/scene-transitions.md>) for the framework contract.
+Use the normal application above to exercise artwork navigation, shared settings, theme/locale changes and selected-card/scroll preservation. The example does not implement full Phira formats or audio, device touch, arbitrary transformed shared-element matching, or other GPU backends. See [the Scene runtime reference](<../../docs/reference/scene.md#application-dialogs>) for the layer and input contract.

@@ -174,6 +174,7 @@ impl<'a> SceneRequest<'a> {
 pub struct SceneContext<'a> {
     pub frame: SceneFrame,
     pub(crate) command: &'a mut Option<SceneRequestData>,
+    pub(crate) modal_open: bool,
     pub(crate) transition: Option<TransitionFrame>,
 }
 impl SceneContext<'_> {
@@ -186,6 +187,14 @@ impl SceneContext<'_> {
     /// Whether a Scene transition is active or waiting for presentation.
     pub fn is_transitioning(&self) -> bool {
         self.transition.is_some()
+    }
+
+    /// Whether the last successfully drawn frame showed an App modal.
+    /// In `SceneEvent::Input`, it stays true for the closing batch: a button
+    /// or Escape that dismissed the modal should not also act on the Scene.
+    /// Raw input is still complete; use this to gate its gameplay or shortcuts.
+    pub fn is_modal_open(&self) -> bool {
+        self.modal_open
     }
 
     /// Cover the current Scene without dropping it. Only the new top is scheduled.

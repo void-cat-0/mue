@@ -1,19 +1,23 @@
 //! Exclusive picture passes. This cache owns no Scene and no transition clock.
 
 use macroquad::{
-    material::{Material, MaterialParams, gl_use_default_material, gl_use_material, load_material},
+    material::{Material, MaterialParams, gl_use_material, load_material},
     miniquad::{
         Backend, BlendFactor, BlendState, Equation, PipelineParams, ShaderSource, UniformDesc,
         UniformType,
     },
     prelude::{
-        BLACK, Camera2D, DrawMode, DrawTextureParams, FilterMode, RenderTarget, Texture2D, WHITE,
-        draw_rectangle, draw_texture_ex, render_target, set_camera, set_default_camera, vec2,
+        BLACK, Camera2D, DrawTextureParams, FilterMode, RenderTarget, Texture2D, WHITE,
+        draw_rectangle, draw_texture_ex, render_target, set_default_camera, vec2,
     },
     window::{get_internal_gl, screen_dpi_scale},
 };
 
-use crate::{CallbackError, Result, TransitionError, math::Rect, render::RenderStateGuard};
+use crate::{
+    CallbackError, Result, TransitionError,
+    math::Rect,
+    render::{DrawBoundary, reset_draw_state},
+};
 
 use super::{Draw, ScenePictures, SceneTransition, TransitionFrame};
 
@@ -250,7 +254,11 @@ fn draw_picture<T>(
     opaque: &Material,
     draw: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let _boundary = DrawBoundary::target(target, viewport);
+    let _boundary = DrawBoundary::with_camera(&Camera2D {
+        render_target: Some(target.clone()),
+        // Negative zoom.y agrees with mue's top-left scissor coordinates.
+        ..Camera2D::from_display_rect(viewport.into())
+    });
     // GL clears inherit the last applied color mask. An opaque default-material
     // draw applies the all-channel mask through miniquad instead. Submit it now
     // so the Scene can immediately clear its target with the expected mask.
@@ -269,55 +277,11 @@ fn draw_picture<T>(
     result // The boundary flushes before releasing the target borrow.
 }
 
-/// Camera/pass ownership is intentionally separate from RenderStateGuard.
-/// We own macroquad camera boundaries, never a caller's arbitrary raw pass.
-struct DrawBoundary {
-    _state: RenderStateGuard,
-}
-
-impl DrawBoundary {
-    fn target(target: &RenderTarget, viewport: Rect) -> Self {
-        let boundary = Self {
-            _state: RenderStateGuard::enter(),
-        };
-        set_camera(&Camera2D {
-            render_target: Some(target.clone()),
-            // Negative zoom.y agrees with mue's top-left scissor coordinates.
-            ..Camera2D::from_display_rect(viewport.into())
-        });
-        reset_draw_state();
-        boundary
-    }
-
-    fn default_camera() -> Self {
-        let boundary = Self {
-            _state: RenderStateGuard::enter(),
-        };
-        set_default_camera();
-        reset_draw_state();
-        boundary
-    }
-}
-
-impl Drop for DrawBoundary {
-    fn drop(&mut self) {
-        set_default_camera(); // Flushes immediate work and closes retained passes.
-    }
-}
-
 // Apply the all-channel default pipeline without covering pixels. A raw
 // glColorMask call would desynchronize miniquad's cached mask.
 fn queue_color_write_reset() {
     reset_draw_state();
     draw_rectangle(0., 0., 0., 0., BLACK);
-}
-
-fn reset_draw_state() {
-    gl_use_default_material();
-    let gl = unsafe { get_internal_gl() }.quad_gl;
-    gl.scissor(None);
-    gl.viewport(None);
-    gl.draw_mode(DrawMode::Triangles);
 }
 
 fn target_pixels(viewport: Rect, dpi: f32) -> TransitionResult<(u32, u32)> {
@@ -437,14 +401,25 @@ fn make_opaque_material() -> TransitionResult<Material> {
             pipeline_params: PipelineParams {
                 // Preserve RGB with blending, not a color-write mask: GL clears
                 // inherit the last applied mask even after restoring QuadGl state.
-                color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Zero, BlendFactor::One)),
-                alpha_blend: Some(BlendState::new(Equation::Add, BlendFactor::One, BlendFactor::Zero)),
+                color_blend: Some(BlendState::new(
+                    Equation::Add,
+                    BlendFactor::Zero,
+                    BlendFactor::One,
+                )),
+                alpha_blend: Some(BlendState::new(
+                    Equation::Add,
+                    BlendFactor::One,
+                    BlendFactor::Zero,
+                )),
                 ..Default::default()
             },
             ..Default::default()
         },
     )
-    .map_err(|source| TransitionError::Material { operation: "load Scene picture opaque material", source })
+    .map_err(|source| TransitionError::Material {
+        operation: "load Scene picture opaque material",
+        source,
+    })
 }
 
 fn make_crossfade_material() -> TransitionResult<Material> {

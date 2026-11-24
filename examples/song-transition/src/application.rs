@@ -5,8 +5,11 @@ use crate::{
     localization::{ReadTranslations, load_i18n},
     scene::{LibraryScene, SettingsFactory, SettingsScene},
     settings::Settings,
+    toast::Notices,
 };
-use macroquad::prelude::next_frame;
+use macroquad::window::next_frame;
+use mue_components::{IntoNode, ToastPalette, dialog_host, toast_host};
+use mue_core::scope::OwnedScope;
 use mue_i18n::I18n;
 use mue_macroquad::App;
 use std::rc::Rc;
@@ -28,7 +31,7 @@ pub(crate) enum RunError {
 pub(crate) type Result<T> = std::result::Result<T, RunError>;
 
 pub struct Application {
-    // Rust drops fields in declaration order: App and its consumers go first.
+    // Drop Scenes and the overlay before their application resources.
     app: App,
     _catalog: Rc<Catalog>,
     _settings: Settings,
@@ -41,19 +44,42 @@ impl Application {
         let i18n = load_i18n()?;
         let translations = ReadTranslations::new(&i18n)?;
         let catalog = Rc::new(Catalog::load()?);
+        let (toast_root, toast_sender) = toast_host();
+        let notices = Notices::new(toast_sender, translations.common.clone());
+        let (modal, dialogs) = dialog_host();
+        let theme_bindings = OwnedScope::new();
+        let toast_palette = theme_bindings.run(|| {
+            settings.read().theme.map(|theme| {
+                let palette = theme.palette();
+                ToastPalette {
+                    background: palette.selected,
+                    foreground: palette.foreground,
+                    muted: palette.muted,
+                }
+            })
+        });
         let editor = settings.editor();
         // Only the Settings Scene receives writable i18n. UI gets strong read-only translators.
         let open_settings: SettingsFactory = {
             let i18n = i18n.clone();
             let translations = translations.clone();
-            Rc::new(move || SettingsScene::new(editor, translations.clone(), i18n.clone()))
+            let notices = notices.clone();
+            Rc::new(move || {
+                SettingsScene::new(editor, translations.clone(), i18n.clone(), notices.clone())
+            })
         };
-        let app = App::with_scene(LibraryScene::new(
+        let mut app = App::with_scene(LibraryScene::new(
             catalog.clone(),
             settings.read(),
             translations,
             open_settings,
+            notices,
+            dialogs,
         ));
+        let toast_root = toast_root.palette(toast_palette).into_node();
+        toast_root.retain_owned_scope(theme_bindings);
+        app.set_overlay_root(toast_root);
+        app.set_modal_root(modal);
         Ok(Self {
             app,
             _catalog: catalog,

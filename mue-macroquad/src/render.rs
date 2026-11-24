@@ -16,11 +16,15 @@
 //! [`macroquad::window::next_frame`]. Do not wrap an App frame in a host
 //! `begin_pass`/`end_pass` pair; ordinary frames may flush or switch internal
 //! passes even though App does not generally take ownership of host camera/pass
-//! state. Scene transition capture/composition has its own narrower OpenGL/full
-//! window contract, documented in [`crate::scene_transition`].
+//! state. Scene transition capture/composition has its own full-window
+//! OpenGL or Vulkan contract, documented in [`crate::scene_transition`].
 
-use macroquad::prelude::{DrawMode, GlPipeline};
-use macroquad::window::get_internal_gl;
+use macroquad::{
+    camera::{Camera, set_camera, set_default_camera},
+    material::gl_use_default_material,
+    prelude::{DrawMode, GlPipeline},
+    window::get_internal_gl,
+};
 
 /// Snapshot of the immediate-draw state a channel may change.
 ///
@@ -75,4 +79,43 @@ impl Drop for RenderStateGuard {
             debug_assert_eq!(gl.quad_gl.get_draw_mode(), self.draw_mode);
         }
     }
+}
+
+/// Flush when changing camera/pass, and restore logical draw state on exit.
+/// The caller must not hold a raw pass or an unbalanced model transform.
+pub(crate) struct DrawBoundary {
+    _state: RenderStateGuard,
+}
+
+impl DrawBoundary {
+    pub(crate) fn with_camera(camera: &dyn Camera) -> Self {
+        Self::enter(|| set_camera(camera))
+    }
+
+    pub(crate) fn default_camera() -> Self {
+        Self::enter(set_default_camera)
+    }
+
+    fn enter(set_camera: impl FnOnce()) -> Self {
+        let boundary = Self {
+            _state: RenderStateGuard::enter(),
+        };
+        set_camera();
+        reset_draw_state();
+        boundary
+    }
+}
+
+impl Drop for DrawBoundary {
+    fn drop(&mut self) {
+        set_default_camera(); // Submit queued drawing before restoring draw state.
+    }
+}
+
+pub(crate) fn reset_draw_state() {
+    gl_use_default_material();
+    let gl = unsafe { get_internal_gl() }.quad_gl;
+    gl.scissor(None);
+    gl.viewport(None);
+    gl.draw_mode(DrawMode::Triangles);
 }

@@ -83,7 +83,7 @@ pub mod texture;
 pub mod transition;
 mod viewport;
 
-pub use app::App;
+pub use app::{App, ModalRoot};
 pub use clip::Sector;
 pub use error::{
     AppError, BoxedError, CallbackError, CallbackResult, Result, SceneError, TransitionError,

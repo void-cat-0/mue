@@ -8,4 +8,4 @@ summary =
        *[other] Selected song: { $selected }
     } · Artwork expansion / retained list state
 open-artwork = Click the artwork to open details
-shortcuts = Wheel / drag / arrows: scroll    1–3: open visible artwork    S: settings    Esc: back    Q: exit
+shortcuts = Wheel / drag / arrows: scroll    1–3: open    Shift+1–3: open with dialog    S: settings    Esc: back    Q: exit
