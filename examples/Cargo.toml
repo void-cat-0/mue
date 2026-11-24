@@ -31,6 +31,10 @@ thiserror = "2.0"
 [target.'cfg(any(windows, target_os = "android", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 ash = { version = "0.37", default-features = false, features = ["loaded"], optional = true }
 
+# The examples are a separate Cargo workspace.
+[patch."https://github.com/void-cat-0/miniquad"]
+miniquad = { path = "../../miniquad" }
+
 [[example]]
 name = "animation"
 path = "animation/src/main.rs"
