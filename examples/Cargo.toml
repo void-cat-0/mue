@@ -14,8 +14,16 @@ debug = true
 
 [features]
 vulkan = ["mue/vulkan", "dep:ash"]
+phira-autoplay = ["dep:image", "dep:jni", "dep:ndk-context", "dep:sasa", "dep:serde", "dep:serde_json", "dep:serde_yaml", "dep:zip"]
+phira-autoplay-vulkan-preferred = ["phira-autoplay", "vulkan"]
+phira-autoplay-vulkan-only = ["phira-autoplay-vulkan-preferred"]
 
 [dependencies]
+image = { version = "0.24.9", default-features = false, features = ["jpeg", "png"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+serde_yaml = { version = "0.9", optional = true }
+zip = { version = "8.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 cosmic-text = "0.18.2"
 macroquad = { path = "../../macroquad", default-features = false }
 miniquad = { path = "../../miniquad" }
@@ -30,6 +38,18 @@ thiserror = "2.0"
 
 [target.'cfg(any(windows, target_os = "android", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 ash = { version = "0.37", default-features = false, features = ["loaded"], optional = true }
+
+# Match Phira's one pinned audio library and select its backend per target.
+[target.'cfg(not(any(target_os = "android", target_env = "ohos")))'.dependencies]
+sasa = { git = "https://github.com/Mivik/sasa", rev = "e76229b2f68e4dc68b22bc375d2a92e8e7897691", default-features = false, features = ["cpal"], optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+sasa = { git = "https://github.com/Mivik/sasa", rev = "e76229b2f68e4dc68b22bc375d2a92e8e7897691", default-features = false, features = ["oboe"], optional = true }
+jni = { version = "0.21.1", optional = true }
+ndk-context = { version = "0.1.1", optional = true }
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+sasa = { git = "https://github.com/Mivik/sasa", rev = "e76229b2f68e4dc68b22bc375d2a92e8e7897691", default-features = false, features = ["ohos"], optional = true }
 
 # The examples are a separate Cargo workspace.
 [patch."https://github.com/void-cat-0/miniquad"]
@@ -103,6 +123,12 @@ doc = false
 [[example]]
 name = "pass-probe"
 path = "pass-probe/src/main.rs"
+doc = false
+
+[[example]]
+name = "phira-autoplay"
+path = "phira-autoplay/src/main.rs"
+required-features = ["phira-autoplay"]
 doc = false
 
 [[example]]
@@ -205,6 +231,14 @@ test = false
 name = "portal-android"
 path = "portal/src/lib.rs"
 crate-type = ["cdylib"]
+doc = false
+test = false
+
+[[example]]
+name = "phira-autoplay-android"
+path = "phira-autoplay/src/lib.rs"
+crate-type = ["cdylib"]
+required-features = ["phira-autoplay-vulkan-preferred"]
 doc = false
 test = false
 

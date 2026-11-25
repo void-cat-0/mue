@@ -1,5 +1,5 @@
 //! The effect owns only an artwork asset and the geometry needed for its two phases.
-use crate::artwork::{self, Anchor, Artwork, Surface, ease_out_quart};
+use super::artwork::{self, Anchor, Artwork, Surface, ease_out_quart};
 use mue_macroquad::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition};
 use std::{cell::Cell, rc::Rc};
 

@@ -1,0 +1,9 @@
+sasa — All Rights Reserved
+
+Source dependency: https://github.com/Mivik/sasa
+Revision: e76229b2f68e4dc68b22bc375d2a92e8e7897691
+
+Projects depending on sasa may be distributed as open source, including
+executables and APKs that link sasa, without a required downstream license.
+This permission covers the downstream projects and their builds, not the
+standalone redistribution of sasa. Mue's MIT license does not cover sasa.
