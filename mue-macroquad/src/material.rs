@@ -4,6 +4,19 @@
 //! exposes mue's global position (v_pos), texture coordinate (v_uv), and
 //! color (v_color). Use with_material or UiMaterial::with around the draws
 //! that should use it.
+//!
+//! # Built-in uniforms
+//!
+//! Every UiMaterial also declares these uniforms, which [`UiMaterial::with`]
+//! and [`UiMaterial::with_rect`] fill before drawing. Declare the ones you use
+//! in the fragment shader; unused ones cost nothing.
+//!
+//! | Uniform | Type | Value |
+//! | --- | --- | --- |
+//! | `u_time` | `float` | Seconds since the host started (macroquad time) |
+//! | `u_resolution` | `vec2` | Window size in logical pixels (the range of `v_pos`) |
+//! | `u_dpi` | `float` | Physical pixels per logical pixel |
+//! | `u_rect` | `vec4` | `x, y, w, h` of the drawn rectangle, set by `with_rect` or [`shader_box`](fn@crate::node::shader_box) |
 
 use std::{cell::RefCell, ops::Range};
 
@@ -13,12 +26,21 @@ use macroquad::{
     math::{Mat4, Vec2, Vec3, Vec4},
     miniquad::{
         BlendFactor, BlendState, BlendValue, Equation, PipelineParams, ShaderSource, UniformDesc,
+        UniformType,
     },
     prelude::GlPipeline,
     retained::{self, RetainedMaterial, RetainedMesh},
     texture::Texture2D,
     window::get_internal_gl,
 };
+
+/// Uniforms every UiMaterial declares; see the module documentation.
+pub const GLOBAL_UNIFORMS: [(&str, UniformType); 4] = [
+    ("u_time", UniformType::Float1),
+    ("u_resolution", UniformType::Float2),
+    ("u_dpi", UniformType::Float1),
+    ("u_rect", UniformType::Float4),
+];
 
 /// Vertex shader shared by every UiMaterial.
 ///
@@ -66,6 +88,12 @@ impl UiMaterial {
         uniforms: Vec<UniformDesc>,
         textures: Vec<String>,
     ) -> Result<Self, Error> {
+        let mut uniforms = uniforms;
+        for (name, ty) in GLOBAL_UNIFORMS {
+            if !uniforms.iter().any(|uniform| uniform.name == name) {
+                uniforms.push(UniformDesc::new(name, ty));
+            }
+        }
         let material = load_material(
             ShaderSource::Glsl {
                 vertex: UI_VERTEX,
@@ -104,8 +132,29 @@ impl UiMaterial {
 
     /// Draw f with this material, restoring the previous pipeline afterwards.
     /// Text and shape nodes use immediate geometry while this material is active.
+    /// Fills `u_time`, `u_resolution`, and `u_dpi` first.
     pub fn with<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.set_globals();
         with_material(&self.material, f)
+    }
+
+    /// Like [`Self::with`], also setting `u_rect` to `rect`.
+    pub fn with_rect<R>(&self, rect: crate::math::Rect, f: impl FnOnce() -> R) -> R {
+        self.set_uniform("u_rect", Vec4::new(rect.x, rect.y, rect.w, rect.h));
+        self.with(f)
+    }
+
+    /// Fill the built-in time, resolution, and DPI uniforms.
+    pub fn set_globals(&self) {
+        self.set_uniform("u_time", macroquad::time::get_time() as f32);
+        self.set_uniform(
+            "u_resolution",
+            Vec2::new(
+                macroquad::window::screen_width(),
+                macroquad::window::screen_height(),
+            ),
+        );
+        self.set_uniform("u_dpi", macroquad::window::screen_dpi_scale());
     }
 
     /// Bind the matching retained shader for a built-in clip scope.

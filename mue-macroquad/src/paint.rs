@@ -792,6 +792,25 @@ pub(crate) fn take_corner_radii(style: &mut Style) -> Prop<CornerRadii> {
     .into()
 }
 
+/// The declared corner radii without consuming them (so `use_background` can
+/// still take them).
+pub(crate) fn declared_corner_radii(style: &Style) -> Prop<CornerRadii> {
+    let mut copy = Style::new();
+    if let Some(value) = style.declared_radius_top_left() {
+        copy.put_radius_top_left(value);
+    }
+    if let Some(value) = style.declared_radius_top_right() {
+        copy.put_radius_top_right(value);
+    }
+    if let Some(value) = style.declared_radius_bottom_right() {
+        copy.put_radius_bottom_right(value);
+    }
+    if let Some(value) = style.declared_radius_bottom_left() {
+        copy.put_radius_bottom_left(value);
+    }
+    take_corner_radii(&mut copy)
+}
+
 fn is_transparent(brush: &Prop<Brush>) -> bool {
     matches!(brush, Prop::Static(Brush::Solid(color)) if color.a <= 0.)
 }

@@ -5,6 +5,7 @@
 - [Choose when to build geometry](#choose-when-to-build-geometry)
 - [Background paint and shadows](#background-paint-and-shadows)
 - [Vector paths and SVG](#vector-paths-and-svg)
+- [Custom shaders](#custom-shaders)
 - [Textures](#textures)
 
 ## Choose when to build geometry
@@ -214,6 +215,45 @@ gradients, `use`, masks, filters, and CSS selectors are ignored: a
 nothing; `inherit` and unknown paints keep the inherited paint. The `svg(doc)`
 node draws a document with the same fitting and measuring rules as `path`;
 `currentColor` follows the node's foreground `color`.
+
+## Custom shaders
+
+`UiMaterial::new(fragment, uniforms, textures)` builds a material from a GLSL
+fragment shader that can read `v_pos` (window logical position), `v_uv`, and
+`v_color`. Every material also declares built-in uniforms, filled by
+`UiMaterial::with` and `with_rect`:
+
+| Uniform | Value |
+| --- | --- |
+| `float u_time` | Host time in seconds |
+| `vec2 u_resolution` | Window size in logical pixels |
+| `float u_dpi` | Physical pixels per logical pixel |
+| `vec4 u_rect` | The drawn rectangle (`x, y, w, h`) |
+
+`shader_box(material)` is a node that fills its border box, with its corner
+radii, using the material. `u_rect` is the node's layout rect and the vertex
+color is the node's foreground `color`. Set other uniforms from an `on_update`
+hook or an effect.
+
+```rust,no_run
+use mue::{prelude::*, renderer::{UiMaterial, node::shader_box}};
+
+let stripes = UiMaterial::new(
+    r#"#version 100
+    precision mediump float;
+    varying highp vec2 v_pos;
+    varying lowp vec4 v_color;
+    uniform float u_time;
+    void main() {
+        float band = step(mod(v_pos.x * 0.8 + v_pos.y * 0.6 - u_time * 12.0, 14.0), 8.0);
+        gl_FragColor = vec4(v_color.rgb, v_color.a * 0.1 * band);
+    }"#,
+    Vec::new(),
+    Vec::new(),
+)
+.unwrap();
+let background = shader_box(stripes).style(style! { width: 100%; height: 100%; color: #ffffff; });
+```
 
 ## Textures
 

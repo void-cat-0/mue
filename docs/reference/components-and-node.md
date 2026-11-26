@@ -16,7 +16,7 @@ The component crate owns reusable behavior.
 - application-level push/pop flows use [Scenes][scenes-guide]; the former navigation stack has been removed.
 - controls: `button`;
 - overlay: `overlay_host`;
-- graphics: `image` and the renderer's `path`, `svg`, and `shape` nodes;
+- graphics: `image` and the renderer's `path`, `svg`, `shader_box`, and `shape` nodes;
 - layers and effects (re-exported from the renderer): `teleport`, `anchored`, and `presence`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 

@@ -128,7 +128,7 @@ pub use mue_macroquad::{
     cursor::Cursor,
     focus::FocusScope,
     layer::{Layer, layer_host, teleport},
-    node::NodeHandle,
+    node::{NodeHandle, shader_box},
     presence::{PresenceAnimation, presence, use_presence},
 };
 pub use mue_macros::{component, node, style};
