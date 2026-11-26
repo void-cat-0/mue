@@ -250,6 +250,12 @@ impl Style {
         Self::default()
     }
 
+    /// Bind `handle` to the node built from this style (for directives that
+    /// only see the [`Style`]; builders use `StyleableExt::node_handle`).
+    pub fn bind_node_handle(&mut self, handle: crate::node::NodeHandle) {
+        self.node_handles.push(handle);
+    }
+
     /// Take the deferred input for mounting inside the node's scope.
     pub(crate) fn take_children_plan(&mut self) -> Option<ChildrenPlan> {
         self.children.take()

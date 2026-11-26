@@ -256,6 +256,63 @@ impl PointerGestureState {
     }
 }
 
+type PointerDownObserver = Rc<RefCell<dyn FnMut(Vector, &IndexSet<NodeRef>)>>;
+
+thread_local! {
+    static DOWN_OBSERVERS: RefCell<Vec<(u64, PointerDownObserver)>> =
+        const { RefCell::new(Vec::new()) };
+    static DOWN_OBSERVER_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Observe every pointer press anywhere in the window, for the lifetime of
+/// the current scope. The callback receives the position and the hit path
+/// (interactive nodes under the pointer, outermost first) before the press
+/// is dispatched to those nodes. Observers cannot claim or stop the press;
+/// use them for "click outside" style behavior.
+pub fn use_pointer_down_observer(observer: impl FnMut(Vector, &IndexSet<NodeRef>) + 'static) {
+    let id = DOWN_OBSERVER_ID.with(|counter| {
+        counter.set(counter.get() + 1);
+        counter.get()
+    });
+    DOWN_OBSERVERS.with(|observers| {
+        observers
+            .borrow_mut()
+            .push((id, Rc::new(RefCell::new(observer))))
+    });
+    // An effect owned by the current scope unregisters when the scope ends.
+    mue_core::effect::watch_effect(move || {
+        mue_core::effect::on_cleanup(move || {
+            let _ = DOWN_OBSERVERS.try_with(|observers| {
+                observers.borrow_mut().retain(|(entry, _)| *entry != id);
+            });
+        });
+    });
+}
+
+/// Run the pointer-down observers as if a press happened (for tests and
+/// custom input sources).
+#[doc(hidden)]
+pub fn notify_pointer_down(position: Vector, path: &IndexSet<NodeRef>) {
+    let observers: Vec<PointerDownObserver> = DOWN_OBSERVERS.with(|observers| {
+        observers
+            .borrow()
+            .iter()
+            .map(|(_, observer)| observer.clone())
+            .collect()
+    });
+    if observers.is_empty() {
+        return;
+    }
+    mue_core::batch(|| {
+        for observer in observers {
+            // An observer that is already running (a nested press) is skipped.
+            if let Ok(mut observer) = observer.try_borrow_mut() {
+                observer(position, path);
+            }
+        }
+    });
+}
+
 fn path_is_live(path: &IndexSet<NodeRef>) -> bool {
     Runtime::with(|rt| {
         let nodes = rt.nodes.borrow();
@@ -1007,6 +1064,7 @@ impl PointerManager {
     fn on_pointer_start(&mut self, id: PointerId, pointer_type: PointerType, pos: Vector) {
         let path = self.hit_path(pos);
         crate::focus::pointer_down(&path);
+        notify_pointer_down(pos, &path);
         // A repeated native touch id starts a new sequence, not a second Down
         // on the old recognizer state.
         self.on_pointer_cancel(id);
@@ -1058,6 +1116,7 @@ impl PointerManager {
         }
         let path = self.hit_path(pos);
         crate::focus::pointer_down(&path);
+        notify_pointer_down(pos, &path);
         if let Some(track) = self.tracks.get_mut(&id) {
             track.event.button_state.insert(button_state);
             Self::on_track_down(track, path, pos);
