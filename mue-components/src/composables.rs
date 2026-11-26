@@ -16,6 +16,8 @@
 
 use std::{cell::Cell, rc::Rc};
 
+use mue_core::effect::computed;
+
 use mue_core::{
     effect::{on_cleanup, watch, watch_effect},
     prelude::*,
@@ -140,4 +142,252 @@ pub fn use_clipboard() -> Clipboard {
 /// [`mue_macroquad::viewport::breakpoint`].
 pub fn use_breakpoint(thresholds: &[f32]) -> ReadSignal<usize> {
     mue_macroquad::viewport::breakpoint(thresholds)
+}
+
+/// Safe-area insets in logical pixels (notches, rounded corners, system bars).
+pub fn use_safe_area() -> ReadSignal<mue_macroquad::math::Edges> {
+    mue_macroquad::viewport::safe_area()
+}
+
+/// The soft keyboard, for layouts that adapt to it (scroll areas already keep
+/// focused fields visible).
+#[derive(Clone, Copy)]
+pub struct Keyboard {
+    pub visible: ReadSignal<bool>,
+    /// How far it covers the window from the bottom, in logical pixels.
+    pub inset: ReadSignal<f32>,
+    /// Its frame in logical window pixels (empty while hidden).
+    pub frame: ReadSignal<mue_macroquad::math::Rect>,
+}
+
+pub fn use_keyboard() -> Keyboard {
+    Keyboard {
+        visible: mue_macroquad::text_input::keyboard_visible(),
+        inset: mue_macroquad::text_input::keyboard_inset(),
+        frame: mue_macroquad::text_input::keyboard_frame(),
+    }
+}
+
+/// Light or dark appearance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorScheme {
+    Light,
+    #[default]
+    Dark,
+}
+
+/// The app's color mode preference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorMode {
+    Light,
+    Dark,
+    /// Follow the system scheme ([`set_system_color_scheme`]).
+    #[default]
+    System,
+}
+
+thread_local! {
+    static COLOR_MODE: Signal<ColorMode> =
+        mue_core::scope::Scope::null().run(|| Signal::new(ColorMode::System));
+    static SYSTEM_SCHEME: Signal<ColorScheme> =
+        mue_core::scope::Scope::null().run(|| Signal::new(ColorScheme::Dark));
+    static REDUCED_MOTION: Signal<bool> =
+        mue_core::scope::Scope::null().run(|| Signal::new(false));
+}
+
+/// Report the operating system color scheme (hosts call this; the default is dark).
+pub fn set_system_color_scheme(scheme: ColorScheme) {
+    SYSTEM_SCHEME.with(|signal| {
+        if signal.get_untracked() != scheme {
+            signal.set(scheme);
+        }
+    });
+}
+
+/// Report the system reduced-motion preference (hosts call this).
+pub fn set_prefers_reduced_motion(reduce: bool) {
+    REDUCED_MOTION.with(|signal| {
+        if signal.get_untracked() != reduce {
+            signal.set(reduce);
+        }
+    });
+}
+
+/// The app-wide color mode (Vue's `useColorMode`): a preference that can be
+/// light, dark, or system, and the resolved scheme to style with.
+#[derive(Clone, Copy)]
+pub struct ColorModeState {
+    /// The preference; write it to switch modes.
+    pub mode: Signal<ColorMode>,
+    /// The scheme in effect after resolving `System`. Tracked.
+    pub scheme: ReadSignal<ColorScheme>,
+}
+
+impl ColorModeState {
+    pub fn is_dark(&self) -> bool {
+        self.scheme.get() == ColorScheme::Dark
+    }
+
+    /// Switch between light and dark (leaving `System`).
+    pub fn toggle(&self) {
+        let next = match self.scheme.get_untracked() {
+            ColorScheme::Dark => ColorMode::Light,
+            ColorScheme::Light => ColorMode::Dark,
+        };
+        self.mode.set(next);
+    }
+}
+
+pub fn use_color_mode() -> ColorModeState {
+    let mode = COLOR_MODE.with(|signal| *signal);
+    let system = SYSTEM_SCHEME.with(|signal| **signal);
+    let scheme = computed(move |_| match mode.get() {
+        ColorMode::Light => ColorScheme::Light,
+        ColorMode::Dark => ColorScheme::Dark,
+        ColorMode::System => system.get(),
+    });
+    ColorModeState { mode, scheme }
+}
+
+/// Evaluate a CSS media query against the window (Vue's `useMediaQuery`).
+/// Tracked.
+///
+/// Supported features: `min-width`, `max-width`, `min-height`, `max-height`
+/// (in `px`), `orientation: portrait | landscape`, `hover: hover | none`,
+/// `pointer: fine | coarse`, `prefers-reduced-motion: reduce |
+/// no-preference`, and `prefers-color-scheme: light | dark` (the resolved
+/// color mode). Combine features with `and`, alternatives with commas, and
+/// negate a query with a leading `not`. Unknown features never match.
+///
+/// ```
+/// use mue_components::prelude::*;
+///
+/// # let owner = mue_core::scope::OwnedScope::new();
+/// # owner.run(|| {
+/// let wide = use_media_query("(min-width: 768px) and (orientation: landscape)");
+/// let touch = use_media_query("(hover: none), (pointer: coarse)");
+/// # let _ = (wide, touch);
+/// # });
+/// ```
+pub fn use_media_query(query: &str) -> ReadSignal<bool> {
+    let alternatives: Vec<(bool, Vec<Feature>)> =
+        query.split(',').map(parse_media_alternative).collect();
+    let viewport = mue_macroquad::viewport::use_viewport();
+    let hover = mue_macroquad::event::hover::hover_capable();
+    let reduced = REDUCED_MOTION.with(|signal| **signal);
+    let scheme = use_color_mode().scheme;
+    computed(move |_| {
+        let viewport = viewport.get();
+        alternatives.iter().any(|(negated, features)| {
+            let all = features.iter().all(|feature| match *feature {
+                Feature::MinWidth(px) => viewport.width >= px,
+                Feature::MaxWidth(px) => viewport.width <= px,
+                Feature::MinHeight(px) => viewport.height >= px,
+                Feature::MaxHeight(px) => viewport.height <= px,
+                Feature::Portrait(portrait) => viewport.is_portrait() == portrait,
+                Feature::Hover(can) => hover.get() == can,
+                Feature::FinePointer(fine) => hover.get() == fine,
+                Feature::ReducedMotion(reduce) => reduced.get() == reduce,
+                Feature::Dark(dark) => (scheme.get() == ColorScheme::Dark) == dark,
+                Feature::Never => false,
+            });
+            all != *negated
+        })
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Feature {
+    MinWidth(f32),
+    MaxWidth(f32),
+    MinHeight(f32),
+    MaxHeight(f32),
+    Portrait(bool),
+    Hover(bool),
+    FinePointer(bool),
+    ReducedMotion(bool),
+    Dark(bool),
+    Never,
+}
+
+fn parse_media_alternative(query: &str) -> (bool, Vec<Feature>) {
+    let query = query.trim();
+    let (negated, rest) = match query.strip_prefix("not ") {
+        Some(rest) => (true, rest),
+        None => (false, query),
+    };
+    let features = rest
+        .split(" and ")
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && *part != "all" && *part != "screen")
+        .map(parse_media_feature)
+        .collect();
+    (negated, features)
+}
+
+fn parse_media_feature(part: &str) -> Feature {
+    let inner = part.trim_start_matches('(').trim_end_matches(')');
+    let (name, value) = match inner.split_once(':') {
+        Some((name, value)) => (name.trim(), value.trim()),
+        None => (inner.trim(), ""),
+    };
+    let px = || value.trim_end_matches("px").trim().parse::<f32>().ok();
+    match (name, value) {
+        ("min-width", _) => px().map_or(Feature::Never, Feature::MinWidth),
+        ("max-width", _) => px().map_or(Feature::Never, Feature::MaxWidth),
+        ("min-height", _) => px().map_or(Feature::Never, Feature::MinHeight),
+        ("max-height", _) => px().map_or(Feature::Never, Feature::MaxHeight),
+        ("orientation", "portrait") => Feature::Portrait(true),
+        ("orientation", "landscape") => Feature::Portrait(false),
+        ("hover", "hover") => Feature::Hover(true),
+        ("hover", "none") => Feature::Hover(false),
+        ("pointer", "fine") => Feature::FinePointer(true),
+        ("pointer", "coarse") => Feature::FinePointer(false),
+        ("prefers-reduced-motion", "reduce") | ("prefers-reduced-motion", "") => {
+            Feature::ReducedMotion(true)
+        }
+        ("prefers-reduced-motion", "no-preference") => Feature::ReducedMotion(false),
+        ("prefers-color-scheme", "dark") => Feature::Dark(true),
+        ("prefers-color-scheme", "light") => Feature::Dark(false),
+        _ => Feature::Never,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_queries_parse() {
+        assert_eq!(
+            parse_media_alternative("(min-width: 640px) and (orientation: landscape)"),
+            (
+                false,
+                vec![Feature::MinWidth(640.), Feature::Portrait(false)]
+            )
+        );
+        assert_eq!(
+            parse_media_alternative("not screen and (hover: none)"),
+            (true, vec![Feature::Hover(false)])
+        );
+        assert_eq!(parse_media_feature("(width-ish: 3)"), Feature::Never);
+    }
+
+    #[test]
+    fn color_mode_resolves_system() {
+        let owner = mue_core::scope::OwnedScope::new();
+        owner.run(|| {
+            let color = use_color_mode();
+            set_system_color_scheme(ColorScheme::Light);
+            assert!(!color.is_dark());
+            color.toggle();
+            assert_eq!(color.mode.get_untracked(), ColorMode::Dark);
+            assert!(color.is_dark());
+            color.mode.set(ColorMode::System);
+            let dark = use_media_query("(prefers-color-scheme: dark)");
+            assert!(!dark.get());
+            set_system_color_scheme(ColorScheme::Dark);
+            assert!(dark.get());
+        });
+    }
 }
