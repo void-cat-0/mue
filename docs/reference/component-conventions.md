@@ -10,6 +10,7 @@ way and application components can follow them too.
 - [Controlled and uncontrolled values](#controlled-and-uncontrolled-values)
 - [Compound components](#compound-components)
 - [Slots and events](#slots-and-events)
+- [Composables and directives](#composables-and-directives)
 - [Icons](#icons)
 - [Viewport and safe area](#viewport-and-safe-area)
 
@@ -70,6 +71,24 @@ usual arrangement.
 
 Slots and events are always optional. A scoped slot is Vue's scoped slot: the
 component decides when and with which data the caller's template is built.
+
+## Composables and directives
+
+Composables are functions called in a component body that return signals and
+methods:
+
+| Function | Returns |
+| --- | --- |
+| `use_disclosure(open)` / `use_toggle(on)` | `Disclosure` with `is_open`, `open`, `close`, `toggle` |
+| `use_debounced(signal, seconds)` | A signal that follows the source after it stops changing |
+| `use_interval(seconds, tick)` | Runs `tick` periodically while the scope lives |
+| `use_clipboard()` | `Clipboard` with `copy` and `paste` |
+| `use_breakpoint(&[640., 1024.])` | How many width thresholds the window has reached |
+| `use_presence()`, `use_anchor()`, `focus::use_focus()` | State from the nearest presence, anchored, or focusable node |
+
+A `Directive` adds reusable hooks or styles to any builder with
+`.directive(..)`. `Hotkey::command(KeyCode::S, save)` runs an action for a key
+chord on the focus path.
 
 ## Icons
 

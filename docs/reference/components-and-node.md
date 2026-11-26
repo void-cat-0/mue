@@ -18,7 +18,7 @@ The component crate owns reusable behavior.
 - overlay: `overlay_host`;
 - graphics: `image`, `icon`/`icon_named`, and the renderer's `path`, `svg`, `shader_box`, and `shape` nodes;
 - layers and effects (re-exported from the renderer): `teleport`, `anchored`, `presence`, and `offscreen`;
-- state and behavior: `Controllable` and `provide_part`/`use_part`;
+- state and behavior: `Controllable`, `provide_part`/`use_part`, composables such as `use_disclosure`, and directives such as `Hotkey`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 
 `flexbox`, `text`, `path`, `svg`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.

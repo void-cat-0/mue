@@ -148,14 +148,18 @@
 //! });
 //! ```
 
+pub mod composables;
 pub mod controls;
+pub mod directive;
 pub mod graphics;
 pub mod layout;
 pub mod overlay;
 pub mod state;
 pub mod tokens;
 pub mod typography;
+pub use composables::*;
 pub use controls::*;
+pub use directive::*;
 pub use graphics::*;
 pub use layout::*;
 pub use mue_macroquad::node::{
