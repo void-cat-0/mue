@@ -85,10 +85,42 @@ methods:
 | `use_clipboard()` | `Clipboard` with `copy` and `paste` |
 | `use_breakpoint(&[640., 1024.])` | How many width thresholds the window has reached |
 | `use_presence()`, `use_anchor()`, `focus::use_focus()` | State from the nearest presence, anchored, or focusable node |
+| `use_media_query("(min-width: 768px)")` | Whether a CSS-style media query matches: widths, heights, orientation, `hover`, `pointer`, `prefers-reduced-motion`, `prefers-color-scheme` |
+| `use_color_mode()` | `ColorModeState` with the `mode` preference (light, dark, system), the resolved `scheme`, and `toggle` |
+| `use_safe_area()` | Insets for notches and system bars |
+| `use_keyboard()` | The soft keyboard's `visible`, `inset`, and `frame` |
+
+Hosts report system preferences with `set_system_color_scheme` and
+`set_prefers_reduced_motion`.
 
 A `Directive` adds reusable hooks or styles to any builder with
-`.directive(..)`. `Hotkey::command(KeyCode::S, save)` runs an action for a key
-chord on the focus path.
+`.directive(..)` (Vue's custom directives):
+
+| Directive | Behavior |
+| --- | --- |
+| `Hotkey::command(KeyCode::S, save)` | Runs an action for a key chord on the focus path |
+| `ClickOutside::new(close).enabled(open)` | Runs an action when a press lands outside the node |
+| `LongPressRepeat::new(step)` | Runs an action on press, then repeatedly while held, speeding up |
+| `Haptic::new(HapticStyle::Light)` | Plays a haptic on tap (or `Haptic::on(FeedbackTrigger::Press, ..)`) |
+| `Sound::new(SoundCue::Click)` | Plays the application's UI sound on tap, press, or long press |
+
+`mue_macroquad::event::pointer::use_pointer_down_observer` observes every
+press in the window; `ClickOutside` is built on it.
+
+## Handles
+
+A handle gives code imperative access to a mounted control, like a Vue
+template ref with `defineExpose`. Create it in the component body, pass it to
+the builder, and call it from event handlers:
+
+| Handle | Builder | Methods |
+| --- | --- | --- |
+| `NodeHandle` | `.node_handle(handle)` on any builder | `get`, `rect`, `focus`, `focus_within`, `blur` |
+| `TextEditHandle` | `.handle(handle)` on `input`, `textarea`, `text_edit` | `focus`, `select_all`, `set_selection`, `insert`, `set_text`, `undo`, `redo`, `value` |
+| `ScrollAreaHandle` | `.handle(handle)` on `scroll_area` | `offset`, `scroll_to`, `scroll_by`, `scroll_to_top`, `scroll_to_end`, `scroll_into_view` |
+
+Text inputs bind a model with Vue's modifiers: `.model(text)`, `.lazy()`,
+`.trim()`, and `.model_parsed(number)` ([text input][text-input-reference]).
 
 ## Icons
 
@@ -123,3 +155,4 @@ desktop. The `safe_area` component pads its content by those insets.
 
 [guide-reference]: index.md
 [components-reference]: components-and-node.md
+[text-input-reference]: text-input.md

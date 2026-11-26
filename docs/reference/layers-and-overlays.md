@@ -6,6 +6,8 @@
 - [Layer hosts and teleports](#layer-hosts-and-teleports)
 - [Anchored content](#anchored-content)
 - [Presence animations](#presence-animations)
+- [List transitions](#list-transitions)
+- [Back handling](#back-handling)
 - [Node handles](#node-handles)
 
 ## Paint order and z-index
@@ -121,6 +123,35 @@ immediately.
 any interpolatable value: the returned property follows `target` along
 `curve`.
 
+## List transitions
+
+`transition_group(list, key, view)` (Vue's `<TransitionGroup>`) renders a
+keyed list and animates its changes. New items enter and removed items leave
+with the group's `PresenceAnimation` (`.animation(..)`, `.transition(..)`);
+a leaving item stays in place until its exit finishes. Items that remain
+slide from their old positions to their new ones (FLIP), timed by
+`.move_transition(..)`.
+
+```rust
+use mue::prelude::*;
+use mue::renderer::{presence::PresenceAnimation, transition_group::transition_group};
+use std::rc::Rc;
+
+let owner = OwnedScope::new();
+owner.run(|| {
+    let items: Signal<Rc<[u32]>> = signal(Rc::from(vec![1, 2, 3]));
+    let list = transition_group(items, |id: &u32| *id, |id: &u32| text(Rc::<str>::from(id.to_string())))
+        .animation(PresenceAnimation::fade().slide(0., -12.));
+});
+```
+
+## Back handling
+
+An open `overlay_host` registers a back handler, so the Android back button,
+the back gesture, and Escape close the topmost overlay before anything else.
+See [touch and mobile][mobile-reference] for the handler stack and edge
+swipes.
+
 ## Node handles
 
 `NodeHandle::new()` creates a slot that receives a node once it is built, like
@@ -131,3 +162,4 @@ moved into several closures.
 
 [guide-reference]: index.md
 [components-reference]: components-and-node.md
+[mobile-reference]: mobile.md
