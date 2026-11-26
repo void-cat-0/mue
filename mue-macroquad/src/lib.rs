@@ -89,7 +89,7 @@ pub mod style;
 pub mod svg;
 pub mod texture;
 pub mod transition;
-mod viewport;
+pub mod viewport;
 
 pub use app::App;
 pub use clip::Sector;

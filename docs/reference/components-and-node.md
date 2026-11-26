@@ -12,7 +12,7 @@
 
 The component crate owns reusable behavior.
 
-- layout: `stack`, `wrap`, `center`, `container`, `grid`, `simple_grid`, `scroll_area`, and `pages`;
+- layout: `stack`, `wrap`, `center`, `container`, `grid`, `simple_grid`, `safe_area`, `scroll_area`, and `pages`;
 - application-level push/pop flows use [Scenes][scenes-guide]; the former navigation stack has been removed.
 - controls: `button`;
 - overlay: `overlay_host`;

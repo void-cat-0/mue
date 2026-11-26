@@ -167,6 +167,7 @@ impl App {
         crate::viewport::set(crate::viewport::Viewport {
             width: viewport.w,
             height: viewport.h,
+            dpi_scale: macroquad::window::screen_dpi_scale(),
         });
     }
 
