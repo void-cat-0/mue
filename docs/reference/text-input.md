@@ -27,8 +27,10 @@ Fields take `.placeholder`, `.size(InputSize::Sm | Md | Lg)`,
 `.kind(TextInputKind)`, `.action(TextInputAction)`, `.capitalization(..)`,
 and `.autocorrect(bool)` choose the soft keyboard layout and its action
 key. `.kind(TextInputKind::Password)` masks the text and disables
-suggestions and composition. `.on_change(|text| ..)` runs after each edit
-and `.on_submit(|text| ..)` on Enter (or the soft keyboard's action key).
+suggestions and composition. `.on_change(|text| ..)` runs with the new text
+after each edit, and `.on_submit(|action| ..)` runs on Enter or the soft
+keyboard's action key; it receives the `TextInputAction` (Done, Go, Search,
+Send, ...), and the text is in your model.
 
 ```rust
 use mue::components::{input, input_group};
@@ -59,7 +61,7 @@ controls. Use it directly for fields with custom chrome. It takes
 `.value(prop)` (a controlled value), `.multiline(bool)`, `.min_lines(n)`,
 `.mask('•')`, the colors `.caret_color`, `.selection_color`, and
 `.placeholder_color`, and the same hints and events as the controls, plus
-`.on_commit(|text| ..)` (Enter or blur).
+`.on_commit(|text| ..)`, which runs with the text when the field loses focus.
 
 `TextEditHandle` gives imperative access, like a Vue component ref exposed
 with `defineExpose`: bind it with `.handle(handle)`, then call `focus`,
