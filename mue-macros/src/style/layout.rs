@@ -16,7 +16,12 @@ pub(super) fn declaration(
             host,
             method,
             "Display",
-            &[("flex", "Flex"), ("block", "Block"), ("none", "None")],
+            &[
+                ("flex", "Flex"),
+                ("grid", "Grid"),
+                ("block", "Block"),
+                ("none", "None"),
+            ],
             false,
         )?,
         "box-sizing" => enumeration(

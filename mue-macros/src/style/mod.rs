@@ -11,6 +11,7 @@ use syn::{
 
 mod box_model;
 mod color;
+mod grid;
 mod layout;
 mod motion;
 mod paint;
@@ -110,6 +111,7 @@ fn declaration(
     for group in [
         box_model::declaration,
         layout::declaration,
+        grid::declaration,
         paint::declaration,
         text::declaration,
         motion::declaration,

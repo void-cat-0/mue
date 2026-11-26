@@ -7,8 +7,8 @@
 | Section | Look up |
 | --- | --- |
 | [Box sizes and edges](#box-sizes-and-edges) | Lengths, shorthands, axes, and typed inputs |
-| [Layout modes](#layout-modes) | Display modes, alignment, clipping, and flex shorthand |
-| [Paint](#paint) | Color forms, brushes, corner radius, and opacity |
+| [Layout modes](#layout-modes) | Display modes, alignment, clipping, flex shorthand, and grid |
+| [Paint](#paint) | Color forms, brushes, corner radii, borders, outlines, and opacity |
 | [Text](#text) | Fonts, line metrics, alignment, and truncation |
 | [Transforms](#transforms) | Operations, units, and pivots |
 | [Property transitions](#property-transitions) | Durations, curves, and interpolation |
@@ -47,7 +47,7 @@ let panel = flexbox().style(style! {
 
 | Declaration | Accepted keywords |
 | --- | --- |
-| `display` | `flex`, `block`, `none` |
+| `display` | `flex`, `grid`, `block`, `none` |
 | `box-sizing` | `border-box`, `content-box` |
 | `position` | `relative`, `absolute` |
 | `flex-direction` | `row`, `row-reverse`, `column`, `column-reverse` |
@@ -73,6 +73,31 @@ On a flex container, `justify-content` uses the main axis and `align-items` uses
 | `2 1 80px` | 2 | 1 | `80px` |
 
 A unitless first number is a grow factor. Supply a basis with its unit, even for `0px`. Bind separate `flex-grow`, `flex-shrink`, and `flex-basis` declarations when the three values come from signals.
+
+### Grid
+
+`display: grid` lays children out in tracks. `gap`, `row-gap`, and `column-gap` separate them, and the alignment properties above apply to grid items too (`justify-items` and `justify-self` take effect in grid).
+
+| Declaration | Accepted forms |
+| --- | --- |
+| `grid-template-columns`, `grid-template-rows` | Track sizes and `repeat(n \| auto-fill \| auto-fit, tracks...)`, or `{GridTemplate}` |
+| `grid-auto-columns`, `grid-auto-rows` | Track sizes for implicit tracks, or `{GridTracks}` |
+| `grid-auto-flow` | `row` or `column`, optionally with `dense`, or `{GridAutoFlow}` |
+| `grid-column`, `grid-row` | `auto`, a line number, or `span n`, optionally followed by `/` and an end: `1 / 3`, `2 / span 2`, `span 2`; or `{GridLine}` |
+
+A track size is `Npx`, `N%`, `Nfr`, `auto`, `min-content`, `max-content`, `fit-content(Npx)`, or `minmax(min, max)`. Line numbers start at 1; negative numbers count from the last line. Named lines and areas are not supported. In Rust, build the same values with `GridTemplate`, `GridTrack`, `Repeat`, and `GridLine` from `mue_macroquad::style`.
+
+```rust
+use mue::prelude::*;
+
+let page = flexbox().style(style! {
+    display: grid;
+    grid-template-columns: 240px repeat(2, minmax(120px, 1fr));
+    grid-auto-rows: 80px;
+    gap: 12px;
+});
+let banner = flexbox().style(style! { grid-column: 1 / -1; });
+```
 
 ## Paint
 

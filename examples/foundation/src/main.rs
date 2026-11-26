@@ -102,6 +102,31 @@ fn vector_row() -> impl Component {
     ))
 }
 
+fn grid_row() -> impl Component {
+    let tile = |label: &'static str| {
+        center()
+            .style(style! { height: 44px; background: #26304a; border-radius: 8px; })
+            .children(
+                text(label).style(style! { font-size: 14px; line-height: 18px; color: #c9d1e0; }),
+            )
+    };
+    grid()
+        .style(style! {
+            width: 100%;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            grid-auto-rows: 44px;
+            gap: 8px;
+        })
+        .children((
+            tile("grid-column: 1 / -1").style(style! { grid-column: 1 / -1; background: #3b6fd6; }),
+            tile("span 2").style(style! { grid-column: span 2; }),
+            tile("auto"),
+            tile("auto"),
+            tile("auto"),
+            tile("auto"),
+        ))
+}
+
 fn ui() -> impl Component {
     stack()
         .style(style! { width: 100%; height: 100%; padding: 32px; gap: 32px; background: #161b26; })
@@ -109,6 +134,7 @@ fn ui() -> impl Component {
             heading("Foundation").style(style! { color: #ffffff; }),
             paint_row(),
             vector_row(),
+            grid_row(),
         ))
 }
 

@@ -55,6 +55,14 @@ impl Style {
         let flex_direction = self.take_flex_direction();
         let flex_wrap = self.take_flex_wrap();
 
+        let grid_template_columns = self.take_grid_template_columns();
+        let grid_template_rows = self.take_grid_template_rows();
+        let grid_auto_columns = self.take_grid_auto_columns();
+        let grid_auto_rows = self.take_grid_auto_rows();
+        let grid_auto_flow = self.take_grid_auto_flow();
+        let grid_column = self.take_grid_column();
+        let grid_row = self.take_grid_row();
+
         let flex_basis = self.take_flex_basis();
         let flex_grow = self.take_flex_grow();
         let flex_shrink = self.take_flex_shrink();
@@ -126,6 +134,24 @@ impl Style {
             flex_basis: flex_basis.get().to_dimension(),
             flex_grow: flex_grow.get(),
             flex_shrink: flex_shrink.get(),
+
+            grid_template_columns: grid_template_columns.get_clone().to_taffy(),
+            grid_template_rows: grid_template_rows.get_clone().to_taffy(),
+            grid_auto_columns: grid_auto_columns
+                .get_clone()
+                .0
+                .iter()
+                .map(|t| t.to_taffy())
+                .collect(),
+            grid_auto_rows: grid_auto_rows
+                .get_clone()
+                .0
+                .iter()
+                .map(|t| t.to_taffy())
+                .collect(),
+            grid_auto_flow: grid_auto_flow.get(),
+            grid_column: grid_column.get().to_taffy(),
+            grid_row: grid_row.get().to_taffy(),
 
             ..Default::default()
         })

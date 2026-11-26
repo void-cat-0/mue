@@ -1,10 +1,14 @@
 mod define;
 mod ext;
+mod grid;
 mod rect;
 mod store;
 mod taffy_style;
 mod transform;
 use define::define_style;
+pub use grid::{
+    GridAutoFlow, GridLine, GridPlacement, GridTemplate, GridTrack, GridTracks, Repeat,
+};
 pub use rect::IntoRectProp;
 pub use transform::{IntoTransformProp, Transform, TransformOp, TransformOrigin, TransformProp};
 pub mod units;
@@ -76,6 +80,21 @@ define_style! {
     row_gap: Size = Size::Px(0.);
     /// Preferred width divided by height, when one dimension is automatic.
     aspect_ratio: Option<f32>;
+
+    /// Grid container columns, for `display: grid`.
+    grid_template_columns: GridTemplate;
+    /// Grid container rows, for `display: grid`.
+    grid_template_rows: GridTemplate;
+    /// Sizes of implicitly created columns.
+    grid_auto_columns: GridTracks;
+    /// Sizes of implicitly created rows.
+    grid_auto_rows: GridTracks;
+    /// Auto-placement direction and packing.
+    grid_auto_flow: GridAutoFlow;
+    /// Grid item placement between column lines.
+    grid_column: GridLine;
+    /// Grid item placement between row lines.
+    grid_row: GridLine;
 
     flex_basis: Size = Size::Auto;
     /// Set how much of the parent's remaining main-axis space this node takes.
@@ -238,6 +257,7 @@ impl Style {
 pub mod values {
     pub use cosmic_text::Align as TextAlign;
     pub use taffy::{
-        AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, Overflow, Position,
+        AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, GridAutoFlow,
+        Overflow, Position,
     };
 }

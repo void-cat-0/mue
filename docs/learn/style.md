@@ -358,6 +358,20 @@ let variant_b = style! {
 </figure>
 </div>
 
+### Lay cards out in a grid
+
+`display: grid` places children into column and row tracks. `repeat(auto-fill, minmax(160px, 1fr))` creates as many columns as fit while each stays at least 160 px wide; the leftover space is shared. `grid-column: 1 / -1` stretches a child across every column. The `simple_grid` component wraps this pattern: `simple_grid().min_child_width(Some(160.))`.
+
+```rust
+# use mue::prelude::*;
+let cards = style! {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+};
+let header = style! { grid-column: 1 / -1; };
+```
+
 ### Remove a box from layout
 
 Apply `display: none` to omit a box from layout. Use `display: block` for block flow and `display: flex` for flex layout. Use the [conditional children section][conditional-children-guide] when visibility is part of application state.
