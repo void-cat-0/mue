@@ -202,6 +202,29 @@ struct RetainedTextBatch {
     lines: Vec<LineRange>,
 }
 
+/// Geometry of a short solid-color text, kept while nothing that affects it
+/// changes. Short texts are not worth a retained mesh of their own (they
+/// would break batching), but rebuilding their quads every frame costs a
+/// glyph walk, atlas lookups, and vertex building per glyph. A hit only pins
+/// the glyphs in the atlas and resubmits the vertices.
+#[derive(Default)]
+struct ImmediateTextCache {
+    key: Option<ImmediateTextKey>,
+    glyph_keys: Vec<CacheKey>,
+    shapes: Option<Rc<crate::paint::Shapes>>,
+}
+
+#[derive(PartialEq)]
+struct ImmediateTextKey {
+    content: RetainedTextContentKey,
+    origin: (f32, f32),
+    transform: Matrix,
+    alpha: f32,
+    clip: Option<Rect>,
+    atlas_evicted: u64,
+    resident_glyphs: usize,
+}
+
 #[derive(PartialEq)]
 struct RetainedTextContentKey {
     revision: u64,
@@ -896,6 +919,7 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
     });
 
     let mut retained_cache = RetainedTextCache::default();
+    let mut immediate_cache = ImmediateTextCache::default();
     style.on_render.append(move |_| {
         let mut buffer = buffer.borrow_mut();
         Runtime::with_fonts_mut(|fonts| {
@@ -979,10 +1003,58 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                 _ => retained_cache = RetainedTextCache::default(),
             }
 
+            let transform = current_transform();
+            let clip = text_cull_clip(transform, current_clip_logical());
+            let cache_key = match &color_brush {
+                Brush::Solid(color) => {
+                    let content = RetainedTextContentKey {
+                        revision: revision.get_untracked(),
+                        width: bounds.w,
+                        style: RetainedTextStyle {
+                            y,
+                            spacing,
+                            font_size,
+                            max_lines,
+                            strike,
+                            underline,
+                            color: *color,
+                        },
+                    };
+                    let same_content = immediate_cache
+                        .key
+                        .as_ref()
+                        .is_some_and(|key| key.content == content);
+                    if !same_content {
+                        immediate_cache.glyph_keys = glyph_keys(&buffer, max_lines);
+                    }
+                    let resident_glyphs = pin_glyphs(&immediate_cache.glyph_keys, fonts);
+                    Some(ImmediateTextKey {
+                        content,
+                        origin: (bounds.x.round(), bounds.y),
+                        transform,
+                        alpha: paint.opacity(),
+                        clip,
+                        atlas_evicted: fonts.atlas_stats().evicted,
+                        resident_glyphs,
+                    })
+                }
+                _ => None,
+            };
+            if let (Some(key), Some(shapes)) = (&cache_key, &immediate_cache.shapes)
+                && immediate_cache.key.as_ref() == Some(key)
+            {
+                let shapes = shapes.clone();
+                if clip_text {
+                    crate::paint::with_clip(bounds, || shapes.draw());
+                } else {
+                    shapes.draw();
+                }
+                return;
+            }
+
+            let rejected_before = fonts.atlas_stats().rejected_exhausted;
             let mut draw = || {
-                let transform = current_transform();
-                let clip = text_cull_clip(transform, current_clip_logical());
-                paint.draw(|p| {
+                let shapes = paint.capture(|p| {
                     for run in buffer.layout_runs().take(max_lines.unwrap_or(usize::MAX)) {
                         // The atlas is rasterized for a pixel grid. Snap the
                         // same baseline in immediate and retained rendering.
@@ -1063,16 +1135,29 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                             );
                         }
                     }
-                    // Paint::draw submits geometry after this closure; later render hooks may flush it.
+                    // Upload staged glyphs before the geometry is submitted.
                     if let Some(atlas) = &mut fonts.font_atlas {
                         atlas.end_pass();
                     }
-                })
+                });
+                shapes.draw();
+                shapes
             };
-            if clip_text {
-                crate::paint::with_clip(bounds, draw);
+            let shapes = if clip_text {
+                crate::paint::with_clip(bounds, draw)
             } else {
-                draw();
+                draw()
+            };
+            // Keep the geometry only when every glyph made it into the atlas.
+            let complete = fonts.atlas_stats().rejected_exhausted == rejected_before;
+            match cache_key {
+                Some(mut key) if complete => {
+                    key.atlas_evicted = fonts.atlas_stats().evicted;
+                    key.resident_glyphs = pin_glyphs(&immediate_cache.glyph_keys, fonts);
+                    immediate_cache.key = Some(key);
+                    immediate_cache.shapes = Some(shapes);
+                }
+                _ => immediate_cache = ImmediateTextCache::default(),
             }
         });
     });

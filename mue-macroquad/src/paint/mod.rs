@@ -205,6 +205,22 @@ impl Paint {
         })
     }
 
+    /// Build shapes with this paint's transform and opacity without drawing
+    /// them, for callers that keep the geometry while its inputs are unchanged.
+    pub fn capture(&self, f: impl FnOnce(&mut ShapesBuilder)) -> Rc<Shapes> {
+        let mut shapes = Shapes::default();
+        CACHE.with_borrow_mut(|cache| {
+            f(&mut ShapesBuilder::new(
+                cache,
+                self.transform.get(),
+                self.opacity.get(),
+                self.tolerance.get(),
+                &mut shapes,
+            ));
+        });
+        Rc::new(shapes)
+    }
+
     /// Draw shapes immediately in immediate mode.
     pub fn draw(&self, f: impl FnOnce(&mut ShapesBuilder)) {
         let mut shapes = Shapes::default();
