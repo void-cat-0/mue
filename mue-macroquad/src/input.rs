@@ -56,13 +56,41 @@ macro_rules! input_events {
     ($($variant:ident => $callback:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
         #[derive(Clone, Debug)]
         pub(crate) enum InputEvent {
-            $($variant { $($arg: $ty),* }),*
+            $($variant { $($arg: $ty),* },)*
+            /// Input-method composition text and caret (UTF-16 units).
+            ImePreedit { text: Rc<str>, cursor: usize },
+            /// Input-method commit; `None` cancels.
+            ImeCommit { text: Option<Rc<str>> },
+            /// Whole editing state from a mirroring platform (UTF-16 offsets).
+            ImeState {
+                text: Rc<str>,
+                selection_start: usize,
+                selection_end: usize,
+                composing_start: Option<usize>,
+                composing_end: Option<usize>,
+            },
         }
 
         impl InputEvent {
             pub(crate) fn repeat(&self, handler: &mut impl EventHandler) {
-                match *self {
-                    $(Self::$variant { $($arg),* } => handler.$callback($($arg),*)),*
+                match self {
+                    $(Self::$variant { $($arg),* } => handler.$callback($(*$arg),*),)*
+                    Self::ImePreedit { text, cursor } => handler.on_ime_preedit(text, *cursor),
+                    Self::ImeCommit { text } => handler.on_ime_commit(text.as_deref()),
+                    Self::ImeState {
+                        text,
+                        selection_start,
+                        selection_end,
+                        composing_start,
+                        composing_end,
+                    } => handler.on_ime_state_changed(
+                        text,
+                        *selection_start,
+                        *selection_end,
+                        *composing_start,
+                        *composing_end,
+                        1,
+                    ),
                 }
             }
         }
@@ -87,6 +115,41 @@ macro_rules! input_events {
                     dpi_scale: self.next_dpi_scale.take(),
                 });
             })*
+
+            fn on_ime_preedit(&mut self, text: &str, cursor: usize) {
+                self.push(InputEvent::ImePreedit { text: text.into(), cursor });
+            }
+
+            fn on_ime_commit(&mut self, text: Option<&str>) {
+                self.push(InputEvent::ImeCommit { text: text.map(Into::into) });
+            }
+
+            fn on_ime_state_changed(
+                &mut self,
+                text: &str,
+                selection_start: usize,
+                selection_end: usize,
+                composing_start: Option<usize>,
+                composing_end: Option<usize>,
+                _element_id: u64,
+            ) {
+                self.push(InputEvent::ImeState {
+                    text: text.into(),
+                    selection_start,
+                    selection_end,
+                    composing_start,
+                    composing_end,
+                });
+            }
+        }
+
+        impl Collector {
+            fn push(&mut self, event: InputEvent) {
+                self.events.push(InputSample {
+                    event,
+                    dpi_scale: self.next_dpi_scale.take(),
+                });
+            }
         }
     };
 }
@@ -104,6 +167,8 @@ input_events! {
     KeyUp => key_up_event(keycode: KeyCode, modifiers: KeyMods),
     WindowMinimized => window_minimized_event(),
     WindowRestored => window_restored_event(),
+    TextInputAction => text_input_action_event(action: miniquad::TextInputAction),
+    SoftKeyboard => soft_keyboard_event(visible: bool, x: f32, y: f32, w: f32, h: f32),
 }
 
 #[derive(Default)]

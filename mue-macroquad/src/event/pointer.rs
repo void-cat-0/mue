@@ -1184,6 +1184,54 @@ impl EventHandler for PointerManager {
         self.refresh_hover(false);
     }
 
+    fn on_ime_preedit(&mut self, text: &str, cursor: usize) {
+        crate::text_input::dispatch_platform_event(crate::text_input::PlatformEvent::Preedit {
+            text: text.to_string(),
+            cursor_utf16: Some(cursor),
+        });
+    }
+
+    fn on_ime_commit(&mut self, text: Option<&str>) {
+        crate::text_input::dispatch_platform_event(crate::text_input::PlatformEvent::Commit(
+            text.map(str::to_string),
+        ));
+    }
+
+    fn on_ime_state_changed(
+        &mut self,
+        text: &str,
+        selection_start: usize,
+        selection_end: usize,
+        composing_start: Option<usize>,
+        composing_end: Option<usize>,
+        _element_id: u64,
+    ) {
+        let offset = |value: Option<usize>| value.map_or(-1, |value| value as i32);
+        crate::text_input::dispatch_platform_event(crate::text_input::PlatformEvent::State {
+            text: text.to_string(),
+            selection: (selection_start as i32, selection_end as i32),
+            composing: (offset(composing_start), offset(composing_end)),
+        });
+    }
+
+    fn text_input_action_event(&mut self, action: miniquad::TextInputAction) {
+        crate::text_input::dispatch_platform_event(crate::text_input::PlatformEvent::Action(
+            crate::text_input::from_miniquad_action(action),
+        ));
+    }
+
+    fn soft_keyboard_event(&mut self, visible: bool, x: f32, y: f32, w: f32, h: f32) {
+        let dpi = self.dpi_scale.max(f32::EPSILON);
+        let frame = if visible {
+            Rect::new(x / dpi, y / dpi, w / dpi, h / dpi)
+        } else {
+            Rect::default()
+        };
+        crate::text_input::dispatch_platform_event(crate::text_input::PlatformEvent::Keyboard(
+            frame,
+        ));
+    }
+
     fn touch_event(&mut self, phase: miniquad::TouchPhase, id: u64, x: f32, y: f32, _time: f64) {
         let pointer_id = PointerId::from_touch_id(id);
         let pos = self.logical_position(x, y);

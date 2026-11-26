@@ -158,6 +158,7 @@ fn drawable(viewport: Rect) -> bool {
 impl App {
     fn initialize_host() -> Rect {
         crate::set_task_wake_callback(Some(Arc::new(miniquad::window::schedule_update)));
+        crate::text_input::set_host_available();
         let viewport = window_viewport();
         Self::publish_viewport(viewport);
         viewport
