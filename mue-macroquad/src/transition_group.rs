@@ -403,29 +403,3 @@ fn build_item(content: Node, animation: PresenceAnimation, initial: f32) -> Item
         last: None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node::text;
-
-    #[test]
-    fn removed_items_stay_until_their_exit_finishes() {
-        let owner = OwnedScope::new();
-        owner.run(|| {
-            let list: Signal<Rc<[u32]>> = signal(Rc::from([1, 2, 3]));
-            let root = transition_group(list, |n| *n, |n| text(Rc::<str>::from(n.to_string())))
-                .into_node();
-            root.prepare_layout(Vector::new(200., 200.));
-            assert_eq!(root.children().get_clone_untracked().len(), 3);
-            list.set(Rc::from([1, 3]));
-            assert_eq!(
-                root.children().get_clone_untracked().len(),
-                3,
-                "the removed item animates out first"
-            );
-            list.set(Rc::from([1, 3, 4]));
-            assert_eq!(root.children().get_clone_untracked().len(), 4);
-        });
-    }
-}

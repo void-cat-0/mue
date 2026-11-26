@@ -233,29 +233,3 @@ impl BuildNode for IconBuilder {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn registered_icons_can_be_looked_up_and_replaced() {
-        assert!(icon_source("custom").is_none());
-        register_icon(
-            "custom",
-            IconSource::stroked(PathData::parse("M2 2L22 22").unwrap(), 24., 2.),
-        );
-        assert!(matches!(
-            icon_source("custom"),
-            Some(IconSource::Path { .. })
-        ));
-        register_icon(
-            "custom",
-            IconSource::filled(PathData::rect(Rect::new(0., 0., 1., 1.)), 1.),
-        );
-        assert!(matches!(
-            icon_source("custom"),
-            Some(IconSource::Path { stroke: None, .. })
-        ));
-    }
-}

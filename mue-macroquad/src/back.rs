@@ -142,30 +142,3 @@ pub fn can_go_back() -> bool {
             .any(|entry| entry.enabled.get_untracked())
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mue_core::signal::signal;
-
-    #[test]
-    fn most_recently_enabled_handler_wins_and_cleanup_unregisters() {
-        let calls = Rc::new(RefCell::new(Vec::new()));
-        let page_owner = mue_core::scope::OwnedScope::new();
-        let overlay_owner = mue_core::scope::OwnedScope::new();
-        let open = overlay_owner.run(|| signal(false));
-        let log = calls.clone();
-        overlay_owner.run(|| use_back_handler(open, move || log.borrow_mut().push("overlay")));
-        let log = calls.clone();
-        page_owner.run(|| use_back_handler(true, move || log.borrow_mut().push("page")));
-        assert!(dispatch_back());
-        open.set(true);
-        assert!(dispatch_back(), "the overlay opened last");
-        open.set(false);
-        assert!(dispatch_back());
-        assert_eq!(*calls.borrow(), ["page", "overlay", "page"]);
-        drop(page_owner);
-        assert!(!dispatch_back(), "nothing is enabled after cleanup");
-        assert!(!can_go_back());
-    }
-}

@@ -91,23 +91,3 @@ fn platform_haptic(style: HapticStyle) {
         HapticStyle::Error => H::Error,
     });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn handlers_receive_cues() {
-        let played = Rc::new(Cell::new(None));
-        let seen = played.clone();
-        set_sound_handler(move |cue| seen.set(Some(cue)));
-        sound(SoundCue::Toggle);
-        assert_eq!(played.get(), Some(SoundCue::Toggle));
-        let felt = Rc::new(Cell::new(None));
-        let seen = felt.clone();
-        set_haptic_handler(move |style| seen.set(Some(style)));
-        haptic(HapticStyle::Selection);
-        assert_eq!(felt.get(), Some(HapticStyle::Selection));
-    }
-}

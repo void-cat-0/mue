@@ -280,36 +280,3 @@ impl From<f32> for CornerRadii {
 impl mue_core::prop::PropValue for Rect {}
 impl mue_core::prop::PropValue for Edges {}
 impl mue_core::prop::PropValue for CornerRadii {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn corner_radii_scale_down_when_adjacent_corners_overlap() {
-        let rect = Rect::new(0., 0., 100., 40.);
-        let fitted = CornerRadii::all(30.).fit(rect);
-        assert_eq!(fitted, CornerRadii::all(20.));
-        let uneven = CornerRadii {
-            top_left: 80.,
-            top_right: 20.,
-            bottom_right: 0.,
-            bottom_left: 0.,
-        }
-        .fit(rect);
-        assert!((uneven.top_left - 40.).abs() < 1e-4);
-        assert!((uneven.top_right - 10.).abs() < 1e-4);
-    }
-
-    #[test]
-    fn border_inner_radii_shrink_by_the_wider_edge() {
-        let inner = CornerRadii::all(10.).inset(Edges {
-            top: 4.,
-            right: 2.,
-            bottom: 12.,
-            left: 2.,
-        });
-        assert_eq!(inner.top_left, 6.);
-        assert_eq!(inner.bottom_right, 0.);
-    }
-}

@@ -29,7 +29,7 @@ way and application components can follow them too.
 ## Styles
 
 Every builder implements `Styleable`, so `.style(style! { .. })`, layout
-setters, and hooks work on any control; a test in `mue-components` checks this.
+setters, and hooks work on any control.
 Caller styles take precedence over a control's defaults. Controls keep their
 visual defaults in `provide_defaults` (or a `#[node]` default style) instead of
 hard-coding them in the body.

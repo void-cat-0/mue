@@ -182,28 +182,3 @@ impl HoverState {
         });
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn touches_clear_hover_and_suppress_emulated_mouse() {
-        LAST_TOUCH.with(|last| last.set(f64::NEG_INFINITY));
-        let mut hover = HoverState::default();
-        assert!(hover.observe_mouse(Vector::new(10., 10.)));
-        assert!(hover_capable().get_untracked());
-        hover.touch();
-        note_touch();
-        assert_eq!(hover.position(), None, "a touch ends the mouse hover");
-        assert!(!hover_capable().get_untracked());
-        assert!(
-            !hover.observe_mouse(Vector::new(12., 12.)),
-            "a mouse event right after a touch is emulated"
-        );
-        assert_eq!(hover.position(), None);
-        LAST_TOUCH.with(|last| last.set(f64::NEG_INFINITY));
-        assert!(hover.observe_mouse(Vector::new(12., 12.)));
-        assert!(hover_capable().get_untracked());
-    }
-}

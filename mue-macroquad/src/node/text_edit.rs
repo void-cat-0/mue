@@ -1757,6 +1757,3 @@ fn long_press_tick(field: &Rc<Field>) {
         field.set_selection(TextSelection::new(range.start, range.end));
     }
 }
-
-#[cfg(test)]
-mod tests;

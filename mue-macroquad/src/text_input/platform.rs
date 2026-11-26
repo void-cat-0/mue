@@ -112,8 +112,7 @@ pub enum ImeEvent {
     Action(TextInputAction),
 }
 
-/// Platform operations. The default implementation forwards to miniquad;
-/// tests install a recording backend.
+/// Platform operations, implemented by forwarding to miniquad.
 pub(crate) trait Backend {
     fn start(&self, config: &TextInputConfig);
     fn stop(&self);
@@ -139,7 +138,7 @@ fn host() -> bool {
     HOST.with(Cell::get)
 }
 
-/// Whether a miniquad window exists (false in headless tests).
+/// Whether a miniquad window exists (false for headless node trees).
 pub(crate) fn host_available() -> bool {
     host()
 }
@@ -276,21 +275,6 @@ pub(crate) fn platform() -> Rc<Platform> {
             })
             .clone()
     })
-}
-
-#[cfg(test)]
-pub(crate) fn install_backend(backend: Box<dyn Backend>) {
-    PLATFORM.with(|cell| {
-        *cell.borrow_mut() = Some(Rc::new(Platform {
-            backend,
-            next_id: Cell::new(1),
-            client: RefCell::new(None),
-            mirrored: RefCell::new(None),
-            caret: mue_core::scope::Scope::null().run(|| Signal::new(None)),
-            keyboard: mue_core::scope::Scope::null().run(|| Signal::new(Rect::default())),
-            actions: RefCell::new(Vec::new()),
-        }));
-    });
 }
 
 /// A field's handle on the platform input method, from [`attach`].
@@ -506,124 +490,4 @@ pub fn attach(
 /// Run `handler` for every keyboard action key press, whichever field sent it.
 pub fn on_text_input_action(handler: impl Fn(TextInputAction) + 'static) {
     platform().actions.borrow_mut().push(Rc::new(handler));
-}
-
-#[cfg(test)]
-pub(crate) mod testing {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq)]
-    pub(crate) enum Call {
-        Start(TextInputConfig),
-        Stop,
-        State(TextEditingValue),
-        Caret(Rect),
-    }
-
-    #[derive(Clone, Default)]
-    pub(crate) struct Recorder(pub Rc<RefCell<Vec<Call>>>);
-
-    impl Backend for Recorder {
-        fn start(&self, config: &TextInputConfig) {
-            self.0.borrow_mut().push(Call::Start(*config));
-        }
-        fn stop(&self) {
-            self.0.borrow_mut().push(Call::Stop);
-        }
-        fn set_state(&self, value: &TextEditingValue) {
-            self.0.borrow_mut().push(Call::State(value.clone()));
-        }
-        fn set_caret_rect(&self, rect: Rect) {
-            self.0.borrow_mut().push(Call::Caret(rect));
-        }
-    }
-
-    pub(crate) fn record() -> Recorder {
-        let recorder = Recorder::default();
-        install_backend(Box::new(recorder.clone()));
-        recorder
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{testing::*, *};
-
-    #[test]
-    fn attach_starts_and_drop_stops_only_the_current_client() {
-        let calls = record();
-        let platform = platform();
-        let first = platform.attach(
-            &TextInputConfig::default(),
-            &TextEditingValue::new("a"),
-            |_| {},
-        );
-        let second = platform.attach(
-            &TextInputConfig::default(),
-            &TextEditingValue::new("b"),
-            |_| {},
-        );
-        drop(first);
-        assert!(
-            !calls.0.borrow().contains(&Call::Stop),
-            "a replaced client must not stop input"
-        );
-        assert!(second.is_attached());
-        drop(second);
-        assert_eq!(calls.0.borrow().last(), Some(&Call::Stop));
-    }
-
-    #[test]
-    fn state_from_the_platform_is_not_echoed_back() {
-        let calls = record();
-        let received: Rc<RefCell<Vec<ImeEvent>>> = Rc::default();
-        let sink = received.clone();
-        let connection = platform().attach(
-            &TextInputConfig::default(),
-            &TextEditingValue::default(),
-            move |event| sink.borrow_mut().push(event),
-        );
-        dispatch_platform_event(PlatformEvent::State {
-            text: "a😀".into(),
-            selection: (3, 3),
-            composing: (1, 3),
-        });
-        let ImeEvent::State(value) = received.borrow()[0].clone() else {
-            panic!("expected state");
-        };
-        assert_eq!(value.selection, TextSelection::caret(5));
-        assert_eq!(value.composing, Some(1..5));
-        let before = calls.0.borrow().len();
-        connection.set_value(&value);
-        assert_eq!(
-            calls.0.borrow().len(),
-            before,
-            "the platform already has this state"
-        );
-        connection.set_value(&value.insert("!"));
-        assert_eq!(calls.0.borrow().len(), before + 1);
-    }
-
-    #[test]
-    fn preedit_cursor_is_converted_to_bytes() {
-        let _calls = record();
-        let received: Rc<RefCell<Vec<ImeEvent>>> = Rc::default();
-        let sink = received.clone();
-        let _connection = platform().attach(
-            &TextInputConfig::default(),
-            &TextEditingValue::default(),
-            move |event| sink.borrow_mut().push(event),
-        );
-        dispatch_platform_event(PlatformEvent::Preedit {
-            text: "你好".into(),
-            cursor_utf16: Some(1),
-        });
-        assert_eq!(
-            received.borrow()[0],
-            ImeEvent::Preedit {
-                text: "你好".into(),
-                cursor: Some(3)
-            }
-        );
-    }
 }

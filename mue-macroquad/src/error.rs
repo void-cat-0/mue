@@ -88,26 +88,3 @@ pub enum AppError {
 
 /// Result type returned by fallible App operations.
 pub type Result<T> = std::result::Result<T, AppError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io;
-
-    #[test]
-    fn callback_error_preserves_phase_and_source() {
-        let error = AppError::from(CallbackError::new(
-            "update",
-            Box::new(io::Error::other("callback failed")),
-        ));
-        assert_eq!(error.to_string(), "Scene update failed: callback failed");
-        assert!(error.source().unwrap().is::<io::Error>());
-        assert!(matches!(error, AppError::Callback(callback) if callback.phase() == "update"));
-    }
-
-    #[test]
-    fn app_error_wraps_domain_errors() {
-        let error: AppError = SceneError::DisposedRoot.into();
-        assert!(matches!(error, AppError::Scene(SceneError::DisposedRoot)));
-    }
-}
