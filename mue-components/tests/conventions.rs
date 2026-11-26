@@ -10,6 +10,9 @@ fn every_component_builder_is_styleable() {
     let owner = mue_core::scope::OwnedScope::new();
     owner.run(|| {
         styleable(button("A"));
+        styleable(input());
+        styleable(textarea());
+        styleable(input_group(input()));
         styleable(icon_named("check"));
         styleable(center());
         styleable(container());
