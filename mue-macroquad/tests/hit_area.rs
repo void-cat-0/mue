@@ -72,3 +72,34 @@ fn slop_reaches_past_the_parent_edge() {
         assert!(!hit_test(*root, Vector::new(60., 30.)).contains(&button));
     });
 }
+
+#[test]
+fn hidden_subtrees_do_not_hit() {
+    let owner = mue_core::scope::OwnedScope::new();
+    owner.run(|| {
+        let shown = signal(true);
+        let root = flexbox()
+            .width(100.)
+            .height(100.)
+            .children(
+                flexbox()
+                    .display(shown.map(|shown| {
+                        if shown {
+                            mue_macroquad::style::values::Display::Flex
+                        } else {
+                            mue_macroquad::style::values::Display::None
+                        }
+                    }))
+                    .width(100.)
+                    .height(100.)
+                    .children(flexbox().width(50.).height(50.).on_pointer_event(|_| {})),
+            )
+            .into_node();
+        root.prepare_layout(Vector::new(100., 100.));
+        let panel = root.children().get_clone_untracked()[0];
+        assert!(hit_test(*root, Vector::new(10., 10.)).contains(&panel));
+        shown.set(false);
+        root.prepare_layout(Vector::new(100., 100.));
+        assert!(!hit_test(*root, Vector::new(10., 10.)).contains(&panel));
+    });
+}

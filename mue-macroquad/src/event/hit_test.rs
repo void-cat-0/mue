@@ -113,13 +113,26 @@ fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
             n.hit_area
                 .as_ref()
                 .map(|(slop, size)| (slop.get_untracked(), size.get_untracked())),
+            n.layout_id,
         ))
     });
-    let Some((transform, rect, clip, clip_radius, clip_sector, children, custom, hit_area)) =
-        snapshot
+    let Some((
+        transform,
+        rect,
+        clip,
+        clip_radius,
+        clip_sector,
+        children,
+        custom,
+        hit_area,
+        layout_id,
+    )) = snapshot
     else {
         return false;
     };
+    if layout_id.is_some_and(crate::node::layout_hidden) {
+        return false;
+    }
     let transform = transform.resolve();
     if !transform.is_finite() || transform.determinant().abs() < f32::EPSILON {
         return false;

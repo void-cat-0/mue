@@ -276,13 +276,16 @@ impl NodeRef {
     fn render_inner(&self) {
         // Keep the per-level call chain short: debug builds recurse once per
         // tree level and the main thread's stack is small on some platforms.
-        let Some((transform, offscreen)) = Runtime::with(|rt| {
+        let Some((transform, offscreen, layout_id)) = Runtime::with(|rt| {
             let nodes = rt.nodes.borrow();
             let node = nodes.get(self.id)?;
-            Some((node.transform(), node.offscreen.clone()))
+            Some((node.transform(), node.offscreen.clone(), node.layout_id))
         }) else {
             return;
         };
+        if layout_id.is_some_and(layout_hidden) {
+            return;
+        }
         let transform = transform.resolve();
         crate::paint::with_transform(transform, || match &offscreen {
             Some(state) => crate::offscreen::render(state, || self.render_content()),
@@ -339,6 +342,16 @@ impl NodeRef {
         }
         Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &()));
     }
+}
+
+/// Whether a layout node is `display: none`: its subtree has zero-size
+/// layouts and must neither draw (text would wrap per character) nor hit.
+pub(crate) fn layout_hidden(id: taffy::NodeId) -> bool {
+    crate::layout::with_taffy(|taffy| {
+        taffy
+            .style(id)
+            .is_ok_and(|style| style.display == taffy::Display::None)
+    })
 }
 
 /// Children in paint order: stable-sorted by `z_index` when any is non-zero.
