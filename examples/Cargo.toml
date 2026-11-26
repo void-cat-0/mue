@@ -13,8 +13,8 @@ debug = true
 
 [dependencies]
 cosmic-text = "0.18.2"
-macroquad = { git = "https://github.com/void-cat-0/macroquad", default-features = false }
-miniquad = { git = "https://github.com/void-cat-0/miniquad" }
+macroquad = { git = "https://github.com/void-cat-0/macroquad", branch = "text-input", default-features = false }
+miniquad = { git = "https://github.com/void-cat-0/miniquad", branch = "text-input" }
 mue = { path = "../mue" }
 mue-components = { path = "../mue-components" }
 mue-core = { path = "../mue-core" }
@@ -194,10 +194,3 @@ doc = false
 name = "mobile"
 path = "mobile/src/main.rs"
 doc = false
-
-# See the workspace Cargo.toml: local forks with text input support.
-[patch."https://github.com/void-cat-0/miniquad"]
-miniquad = { path = "../../miniquad" }
-
-[patch."https://github.com/void-cat-0/macroquad"]
-macroquad = { path = "../../macroquad" }

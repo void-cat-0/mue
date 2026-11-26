@@ -736,6 +736,7 @@ dependencies = [
 [[package]]
 name = "macroquad"
 version = "0.4.16"
+source = "git+https://github.com/void-cat-0/macroquad?branch=text-input#ad04f586d1ca107b70a31f5ef67b6ee11dc0e7d3"
 dependencies = [
  "fontdue",
  "glam 0.27.0",
@@ -748,6 +749,7 @@ dependencies = [
 [[package]]
 name = "macroquad_macro"
 version = "0.1.8"
+source = "git+https://github.com/void-cat-0/macroquad?branch=text-input#ad04f586d1ca107b70a31f5ef67b6ee11dc0e7d3"
 
 [[package]]
 name = "malloc_buf"
@@ -776,6 +778,7 @@ dependencies = [
 [[package]]
 name = "miniquad"
 version = "0.4.10"
+source = "git+https://github.com/void-cat-0/miniquad?branch=text-input#31eb0904e86fb9c47151d92b03fbde9b6989b091"
 dependencies = [
  "hms-opengtx-binding",
  "jni",
