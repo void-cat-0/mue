@@ -65,6 +65,7 @@ pub mod color;
 pub mod cursor;
 mod error;
 pub mod event;
+pub mod feedback;
 pub mod focus;
 pub mod font;
 pub mod gesture;

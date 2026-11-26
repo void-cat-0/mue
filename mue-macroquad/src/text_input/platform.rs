@@ -139,6 +139,11 @@ fn host() -> bool {
     HOST.with(Cell::get)
 }
 
+/// Whether a miniquad window exists (false in headless tests).
+pub(crate) fn host_available() -> bool {
+    host()
+}
+
 impl Backend for Miniquad {
     fn start(&self, config: &TextInputConfig) {
         if host() {
