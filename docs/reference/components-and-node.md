@@ -17,6 +17,7 @@ The component crate owns reusable behavior.
 - controls: `button`;
 - overlay: `overlay_host`;
 - graphics: `image` and the renderer's `path`, `svg`, and `shape` nodes;
+- layers and effects (re-exported from the renderer): `teleport`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 
 `flexbox`, `text`, `path`, `svg`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.
@@ -173,3 +174,4 @@ overlay_host(
 [scene-input-guide]: ../learn/input.md
 
 [guide-reference]: index.md
+[layers-reference]: layers-and-overlays.md

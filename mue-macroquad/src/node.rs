@@ -71,6 +71,8 @@ pub(crate) struct NodeInner {
     pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
     pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
     pub(crate) z_index: Option<Prop<i32>>,
+    /// Wrapper nodes (layer hosts) that must not become the `rem` root.
+    pub(crate) font_root_transparent: bool,
     node_handles: Vec<NodeHandle>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
@@ -151,6 +153,7 @@ impl NodeInner {
             focus: None,
             cursor: None,
             z_index: None,
+            font_root_transparent: false,
             node_handles: Vec::new(),
             child_offset: None,
             center_on_layout_origin: false,
@@ -416,9 +419,14 @@ impl NodeRef {
             let state = Runtime::with(|rt| {
                 let nodes = rt.nodes.borrow();
                 let node = nodes.get(node.id)?;
-                Some((node.font_size, node.computed_font_size, *node.children))
+                Some((
+                    node.font_size,
+                    node.computed_font_size,
+                    *node.children,
+                    node.font_root_transparent,
+                ))
             });
-            let Some((declaration, computed, children)) = state else {
+            let Some((declaration, computed, children, transparent)) = state else {
                 return false;
             };
             let size = declaration.map_or(parent, |value| {
@@ -430,9 +438,14 @@ impl NodeRef {
             if changed {
                 computed.set(size);
             }
-            let root = root.unwrap_or(size);
+            // A transparent wrapper leaves the `rem` root to its first child.
+            let root = if transparent && root.is_none() {
+                None
+            } else {
+                Some(root.unwrap_or(size))
+            };
             for child in children.get_clone().iter() {
-                changed |= visit(*child, size, Some(root));
+                changed |= visit(*child, size, root);
             }
             changed
         }

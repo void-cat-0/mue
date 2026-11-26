@@ -69,6 +69,7 @@ pub mod gesture;
 pub mod hook;
 pub mod inherit;
 pub mod input;
+pub mod layer;
 pub mod layout;
 pub mod material;
 pub mod math;

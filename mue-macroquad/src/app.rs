@@ -172,10 +172,12 @@ impl App {
     /// Build and retain one Node tree as a Scene.
     ///
     /// The root is updated, laid out, and drawn by the same scheduler used by
-    /// [`App::with_scene`]. The macroquad host must already be initialized.
-    pub fn new(root_node: impl IntoNode) -> Self {
+    /// [`App::with_scene`]. It is wrapped in a [`layer_host`](crate::layer::layer_host),
+    /// so [`teleport`](crate::layer::teleport) works anywhere in the tree. The
+    /// macroquad host must already be initialized.
+    pub fn new(root_node: impl IntoNode + 'static) -> Self {
         let viewport = Self::initialize_host();
-        let root = root_node.into_node();
+        let root = crate::layer::layer_host(root_node).into_node();
         root.resolve_font_sizes();
         let root_ref = *root;
         let mut app = Self::from_scene(NodeScene { root });

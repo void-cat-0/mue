@@ -14,7 +14,7 @@
 
 `App::with_scene(scene)` starts a retained Scene stack with one active top. A Scene retains its Node trees, gameplay state and resources, submits layout roots, and chooses the order of custom drawing and UI.
 
-Only the top receives Scene events and participates in update/layout/render and Node updates; covered instances remain owned but are not automatically drawn behind it. `App::new(root)` remains the Node-only convenience entry point and uses the same scheduler.
+Only the top receives Scene events and participates in update/layout/render and Node updates; covered instances remain owned but are not automatically drawn behind it. `App::new(root)` remains the Node-only convenience entry point and uses the same scheduler; it wraps the root in a `layer_host` so teleports, overlays, and popovers work. A custom Scene builds each root that should host overlays as `layer_host(view).into_node()` (see [layers][layers-reference]).
 
 ```rust,no_run
 use mue::{
@@ -591,3 +591,4 @@ Both examples use Scene-local state and separate modules for effects and views.
 [i18n-guide]: ../learn/i18n.md
 
 [guide-reference]: index.md
+[layers-reference]: layers-and-overlays.md

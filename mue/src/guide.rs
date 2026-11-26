@@ -48,6 +48,10 @@ pub mod reference {
     );
     guide!(style_syntax, "../../docs/reference/style.md");
     guide!(focus_keyboard, "../../docs/reference/focus-and-keyboard.md");
+    guide!(
+        layers_overlays,
+        "../../docs/reference/layers-and-overlays.md"
+    );
     guide!(scene_runtime, "../../docs/reference/scene.md", illustrated);
     guide!(theme_store, "../../docs/reference/themes-and-tokens.md");
     guide!(executor, "../../docs/reference/tasks.md");

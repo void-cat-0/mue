@@ -123,7 +123,12 @@ pub use mue_macroquad::node::{
 };
 pub use mue_macroquad::path::{FillRule, PathData, PathFit, StrokeStyle};
 pub use mue_macroquad::svg::SvgDocument;
-pub use mue_macroquad::{cursor::Cursor, focus::FocusScope, node::NodeHandle};
+pub use mue_macroquad::{
+    cursor::Cursor,
+    focus::FocusScope,
+    layer::{Layer, layer_host, teleport},
+    node::NodeHandle,
+};
 pub use mue_macros::{component, node, style};
 pub use overlay::*;
 pub use tokens::{Theme, ThemeProvider, TokenSet, provide_theme};
