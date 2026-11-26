@@ -28,6 +28,39 @@ struct Argument {
     ty: Type,
     default: Option<Expr>,
     model: bool,
+    kind: Kind,
+}
+
+/// How a parameter is stored and set.
+enum Kind {
+    /// An ordinary `Prop<T>` or `#[model]` signal.
+    Value,
+    /// `#[slot] name: Slot`: the setter takes a view.
+    Slot,
+    /// `#[slot] name: ScopedSlot<T>`: the setter takes `Fn(T) -> view`.
+    ScopedSlot(Type),
+    /// `#[event] name: Callback<T>`: each setter call adds a handler.
+    Event(Type),
+}
+
+/// The single generic argument of `Name<T>` when the last path segment is `name`.
+fn generic_argument(ty: &Type, name: &str) -> Option<Type> {
+    let Type::Path(path) = ty else { return None };
+    let segment = path.path.segments.last()?;
+    if segment.ident != name {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    match arguments.args.first()? {
+        syn::GenericArgument::Type(ty) if arguments.args.len() == 1 => Some(ty.clone()),
+        _ => None,
+    }
+}
+
+fn is_named(ty: &Type, name: &str) -> bool {
+    matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|s| s.ident == name && s.arguments.is_none()))
 }
 
 fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens> {
@@ -107,6 +140,8 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
         }
         let mut default = None;
         let mut model = false;
+        let mut slot = false;
+        let mut event = false;
         let mut retained = Vec::new();
         for attr in std::mem::take(&mut arg.attrs) {
             if attr.path().is_ident("default") {
@@ -131,6 +166,18 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
                     ));
                 }
                 model = true;
+            } else if attr.path().is_ident("slot") || attr.path().is_ident("event") {
+                if slot || event || !matches!(attr.meta, Meta::Path(_)) {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "expected a single #[slot] or #[event] attribute",
+                    ));
+                }
+                if attr.path().is_ident("slot") {
+                    slot = true;
+                } else {
+                    event = true;
+                }
             } else if attr.path().is_ident("theme") {
                 return Err(syn::Error::new_spanned(
                     attr,
@@ -141,6 +188,43 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
             }
         }
         arg.attrs = retained;
+        if slot || event {
+            if default.is_some() || model {
+                return Err(syn::Error::new_spanned(
+                    &arg.pat,
+                    "#[slot] and #[event] parameters are always optional; remove #[default] and #[model]",
+                ));
+            }
+            let declared = (*arg.ty).clone();
+            let kind = if event {
+                match generic_argument(&declared, "Callback") {
+                    Some(value) => Kind::Event(value),
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            &arg.ty,
+                            "#[event] parameters must have type Callback<T>",
+                        ));
+                    }
+                }
+            } else if is_named(&declared, "Slot") {
+                Kind::Slot
+            } else if let Some(value) = generic_argument(&declared, "ScopedSlot") {
+                Kind::ScopedSlot(value)
+            } else {
+                return Err(syn::Error::new_spanned(
+                    &arg.ty,
+                    "#[slot] parameters must have type Slot or ScopedSlot<T>",
+                ));
+            };
+            args.push(Argument {
+                ident,
+                ty: declared,
+                default: Some(parse_quote!(::std::default::Default::default())),
+                model: false,
+                kind,
+            });
+            continue;
+        }
         let value_ty = (*arg.ty).clone();
         let ty: Type = if model {
             parse_quote!(#host::__private::core::signal::Signal<#value_ty>)
@@ -153,6 +237,7 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
             ty,
             default,
             model,
+            kind: Kind::Value,
         });
     }
 
@@ -228,7 +313,9 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
         let Argument {
             ident, ty, default, ..
         } = arg;
-        if default.is_some() {
+        if !matches!(arg.kind, Kind::Value) {
+            quote!(#ident: #ty,)
+        } else if default.is_some() {
             quote!(#ident: ::std::option::Option<#ty>,)
         } else {
             quote!(#ident: #ty,)
@@ -245,7 +332,9 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
     let constructor_names = required.iter().map(|arg| &arg.ident);
     let initializers = args.iter().map(|arg| {
         let ident = &arg.ident;
-        if arg.default.is_some() {
+        if !matches!(arg.kind, Kind::Value) {
+            quote!(#ident: ::std::default::Default::default(),)
+        } else if arg.default.is_some() {
             quote!(#ident: ::std::option::Option::None,)
         } else {
             quote!(#ident: ::std::convert::Into::into(#ident),)
@@ -255,6 +344,36 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
         let Argument {
             ident, ty, default, ..
         } = arg;
+        match &arg.kind {
+            Kind::Value => {}
+            Kind::Slot => {
+                return quote! {
+                    pub fn #ident(mut self, view: impl #host::node::IntoNode + 'static) -> Self {
+                        self.#ident = #host::node::Slot::new(view);
+                        self
+                    }
+                };
+            }
+            Kind::ScopedSlot(value) => {
+                return quote! {
+                    pub fn #ident<__MueView: #host::node::IntoNode>(
+                        mut self,
+                        template: impl ::std::ops::Fn(#value) -> __MueView + 'static,
+                    ) -> Self {
+                        self.#ident = #host::node::ScopedSlot::new(template);
+                        self
+                    }
+                };
+            }
+            Kind::Event(value) => {
+                return quote! {
+                    pub fn #ident(self, handler: impl ::std::ops::FnMut(&#value) + 'static) -> Self {
+                        self.#ident.add(handler);
+                        self
+                    }
+                };
+            }
+        }
         let value = if default.is_some() {
             quote!(::std::option::Option::Some(::std::convert::Into::into(
                 value
@@ -276,6 +395,9 @@ fn expand_fn(mut input: ItemFn, node: bool, host: Tokens) -> syn::Result<Tokens>
             model,
             ..
         } = arg;
+        if !matches!(arg.kind, Kind::Value) {
+            return quote!(let #ident = self.#ident;);
+        }
         let value = match default {
             Some(default) => {
                 let default = if *model {

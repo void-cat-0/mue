@@ -9,6 +9,7 @@ pub mod flexbox;
 pub mod portal;
 pub mod shader_box;
 pub mod shape;
+pub mod slot;
 pub mod text;
 pub mod vector;
 pub use atlas::GlyphAtlasStats;
@@ -17,6 +18,7 @@ pub use flexbox::{FlexboxBuilder, flexbox};
 pub use portal::portal;
 pub use shader_box::{ShaderBoxBuilder, shader_box};
 pub use shape::{ShapeBuilder, shape};
+pub use slot::{Callback, ScopedSlot, Slot};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
 pub use vector::{PathBuilder, SvgBuilder, path, svg};
 

@@ -28,7 +28,7 @@ Both `#[component]` and `#[node]` generate styleable builders. Calling a generat
 
 Consuming the builder with `IntoNode::into_node` constructs its node synchronously, once; `App::new` performs that conversion for its root. Parameters written as ordinary value types receive `Prop<T>` values inside the body.
 
-Required parameters form the public constructor, optional `#[default]` parameters have setters, and `#[model]` parameters receive writable `Signal<T>` values.
+Required parameters form the public constructor, optional `#[default]` parameters have setters, and `#[model]` parameters receive writable `Signal<T>` values. `#[slot]` parameters (`Slot`, `ScopedSlot<T>`) take views or templates, and `#[event]` parameters (`Callback<T>`) take handler closures.
 
 ```rust
 use std::rc::Rc;

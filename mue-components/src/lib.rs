@@ -38,6 +38,48 @@
 //! [`Signal<T>`](mue_core::signal::Signal). A model default initializes a fresh
 //! signal in the node's scope.
 //!
+//! # Slots and events
+//!
+//! Mark a parameter `#[slot]` with type [`Slot`] for an optional child view,
+//! or [`ScopedSlot<T>`] for a template the component calls with data (Vue's
+//! scoped slots). Mark it `#[event]` with type [`Callback<T>`] to let callers
+//! register handlers that the body runs with `emit` (Vue's emits). These
+//! parameters are always optional; their setters take a view, a closure
+//! returning a view, or a handler closure.
+//!
+//! ```
+//! use mue_components::prelude::*;
+//! use mue_core::prelude::*;
+//! use std::rc::Rc;
+//!
+//! #[component]
+//! fn song_list(
+//!     #[slot] header: Slot,
+//!     #[slot] row: ScopedSlot<usize>,
+//!     #[event] on_pick: Callback<usize>,
+//! ) -> impl Component {
+//!     let rows: Vec<_> = (0..3)
+//!         .map(|i| {
+//!             let on_pick = on_pick.clone();
+//!             flexbox()
+//!                 .on_activate(move || on_pick.emit(&i))
+//!                 .children(row.render_or(i, |i| text(Rc::<str>::from(format!("Song {i}")))))
+//!         })
+//!         .collect();
+//!     stack().children((header.or_else(|| text("Songs")), rows))
+//! }
+//!
+//! # let owner = mue_core::scope::OwnedScope::new();
+//! # owner.run(|| {
+//! let picked = signal(None);
+//! let _view = song_list()
+//!     .header(heading("Library"))
+//!     .row(|i: usize| text(Rc::<str>::from(format!("Track {i}"))))
+//!     .on_pick(move |i: &usize| picked.set(Some(*i)))
+//!     .into_node();
+//! # });
+//! ```
+//!
 //! # Author a terminal node
 //!
 //! Use [`#[node]`](macro@node) to initialize layout, painting, or input directly.
@@ -116,10 +158,10 @@ pub use controls::*;
 pub use graphics::*;
 pub use layout::*;
 pub use mue_macroquad::node::{
-    BuildNode, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
-    KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ShapeBuilder, Span, SpanStyle, SvgBuilder,
-    TextOverflow, TextVerticalAlign, TextWrap, flexbox, join_children, keyed, map_keyed,
-    map_keyed_prop, path, shape, show_if, svg, text,
+    BuildNode, Callback, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
+    KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ScopedSlot, ShapeBuilder, Slot, Span,
+    SpanStyle, SvgBuilder, TextOverflow, TextVerticalAlign, TextWrap, flexbox, join_children,
+    keyed, map_keyed, map_keyed_prop, path, shape, show_if, svg, text,
 };
 pub use mue_macroquad::path::{FillRule, PathData, PathFit, StrokeStyle};
 pub use mue_macroquad::svg::SvgDocument;
