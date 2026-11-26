@@ -908,6 +908,7 @@ dependencies = [
  "mue-macros",
  "ordered-float",
  "paste",
+ "roxmltree",
  "slotmap",
  "smallvec",
  "taffy",

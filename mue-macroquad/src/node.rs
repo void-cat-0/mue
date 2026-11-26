@@ -16,7 +16,7 @@ pub use flexbox::{FlexboxBuilder, flexbox};
 pub use portal::portal;
 pub use shape::{ShapeBuilder, shape};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
-pub use vector::{PathBuilder, path};
+pub use vector::{PathBuilder, SvgBuilder, path, svg};
 
 use std::{cell::RefCell, marker::PhantomData, ops::Deref, rc::Rc};
 

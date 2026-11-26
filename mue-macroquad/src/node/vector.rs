@@ -1,9 +1,9 @@
-//! Vector drawing nodes: [`path()`] for one path.
+//! Vector drawing nodes: [`path()`] for one path and [`svg()`] for a document.
 //!
-//! The node fits its geometry into the content box (inside padding and
-//! border) with a [`PathFit`], draws a normal background/border behind it, and
-//! measures to the geometry's natural size when width or height is `auto`.
-//! The default fill uses the node's foreground `color`,
+//! Both nodes fit their geometry into the content box (inside padding and
+//! border) with a [`PathFit`], draw a normal background/border behind it, and
+//! measure to the geometry's natural size when width or height is `auto`.
+//! `currentColor` and the default path fill use the node's foreground `color`,
 //! inherited like text color.
 
 use mue_core::prelude::*;
@@ -17,6 +17,7 @@ use crate::{
     path::{FillRule, PathData, PathFit, StrokeStyle},
     shader::Brush,
     style::{Style, Styleable},
+    svg::{SvgDocument, SvgPaint},
 };
 
 fn natural_size(natural: Vector) -> impl Fn(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32> {
@@ -220,6 +221,72 @@ impl BuildNode for PathBuilder {
     }
 }
 
+/// Builder returned by [`svg()`].
+pub struct SvgBuilder {
+    document: Prop<SvgDocument>,
+    fit: Prop<PathFit>,
+    style: Style,
+}
+
+/// Draw a parsed [`SvgDocument`] fitted into the node's content box.
+///
+/// `currentColor` uses the foreground `color`, so the same icon document can
+/// follow text color. See [`crate::svg`] for the supported subset.
+pub fn svg(document: impl Into<Prop<SvgDocument>>) -> SvgBuilder {
+    SvgBuilder {
+        document: document.into(),
+        fit: Prop::Static(PathFit::Contain),
+        style: Style::new(),
+    }
+}
+
+impl SvgBuilder {
+    pub fn fit(mut self, fit: impl Into<Prop<PathFit>>) -> Self {
+        self.fit = fit.into();
+        self
+    }
+}
+
+impl Styleable for SvgBuilder {
+    fn style_mut(&mut self) -> &mut Style {
+        &mut self.style
+    }
+}
+
+impl BuildNode for SvgBuilder {
+    fn build(self, mut ctx: NodeContext) -> Node {
+        let Self {
+            document,
+            fit,
+            style,
+        } = self;
+        ctx.push_style(style);
+        ctx.finish(Style::new(), move |style| {
+            let layout = use_layout(style);
+            let (rect, border, padding) = (layout.rect, layout.border, layout.padding);
+            let paint = use_paint(style);
+            use_background(style, rect);
+            let color = foreground(style);
+            {
+                let document = document.clone();
+                layout.set_measure_fn(move |known, available| {
+                    let size = document.get_clone().intrinsic_size();
+                    natural_size(size)(known, available)
+                });
+            }
+            let shapes = paint.build(move |p| {
+                let content = rect.get().deflate(border.get()).deflate(padding.get());
+                if content.w <= 0. || content.h <= 0. {
+                    return;
+                }
+                let doc = document.get_clone();
+                paint_svg(p, &doc, content, fit.get(), &color.get_clone());
+            });
+            style.on_render.append(move |_| shapes.get_clone().draw());
+        })
+    }
+}
+
 /// Paint `data` fitted from `view_box` into `target`. Stroke widths are in
 /// view-box units and scale with the fit.
 pub fn paint_path(
@@ -247,5 +314,50 @@ pub fn paint_path(
     if let Some((brush, mut style)) = stroke {
         style.width *= scale;
         p.stroke(&fitted, &style, brush.shader(target));
+    }
+}
+
+/// Paint an SVG document fitted into `target`; `current` is `currentColor`.
+pub fn paint_svg(
+    p: &mut ShapesBuilder,
+    doc: &SvgDocument,
+    target: Rect,
+    fit: PathFit,
+    current: &Brush,
+) {
+    if target.w <= 0. || target.h <= 0. {
+        return;
+    }
+    let matrix = fit.matrix(doc.view_box(), target);
+    let scale = matrix
+        .x_axis
+        .truncate()
+        .length()
+        .max(matrix.y_axis.truncate().length());
+    let brush = |paint: SvgPaint, opacity: f32| -> Brush {
+        let brush = match paint {
+            SvgPaint::Color(color) => Brush::Solid(color),
+            SvgPaint::CurrentColor => current.clone(),
+        };
+        brush.with_opacity(opacity)
+    };
+    for shape in doc.shapes() {
+        let fitted = shape.path.transformed(matrix);
+        if let Some(fill) = shape.fill {
+            p.fill(
+                &fitted,
+                shape.fill_rule,
+                brush(fill.paint, fill.opacity).shader(target),
+            );
+        }
+        if let Some(stroke) = shape.stroke {
+            let mut style = shape.stroke_style;
+            style.width *= scale;
+            p.stroke(
+                &fitted,
+                &style,
+                brush(stroke.paint, stroke.opacity).shader(target),
+            );
+        }
     }
 }

@@ -4,7 +4,7 @@
 
 - [Choose when to build geometry](#choose-when-to-build-geometry)
 - [Background paint and shadows](#background-paint-and-shadows)
-- [Vector paths](#vector-paths)
+- [Vector paths and SVG](#vector-paths-and-svg)
 - [Textures](#textures)
 
 ## Choose when to build geometry
@@ -174,7 +174,7 @@ back priority are not implemented yet. IconButton and keyboard focus are also
 pending. Button colors are fixed for now; replacing them with application tokens
 is a follow-up.
 
-## Vector paths
+## Vector paths and SVG
 
 `mue_macroquad::path::PathData` is an immutable, cheaply cloned path with cached
 bounds. Build one with `PathData::parse` (SVG path data with every command,
@@ -200,6 +200,17 @@ let check = path(PathData::parse("M4 12l5 5L20 6").unwrap())
     .stroke_style(StrokeStyle::round(2.))
     .style(style! { width: 24px; height: 24px; color: #7fd1a8; });
 ```
+
+`SvgDocument::parse` reads a small SVG subset: `svg` (`viewBox`, `width`,
+`height`), `g`, `path`, `rect` (with `rx`/`ry`), `circle`, `ellipse`, `line`,
+`polyline`, and `polygon`; `fill`, `stroke`, `stroke-width`, `stroke-linecap`,
+`stroke-linejoin`, `stroke-miterlimit`, `fill-rule`, `opacity`, `fill-opacity`,
+and `stroke-opacity`, also inside `style="..."`; and `transform` lists. Text,
+gradients, `use`, masks, filters, and CSS selectors are ignored: a
+`url(#gradient)` paint uses its fallback color if one follows it, otherwise
+nothing; `inherit` and unknown paints keep the inherited paint. The `svg(doc)`
+node draws a document with the same fitting and measuring rules as `path`;
+`currentColor` follows the node's foreground `color`.
 
 ## Textures
 

@@ -80,6 +80,7 @@ pub mod scene_transition;
 pub mod shader;
 pub mod shadow;
 pub mod style;
+pub mod svg;
 pub mod texture;
 pub mod transition;
 mod viewport;

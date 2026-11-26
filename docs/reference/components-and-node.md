@@ -16,10 +16,10 @@ The component crate owns reusable behavior.
 - application-level push/pop flows use [Scenes][scenes-guide]; the former navigation stack has been removed.
 - controls: `button`;
 - overlay: `overlay_host`;
-- graphics: `image` and the renderer's `path` and `shape` nodes;
+- graphics: `image` and the renderer's `path`, `svg`, and `shape` nodes;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 
-`flexbox`, `text`, `path`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.
+`flexbox`, `text`, `path`, `svg`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.
 
 ## Builder parameters and construction
 

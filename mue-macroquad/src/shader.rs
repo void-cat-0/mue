@@ -191,6 +191,34 @@ impl crate::transition::Interpolatable for Brush {
     }
 }
 
+impl Brush {
+    /// Multiply every color's alpha by `opacity`.
+    pub fn with_opacity(self, opacity: f32) -> Self {
+        if opacity >= 1. {
+            return self;
+        }
+        let fade = |color: Color| Color {
+            a: color.a * opacity.max(0.),
+            ..color
+        };
+        match self {
+            Self::Solid(color) => Self::Solid(fade(color)),
+            Self::LinearGradient(mut gradient) => {
+                for stop in &mut gradient.stops {
+                    stop.color = fade(stop.color);
+                }
+                Self::LinearGradient(gradient)
+            }
+            Self::RadialGradient(mut gradient) => {
+                for stop in &mut gradient.stops {
+                    stop.color = fade(stop.color);
+                }
+                Self::RadialGradient(gradient)
+            }
+        }
+    }
+}
+
 impl Default for Brush {
     fn default() -> Self {
         Self::Solid(Color::TRANSPARENT)

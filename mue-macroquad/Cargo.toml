@@ -22,6 +22,7 @@ mue-core = { workspace = true, features = ["impl-taffy", "impl-cosmic-text"] }
 mue-macros = { workspace = true }
 ordered-float = "5.3.0"
 paste = "1.0.15"
+roxmltree = "0.20"
 slotmap = { workspace = true }
 smallvec = { workspace = true }
 taffy = { workspace = true }

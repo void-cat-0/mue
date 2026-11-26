@@ -51,9 +51,10 @@ pub mod prelude {
         signal::{Access, ReadSignal, Signal, signal},
     };
     pub use crate::renderer::{
-        node::{Component, IntoNode, Node, NodeContext, flexbox, path, text},
+        node::{Component, IntoNode, Node, NodeContext, flexbox, path, svg, text},
         path::{PathData, StrokeStyle},
         style::{Style, Styleable, StyleableExt},
+        svg::SvgDocument,
     };
     pub use crate::{component, node, style};
 }
