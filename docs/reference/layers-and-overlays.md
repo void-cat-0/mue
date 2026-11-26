@@ -4,6 +4,7 @@
 
 - [Paint order and z-index](#paint-order-and-z-index)
 - [Layer hosts and teleports](#layer-hosts-and-teleports)
+- [Anchored content](#anchored-content)
 - [Node handles](#node-handles)
 
 ## Paint order and z-index
@@ -42,8 +43,8 @@ instead. Without a host, the teleport draws in place.
 
 Each teleported view sits in a full-size surface over the host. The surface is
 transparent to the pointer: only its children can be hit, so an empty layer
-never blocks the page. Position content inside the surface with `center`
-or absolute insets. Styles on the teleport builder apply to the
+never blocks the page. Position content inside the surface with `center`,
+absolute insets, or `anchored`. Styles on the teleport builder apply to the
 surface; `layer_z_index(n)` orders surfaces within one layer, after which
 insertion order applies. Keyboard events bubble through the surface and host,
 not through the placeholder's ancestors.
@@ -55,6 +56,41 @@ let toast = teleport(Layer::Toast, || {
     flexbox()
         .style(style! { position: absolute; right: 16px; bottom: 16px; padding: 12px; background: #222a3b; })
         .children(text("Saved"))
+});
+```
+
+## Anchored content
+
+`anchored(target)` is an absolutely positioned container that places itself
+next to `target`:
+
+| Setter | Default | Meaning |
+| --- | --- | --- |
+| `placement(Placement)` | `Bottom` | `Top`, `Bottom`, `Left`, `Right`, each with `Start` or `End` alignment variants |
+| `offset(px)` | 0 | Gap from the anchor |
+| `flip(bool)` | true | Use the opposite side when the preferred side overflows and the opposite overflows less |
+| `shift(bool)` | true | Slide along the side to stay inside the boundary |
+| `boundary(Rect)` | host rect | Bounds to stay inside; defaults to the nearest layer host, then the window |
+| `boundary_padding(px)` | 8 | Minimum distance from the boundary |
+| `match_width(bool)` | false | At least as wide as the anchor |
+
+The target is a `NodeHandle`, a `NodeRef`, a `Rect`, or a point (`Vector`), in
+window logical pixels. Placement runs in a layout hook and converges within
+the same layout preparation, so the content never draws at a stale position.
+Children read the result with `use_anchor()`: the final `placement` after
+flipping, the `arrow` offset of the anchor's center along the content's edge,
+and the `anchor` rectangle.
+
+```rust
+use mue::{prelude::*, renderer::{anchor::{Placement, anchored}, layer::{Layer, teleport}}};
+
+let trigger = NodeHandle::new();
+let button = button("More").node_handle(trigger);
+let menu = teleport(Layer::Popover, move || {
+    anchored(trigger)
+        .placement(Placement::BottomEnd)
+        .offset(6.)
+        .children(text("Menu"))
 });
 ```
 

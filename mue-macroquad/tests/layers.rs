@@ -1,11 +1,12 @@
-//! Headless checks for layer hosts, teleports, and z-index.
+//! Headless checks for layer hosts, teleports, z-index, and anchored content.
 
 use mue_core::prelude::*;
 use mue_macroquad::{
+    anchor::{Placement, anchored},
     event::hit_test::hit_test,
     layer::{Layer, LayerHost, layer_host, teleport},
     math::{Rect, Vector},
-    node::{IntoNode, NodeRef, flexbox},
+    node::{IntoNode, NodeHandle, NodeRef, flexbox},
     style::{Styleable, StyleableExt},
 };
 
@@ -109,6 +110,37 @@ fn z_index_reorders_siblings_for_hit_testing() {
             Some(&children[0]),
             "higher z_index wins over later sibling"
         );
+    });
+}
+
+#[test]
+fn anchored_content_converges_beside_its_anchor() {
+    let owner = mue_core::scope::OwnedScope::new();
+    owner.run(|| {
+        let trigger = NodeHandle::new();
+        let root = layer_host(
+            flexbox().children((
+                flexbox()
+                    .margin_left(100.)
+                    .margin_top(60.)
+                    .width(80.)
+                    .height(20.)
+                    .node_handle(trigger),
+                teleport(Layer::Popover, move || {
+                    anchored(trigger)
+                        .placement(Placement::BottomStart)
+                        .offset(4.)
+                        .children(flexbox().width(120.).height(30.))
+                }),
+            )),
+        )
+        .into_node();
+        root.prepare_layout(Vector::new(400., 300.));
+        let anchor = trigger.rect().unwrap();
+        assert_eq!(anchor, Rect::new(100., 60., 80., 20.));
+        let surface = root.children().get_clone_untracked()[1];
+        let floating = surface.children().get_clone_untracked()[0];
+        assert_eq!(rect(floating), Rect::new(100., 84., 120., 30.));
     });
 }
 

@@ -124,6 +124,7 @@ pub use mue_macroquad::node::{
 pub use mue_macroquad::path::{FillRule, PathData, PathFit, StrokeStyle};
 pub use mue_macroquad::svg::SvgDocument;
 pub use mue_macroquad::{
+    anchor::{Placement, anchored, use_anchor},
     cursor::Cursor,
     focus::FocusScope,
     layer::{Layer, layer_host, teleport},

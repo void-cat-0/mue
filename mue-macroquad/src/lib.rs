@@ -57,6 +57,7 @@
 //!
 //! [macroquad]: https://docs.rs/macroquad
 
+pub mod anchor;
 mod app;
 pub mod clip;
 pub mod color;
