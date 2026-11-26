@@ -30,8 +30,8 @@ pub use formatter::{
 pub use history::{EditKind, UndoHistory};
 pub use platform::{
     ImeEvent, TextCapitalization, TextInputAction, TextInputConfig, TextInputConnection,
-    TextInputKind, attach, keyboard_frame, keyboard_inset, keyboard_visible, on_text_input_action,
-    take_events,
+    TextInputKind, attach, caret_rect, keyboard_frame, keyboard_inset, keyboard_visible,
+    on_text_input_action, take_events,
 };
 pub(crate) use platform::{
     PlatformEvent, dispatch_platform_event, from_miniquad_action, set_host_available,

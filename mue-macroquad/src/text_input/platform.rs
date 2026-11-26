@@ -246,7 +246,7 @@ pub(crate) struct Platform {
     client: RefCell<Option<Client>>,
     /// Last state pushed to or received from the platform, to avoid echoes.
     mirrored: RefCell<Option<TextEditingValue>>,
-    caret: Cell<Option<Rect>>,
+    caret: Signal<Option<Rect>>,
     keyboard: Signal<Rect>,
     actions: RefCell<Vec<ActionHandler>>,
 }
@@ -264,7 +264,7 @@ pub(crate) fn platform() -> Rc<Platform> {
                     next_id: Cell::new(1),
                     client: RefCell::new(None),
                     mirrored: RefCell::new(None),
-                    caret: Cell::new(None),
+                    caret: mue_core::scope::Scope::null().run(|| Signal::new(None)),
                     keyboard: mue_core::scope::Scope::null().run(|| Signal::new(Rect::default())),
                     actions: RefCell::new(Vec::new()),
                 })
@@ -281,7 +281,7 @@ pub(crate) fn install_backend(backend: Box<dyn Backend>) {
             next_id: Cell::new(1),
             client: RefCell::new(None),
             mirrored: RefCell::new(None),
-            caret: Cell::new(None),
+            caret: mue_core::scope::Scope::null().run(|| Signal::new(None)),
             keyboard: mue_core::scope::Scope::null().run(|| Signal::new(Rect::default())),
             actions: RefCell::new(Vec::new()),
         }));
@@ -341,7 +341,8 @@ impl TextInputConnection {
 
     /// Report where the caret (or composition) is, in logical window pixels.
     pub fn set_caret_rect(&self, rect: Rect) {
-        if !self.platform.is_attached(self.id) || self.platform.caret.get() == Some(rect) {
+        if !self.platform.is_attached(self.id) || self.platform.caret.get_untracked() == Some(rect)
+        {
             return;
         }
         self.platform.caret.set(Some(rect));
@@ -362,6 +363,7 @@ impl Drop for TextInputConnection {
             *client = None;
             drop(client);
             *self.platform.mirrored.borrow_mut() = None;
+            self.platform.caret.set(None);
             self.platform.backend.stop();
         }
     }
@@ -450,6 +452,13 @@ pub fn take_events() -> Vec<ImeEvent> {
 /// on platforms without a soft keyboard. Tracked.
 pub fn keyboard_frame() -> ReadSignal<Rect> {
     *platform().keyboard
+}
+
+/// The focused field's caret (or composition) rectangle in logical window
+/// pixels, while a field is attached. Tracked. Scroll areas use it to keep
+/// the caret above the soft keyboard.
+pub fn caret_rect() -> ReadSignal<Option<Rect>> {
+    *platform().caret
 }
 
 /// How far the soft keyboard covers the window from the bottom, in logical

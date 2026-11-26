@@ -12,11 +12,19 @@ use mue_macroquad::{
     gesture::Gesture,
     layout::use_layout,
     math::{Rect, Vector},
-    node::{BuildNode, IntoChildren, IntoNode, Node, NodeContext},
+    node::{BuildNode, IntoChildren, IntoNode, Node, NodeContext, NodeHandle, NodeRef},
     paint::{use_background, use_paint},
     path::{FillRule, PathData},
     style::{Style, Styleable, StyleableExt},
 };
+
+thread_local! {
+    /// Mounted scroll areas, so only the innermost one reveals a field.
+    static SCROLL_AREAS: std::cell::RefCell<Vec<NodeHandle>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Space kept between a revealed caret and the keyboard or viewport edge.
+const REVEAL_MARGIN: f32 = 16.;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScrollAxis {
@@ -89,6 +97,12 @@ impl Default for ScrollOptions {
 /// gesture. Bounds are hard stops without elastic overscroll; wheel momentum is
 /// left to the operating system. See [`ScrollOptions`] for axis, chaining, drag,
 /// momentum, and scrollbar settings.
+///
+/// When a focused text field inside the area gains focus, its caret moves,
+/// or a soft keyboard appears, the area scrolls so the caret (or the focused
+/// node) stays visible above the keyboard. Only the innermost scroll area
+/// containing the field does this. Put forms in a scroll area so they can be
+/// revealed on platforms whose keyboard covers the window (iOS, web).
 pub fn scroll_area() -> ScrollAreaBuilder {
     ScrollAreaBuilder {
         style: Style::new(),
@@ -149,7 +163,13 @@ impl BuildNode for ScrollAreaBuilder {
         assert!(options.drag_threshold.is_finite() && options.drag_threshold >= 0.);
         assert!(options.friction.is_finite() && options.friction > 0.);
         assert!(options.max_velocity.is_finite() && options.max_velocity >= 0.);
-        ctx.push_style(style);
+        let node = NodeHandle::new();
+        ctx.push_style(style.node_handle(node));
+        SCROLL_AREAS.with(|areas| {
+            let mut areas = areas.borrow_mut();
+            areas.retain(|area| area.get_untracked().is_some());
+            areas.push(node);
+        });
         let defaults = Style::new()
             .flex_column()
             .min_width(0.)
@@ -226,9 +246,33 @@ impl BuildNode for ScrollAreaBuilder {
                     state.correct_offset();
                 }
             });
+            // Reveal requests: focus changes, keyboard inset changes, and caret
+            // moves within the focused field (not caret moves from scrolling).
+            let reveal = std::rc::Rc::new(std::cell::Cell::new(false));
+            {
+                let reveal = reveal.clone();
+                let focused = mue_macroquad::focus::focused_signal();
+                let inset = mue_macroquad::text_input::keyboard_inset();
+                let caret = mue_macroquad::text_input::caret_rect();
+                let relative = computed(move |_| {
+                    let caret = caret.get()?;
+                    let origin = focused.get()?.rect()?.get_untracked();
+                    Some(((caret.x - origin.x).round(), (caret.y - origin.y).round()))
+                });
+                watch_effect(move || {
+                    let _ = (focused.get(), inset.get(), relative.get());
+                    reveal.set(true);
+                });
+            }
             style.on_update.append({
                 let state = state.clone();
-                move |dt| state.borrow_mut().advance(*dt)
+                let reveal = reveal.clone();
+                move |dt| {
+                    if reveal.replace(false) {
+                        reveal_focused(node, &mut state.borrow_mut());
+                    }
+                    state.borrow_mut().advance(*dt)
+                }
             });
             style.on_wheel_event.append({
                 let state = state.clone();
@@ -308,6 +352,57 @@ impl BuildNode for ScrollAreaBuilder {
                 result.hit_self(node);
             }));
         })
+    }
+}
+
+/// Scroll so the focused node's caret (or the node) is visible above the
+/// soft keyboard, if this is the innermost scroll area containing it.
+fn reveal_focused(area: NodeHandle, state: &mut ScrollState) {
+    let (Some(area), Some(focused)) = (area.get_untracked(), mue_macroquad::focus::focused())
+    else {
+        return;
+    };
+    if focused == area || !area.contains(focused) {
+        return;
+    }
+    let inner = SCROLL_AREAS.with(|areas| {
+        areas
+            .borrow()
+            .iter()
+            .filter_map(NodeHandle::get_untracked)
+            .any(|other: NodeRef| other != area && area.contains(other) && other.contains(focused))
+    });
+    if inner {
+        return;
+    }
+    let target = mue_macroquad::text_input::caret_rect()
+        .get_untracked()
+        .or_else(|| focused.rect().map(|rect| rect.get_untracked()));
+    let Some(target) = target else {
+        return;
+    };
+    let window = mue_macroquad::viewport::use_viewport().get_untracked();
+    let inset = mue_macroquad::text_input::keyboard_inset().get_untracked();
+    let viewport = state.viewport;
+    let bottom = viewport.bottom().min(window.height - inset) - REVEAL_MARGIN;
+    let top = viewport.y + REVEAL_MARGIN.min(viewport.h / 4.);
+    let mut delta = Vector::ZERO;
+    if target.bottom() > bottom {
+        delta.y = target.bottom() - bottom;
+    } else if target.y < top {
+        delta.y = target.y - top;
+    }
+    if state.options.axis != ScrollAxis::Vertical {
+        let right = viewport.right() - REVEAL_MARGIN;
+        if target.right() > right {
+            delta.x = target.right() - right;
+        } else if target.x < viewport.x {
+            delta.x = target.x - viewport.x;
+        }
+    }
+    if delta != Vector::ZERO {
+        state.velocity = Vector::ZERO;
+        state.scroll_by(delta);
     }
 }
 

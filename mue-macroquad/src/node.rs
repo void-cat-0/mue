@@ -843,4 +843,26 @@ impl NodeRef {
     pub fn children(&self) -> Children {
         Runtime::with(|rt| *rt.node(self.id).children)
     }
+
+    /// Whether `other` is this node or one of its descendants (untracked).
+    pub fn contains(&self, other: NodeRef) -> bool {
+        if *self == other {
+            return true;
+        }
+        let children = Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .map(|node| *node.children)
+                .filter(|children| !children.is_null())
+        })
+        .ok()
+        .flatten();
+        children.is_some_and(|children| {
+            children
+                .get_clone_untracked()
+                .iter()
+                .any(|child| child.contains(other))
+        })
+    }
 }
