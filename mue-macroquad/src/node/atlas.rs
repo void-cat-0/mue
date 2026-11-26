@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cosmic_text::{CacheKey, FontSystem, Placement, SwashCache, SwashContent};
 use guillotiere::euclid::{Size2D, UnknownUnit, size2};
@@ -11,6 +11,9 @@ use crate::{math::Rect, paint::shader::SharedTexture};
 pub(crate) const DEFAULT_PAGE_SIZE: i32 = 1024;
 const MAX_PAGES: usize = 8;
 const PADDING: i32 = 1;
+
+/// Bound on remembered blank glyphs (one entry per font, size, and subpixel bin).
+const MAX_EMPTY_GLYPHS: usize = 4096;
 
 type Key = CacheKey;
 
@@ -208,6 +211,9 @@ pub(super) struct Atlas {
     pass: u64,
     pages: Vec<Page>,
     glyphs: HashMap<Key, Glyph>,
+    /// Glyphs with nothing to draw (spaces and other blank glyphs). Without
+    /// this, every lookup would rasterize them again just to find them empty.
+    empty: HashSet<Key>,
     /// Candidates are built lazily on the first allocation miss in a pass.
     /// The queue is intentionally left allocated between passes: invalidating
     /// it is just a generation change, not an O(n) clear/drop operation.
@@ -224,6 +230,7 @@ impl Atlas {
             pass: 1,
             pages: Vec::new(),
             glyphs: HashMap::new(),
+            empty: HashSet::new(),
             candidates: Vec::new(),
             candidates_pass: None,
             stats: GlyphAtlasStats::default(),
@@ -264,6 +271,9 @@ impl Atlas {
         cache: &mut SwashCache,
         key: CacheKey,
     ) -> Option<CachedGlyph> {
+        if self.empty.contains(&key) {
+            return None;
+        }
         if let Some(glyph) = self.glyphs.get_mut(&key) {
             glyph.last_used = self.pass;
             let page = &mut self.pages[glyph.page];
@@ -296,6 +306,10 @@ impl Atlas {
         };
         if width <= 0 || height <= 0 {
             // Whitespace and other empty glyphs have nothing to upload.
+            if self.empty.len() >= MAX_EMPTY_GLYPHS {
+                self.empty.clear();
+            }
+            self.empty.insert(key);
             return None;
         }
         let padded_width = match width.checked_add(PADDING * 2) {
