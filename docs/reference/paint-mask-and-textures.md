@@ -59,6 +59,21 @@ geometry, so antialiased shapes still batch with everything else and need no
 multisampling. Straight axis-aligned rectangles have no fringe, and strokes are
 not antialiased yet.
 
+`corner-shape` (CSS Borders 4) changes the curve inside each corner's radius
+box: `round` (the default), `squircle`, `bevel` (a straight cut), `scoop`
+(concave), `notch`, `square`, or `superellipse(K)` for any curve in between
+(K = 1 is round, 2 is a squircle, 0 a bevel, negative values are concave). It
+applies to the background, border, outline, and backdrop blur together; overflow
+clipping and box shadows still use round corners.
+
+```rust
+use mue::prelude::*;
+
+let squircle = flexbox().style(style! { border-radius: 24px; corner-shape: squircle; });
+let ticket = flexbox().style(style! { border-radius: 12px; corner-shape: scoop; });
+let tag = flexbox().style(style! { border-radius: 10px; corner-shape: superellipse(-0.5); });
+```
+
 ### Box shadows
 
 `box-shadow` works as in CSS: each layer is the border box moved by an

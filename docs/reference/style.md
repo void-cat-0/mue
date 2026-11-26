@@ -115,6 +115,7 @@ let banner = flexbox().style(style! { grid-column: 1 / -1; });
 | Declaration | Literal and Rust forms |
 | --- | --- |
 | `background`, `background-color`, `color` | A color literal or a Rust value convertible to `Prop<Brush>` |
+| `corner-shape` | `round` (default), `squircle`, `bevel`, `scoop`, `notch`, `square`, `superellipse(K)`, or `{CornerShape}` |
 | `border-radius` | One to four nonnegative lengths in `px`, `vw`, or `vh` (clockwise from top-left), or one `{Size}` for all corners |
 | `border-{top-left,top-right,bottom-right,bottom-left}-radius` | One nonnegative length or `{Size}` |
 | `border-color` | A color literal or `{Brush}`; paints the area set by `border-width` |

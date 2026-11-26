@@ -88,6 +88,59 @@ pub(super) fn declaration(
             }
         }
         "row-gap" | "column-gap" => setter(method, length(input, host, false, false, false, true)?),
+        "corner-shape" => {
+            let ty = quote!(#host::paint::path::CornerShape);
+            let value = if let Some(expr) = expression_with_token(input, &ty)? {
+                expr
+            } else {
+                let (name, span) = property(input)?;
+                match name.as_str() {
+                    "round" => quote!(#ty::Round),
+                    "squircle" => quote!(#ty::Squircle),
+                    "bevel" => quote!(#ty::Bevel),
+                    "scoop" => quote!(#ty::Scoop),
+                    "notch" => quote!(#ty::Notch),
+                    "square" => quote!(#ty::Square),
+                    "superellipse" => {
+                        let args;
+                        parenthesized!(args in input);
+                        let k = if args.peek(Ident) {
+                            let word = args.parse::<Ident>()?.to_string();
+                            match word.as_str() {
+                                "infinity" => f32::INFINITY,
+                                _ => {
+                                    return Err(syn::Error::new(
+                                        span,
+                                        "expected a number or `infinity`",
+                                    ));
+                                }
+                            }
+                        } else {
+                            numeric(&args, true)?
+                        };
+                        if !args.is_empty() {
+                            return Err(args.error("superellipse() takes one number"));
+                        }
+                        if k.is_infinite() {
+                            if k > 0. {
+                                quote!(#ty::Square)
+                            } else {
+                                quote!(#ty::Notch)
+                            }
+                        } else {
+                            quote!(#ty::Superellipse(#k))
+                        }
+                    }
+                    _ => {
+                        return Err(syn::Error::new(
+                            span,
+                            "expected round, squircle, bevel, scoop, notch, square, or superellipse(K)",
+                        ));
+                    }
+                }
+            };
+            setter("corner_shape", value)
+        }
         "border-radius" => {
             let single_expression = input.fork();
             if expression(&single_expression)?.is_some() && end(&single_expression) {

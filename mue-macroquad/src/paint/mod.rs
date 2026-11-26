@@ -1119,6 +1119,7 @@ fn is_transparent(brush: &Prop<Brush>) -> bool {
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
     let radii = take_corner_radii(style);
+    let corner_shape = style.take_corner_shape();
     let border_color = style.take_border_color();
     let outline_width =
         crate::style::units::resolve_length(style.take_outline_width(), "outline-width");
@@ -1144,7 +1145,7 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
                 return;
             }
             let radii = radii.get().fit(rect);
-            let shape = CornerShape::Round;
+            let shape = corner_shape.get();
             let brush = background.get_clone();
             if !matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
                 if radii.is_zero() {
@@ -1188,7 +1189,7 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
             p.fill_shaped_ring(
                 (outer, radii.outset(offset + width)),
                 (inner, radii.outset(offset)),
-                CornerShape::Round,
+                corner_shape.get(),
                 outline_color.get_clone().shader(outer),
             );
         }))
@@ -1229,7 +1230,7 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
                         if radii.is_zero() {
                             p.fill_rect(rect, shader);
                         } else {
-                            p.fill_shaped_rect(rect, radii, CornerShape::Round, shader);
+                            p.fill_shaped_rect(rect, radii, corner_shape.get(), shader);
                         }
                     });
                 });

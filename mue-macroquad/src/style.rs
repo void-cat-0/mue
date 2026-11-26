@@ -15,6 +15,7 @@ pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
+pub use crate::paint::path::CornerShape;
 pub use crate::paint::shadow::{BoxShadow, BoxShadows, ShadowCache};
 use crate::{paint::clip::Sector, paint::color::Color, paint::shader::Brush};
 use cosmic_text::Align;
@@ -129,6 +130,10 @@ define_style! {
     radius_bottom_right: Size = Size::Px(0.);
     /// Round the bottom-left corner. See `radius_top_left`.
     radius_bottom_left: Size = Size::Px(0.);
+    /// The curve of rounded corners, as in CSS `corner-shape`: round by
+    /// default, or a squircle, bevel, scoop, notch, square, or any
+    /// superellipse. It shapes the background, border, outline, and backdrop.
+    corner_shape: CornerShape = CornerShape::Round;
     /// Paint the border area set by `border` widths. Transparent by default.
     border_color: Brush = Brush::default();
     /// Draw an outline outside the border box, above the children. It does not

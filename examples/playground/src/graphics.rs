@@ -191,6 +191,43 @@ fn shadow_card() -> Node {
     )
 }
 
+fn corner_card() -> Node {
+    use mue_macroquad::style::CornerShape;
+    let (radius, radius_control) = segmented("Radius", vec![("16", 16.), ("32", 32.), ("48", 48.)]);
+    let shapes = [
+        ("round", CornerShape::Round),
+        ("squircle", CornerShape::Squircle),
+        ("superellipse(3)", CornerShape::Superellipse(3.)),
+        ("bevel", CornerShape::Bevel),
+        ("scoop", CornerShape::Scoop),
+        ("notch", CornerShape::Notch),
+    ];
+    card(
+        "Corner shapes",
+        "CSS corner-shape: the same border-radius drawn as different curves. Edges, borders, and outlines are antialiased.",
+        (
+            radius_control,
+            row(shapes
+                .into_iter()
+                .map(|(label, shape)| {
+                    swatch(
+                        label,
+                        flexbox()
+                            .style(mue_macroquad::style! {
+                                width: {u(110.)}; height: {u(80.)};
+                                background: {BLUE};
+                                border: 2px solid #ffffff;
+                                outline: 2px #7fd1a8; outline-offset: 3px;
+                                border-radius: {radius.map(mue_macroquad::style::Size::Px)};
+                            })
+                            .corner_shape(shape),
+                    )
+                })
+                .collect::<Vec<_>>()),
+        ),
+    )
+}
+
 fn vector_card() -> Node {
     register_icon("clock", SvgDocument::parse(CLOCK).expect("valid icon"));
     register_icon(
@@ -334,6 +371,7 @@ pub fn page() -> Node {
         (
             image_card(),
             paint_card(),
+            corner_card(),
             shadow_card(),
             vector_card(),
             effects_card(),
