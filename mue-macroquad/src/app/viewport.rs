@@ -81,6 +81,11 @@ pub fn use_viewport() -> ReadSignal<Viewport> {
     read()
 }
 
+/// The current DPI scale without tracking (for painting).
+pub(crate) fn current_dpi_scale() -> f32 {
+    VIEWPORT.with(|viewport| viewport.get_untracked().dpi_scale)
+}
+
 /// Safe-area insets in logical pixels (notches, rounded corners, system bars).
 pub fn safe_area() -> ReadSignal<Edges> {
     SAFE_AREA.with(|insets| **insets)

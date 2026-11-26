@@ -574,3 +574,146 @@ fn parse_svg_path(data: &str) -> Result<Path, PathParseError> {
     }
     Ok(builder.build())
 }
+
+/// The shape of a rounded corner, as in CSS `corner-shape`.
+///
+/// Every corner keeps its `border-radius` box; the shape decides the curve
+/// inside it. The curve is the superellipse `|x|^n + |y|^n = 1` with
+/// `n = 2^K`, as in CSS `superellipse(K)`: `Round` is K = 1, `Squircle`
+/// K = 2, `Bevel` K = 0 (a straight cut), `Scoop` K = -1 (concave),
+/// `Square` K = infinity and `Notch` K = -infinity.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum CornerShape {
+    #[default]
+    Round,
+    Squircle,
+    Bevel,
+    Scoop,
+    Notch,
+    Square,
+    /// `superellipse(K)`; positive K bulges toward the corner, negative K is
+    /// concave.
+    Superellipse(f32),
+}
+impl PropValue for CornerShape {}
+
+impl CornerShape {
+    /// The superellipse exponent `2^K`; infinite for `Square`, zero for `Notch`.
+    pub fn exponent(self) -> f32 {
+        match self {
+            Self::Round => 2.,
+            Self::Squircle => 4.,
+            Self::Bevel => 1.,
+            Self::Scoop => 0.5,
+            Self::Notch => 0.,
+            Self::Square => f32::INFINITY,
+            Self::Superellipse(k) => 2f32.powf(k),
+        }
+    }
+}
+
+/// Append the closed outline of `rect` with `radii` and `shape` to `out`,
+/// clockwise on screen (y down) from the top-left corner. Curves are
+/// subdivided finely enough for the given device-pixel `scale`.
+pub(crate) fn corner_outline(
+    rect: Rect,
+    radii: CornerRadii,
+    shape: CornerShape,
+    scale: f32,
+    out: &mut Vec<Vector>,
+) {
+    if rect.w <= 0. || rect.h <= 0. {
+        return;
+    }
+    let radii = radii.fit(rect);
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
+    // Corner: radius, center, axis toward the first point, axis toward the second.
+    let corners = [
+        (radii.top_left, vec2(x0, y0), vec2(-1., 0.), vec2(0., -1.)),
+        (radii.top_right, vec2(x1, y0), vec2(0., -1.), vec2(1., 0.)),
+        (radii.bottom_right, vec2(x1, y1), vec2(1., 0.), vec2(0., 1.)),
+        (radii.bottom_left, vec2(x0, y1), vec2(0., 1.), vec2(-1., 0.)),
+    ];
+    let n = shape.exponent();
+    let start = out.len();
+    let push = |point: Vector, out: &mut Vec<Vector>| {
+        if out.len() == start
+            || out
+                .last()
+                .is_none_or(|last| last.distance_squared(point) > 1e-8)
+        {
+            out.push(point);
+        }
+    };
+    for (radius, corner, a, b) in corners {
+        if radius <= 0. {
+            push(corner, out);
+            continue;
+        }
+        let center = corner - (a + b) * radius;
+        if n <= 0. {
+            push(center + a * radius, out);
+            push(center, out);
+            push(center + b * radius, out);
+            continue;
+        }
+        if !n.is_finite() || n > 64. {
+            push(center + a * radius, out);
+            push(corner, out);
+            push(center + b * radius, out);
+            continue;
+        }
+        let segments = if (n - 1.).abs() < 1e-3 {
+            1
+        } else {
+            corner_segments(radius, scale)
+        };
+        let power = 2. / n;
+        for i in 0..=segments {
+            let t = i as f32 / segments as f32 * std::f32::consts::FRAC_PI_2;
+            let (s, c) = t.sin_cos();
+            let point = center
+                + a * (radius * c.max(0.).powf(power))
+                + b * (radius * s.max(0.).powf(power));
+            push(point, out);
+        }
+    }
+    // Drop a closing duplicate of the first point.
+    if out.len() > start + 1 && out[start].distance_squared(*out.last().unwrap()) <= 1e-8 {
+        out.pop();
+    }
+}
+
+/// Line segments for one curved corner of `radius` at a device-pixel `scale`.
+pub(crate) fn corner_segments(radius: f32, scale: f32) -> usize {
+    ((radius * scale.max(0.25)).sqrt() * 2.5)
+        .ceil()
+        .clamp(4., 64.) as usize
+}
+
+/// Twice the signed area of a closed polygon (positive when clockwise on
+/// screen with y down).
+pub(crate) fn signed_area(points: &[Vector]) -> f32 {
+    let mut area = 0.;
+    for (i, p) in points.iter().enumerate() {
+        let q = points[(i + 1) % points.len()];
+        area += p.x * q.y - q.x * p.y;
+    }
+    area
+}
+
+/// Even-odd point-in-polygon test.
+pub(crate) fn polygon_contains(points: &[Vector], point: Vector) -> bool {
+    let mut inside = false;
+    let mut j = points.len().wrapping_sub(1);
+    for i in 0..points.len() {
+        let (a, b) = (points[i], points[j]);
+        if (a.y > point.y) != (b.y > point.y)
+            && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}

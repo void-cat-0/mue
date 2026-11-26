@@ -36,7 +36,7 @@ use smallvec::SmallVec;
 
 use crate::{
     math::{CornerRadii, Edges, Matrix, Rect, Vector, vec2},
-    paint::path::{FillRule, PathData, StrokeStyle},
+    paint::path::{CornerShape, FillRule, PathData, StrokeStyle},
     paint::shader::{Brush, IntoShader, Shader, SharedTexture},
     style::Style,
 };
@@ -453,6 +453,137 @@ fn texture_vertex(
     vertex
 }
 
+/// Logical-to-device scale of `transform` (pixels per local unit).
+fn device_scale(transform: Matrix) -> f32 {
+    let det = (transform.x_axis.x * transform.y_axis.y - transform.x_axis.y * transform.y_axis.x)
+        .abs()
+        .sqrt();
+    let dpi = crate::app::viewport::current_dpi_scale();
+    let scale = det * dpi;
+    if scale.is_finite() && scale > 0. {
+        scale
+    } else {
+        1.
+    }
+}
+
+/// Closed contours of a filled region and, for each, whether it bounds a hole.
+pub(crate) struct Contours {
+    points: Vec<Vec<Vector>>,
+    holes: Vec<bool>,
+}
+
+impl Contours {
+    fn single(points: Vec<Vector>) -> Self {
+        Self {
+            holes: vec![false],
+            points: vec![points],
+        }
+    }
+
+    /// Flatten path events into contours and classify holes by `rule`.
+    fn from_events(events: &[PathEvent], rule: FillRule, tolerance: f32) -> Self {
+        use lyon::path::iterator::PathIterator;
+        let mut points: Vec<Vec<Vector>> = Vec::new();
+        let mut current: Vec<Vector> = Vec::new();
+        for event in events.iter().copied().flattened(tolerance) {
+            match event {
+                PathEvent::Begin { at } => {
+                    current.clear();
+                    current.push(vec2(at.x, at.y));
+                }
+                PathEvent::Line { to, .. } => current.push(vec2(to.x, to.y)),
+                PathEvent::End { .. } => {
+                    if current.len() >= 3 {
+                        points.push(std::mem::take(&mut current));
+                    } else {
+                        current.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+        let areas: Vec<f32> = points
+            .iter()
+            .map(|c| crate::paint::path::signed_area(c))
+            .collect();
+        let holes = (0..points.len())
+            .map(|i| {
+                let probe = points[i][0];
+                let containers: Vec<usize> = (0..points.len())
+                    .filter(|&j| j != i && crate::paint::path::polygon_contains(&points[j], probe))
+                    .collect();
+                match rule {
+                    FillRule::EvenOdd => containers.len() % 2 == 1,
+                    // Nonzero: a contour winding against its innermost container cuts a hole.
+                    FillRule::NonZero => containers
+                        .iter()
+                        .min_by(|&&a, &&b| areas[a].abs().total_cmp(&areas[b].abs()))
+                        .is_some_and(|&j| areas[j].signum() != areas[i].signum()),
+                }
+            })
+            .collect();
+        Self { points, holes }
+    }
+}
+
+/// Antialias the edges of a filled region: a strip one device pixel wide
+/// along every contour, fading from the fill color to transparent away from
+/// the filled side. It keeps the fill batched with everything else.
+fn push_fringe(
+    buffers: &mut VertexBuffers<Vertex, u32>,
+    shader: &impl Shader,
+    transform: Matrix,
+    alpha: f32,
+    contours: &Contours,
+) {
+    let width = 1. / device_scale(transform);
+    for (points, &hole) in contours.points.iter().zip(&contours.holes) {
+        let n = points.len();
+        if n < 3 {
+            continue;
+        }
+        let area = crate::paint::path::signed_area(points);
+        if area.abs() <= f32::EPSILON {
+            continue;
+        }
+        // Normals point away from the contour's own region; a hole's fringe
+        // points into it, away from the filled side.
+        let outward = if (area > 0.) != hole { 1. } else { -1. };
+        let normal = |a: Vector, b: Vector| {
+            let d = (b - a).normalize_or_zero();
+            vec2(d.y, -d.x) * outward
+        };
+        let base = buffers.vertices.len() as u32;
+        for i in 0..n {
+            let prev = points[(i + n - 1) % n];
+            let point = points[i];
+            let next = points[(i + 1) % n];
+            let (n0, n1) = (normal(prev, point), normal(point, next));
+            let miter = (n0 + n1).normalize_or_zero();
+            let along = if miter == Vector::ZERO { n1 } else { miter };
+            let scale = along.dot(n1).max(0.35);
+            let outer = point + along * (width / scale);
+            buffers
+                .vertices
+                .push(shader.new_vertex(&transform, &point, alpha));
+            buffers
+                .vertices
+                .push(shader.new_vertex(&transform, &outer, 0.));
+        }
+        for i in 0..n as u32 {
+            let j = (i + 1) % n as u32;
+            let (a, b, c, d) = (
+                base + i * 2,
+                base + i * 2 + 1,
+                base + j * 2 + 1,
+                base + j * 2,
+            );
+            buffers.indices.extend([a, b, c, a, c, d]);
+        }
+    }
+}
+
 struct Inner<'a> {
     cache: &'a mut Cache,
 
@@ -545,7 +676,25 @@ impl<'a> Inner<'a> {
             &mut BuffersBuilder<Vertex, u32, ShaderConstructor<S>>,
         ) -> TessellationResult,
     ) {
+        self.build_with_fringe(shapes, shader, None, f);
+    }
+
+    fn build_with_fringe<S: Shader>(
+        &mut self,
+        shapes: &mut Shapes,
+        shader: S,
+        fringe: Option<&Contours>,
+        f: impl FnOnce(
+            &mut Cache,
+            &mut BuffersBuilder<Vertex, u32, ShaderConstructor<S>>,
+        ) -> TessellationResult,
+    ) {
         let texture = shader.texture();
+        // The fringe borrows the shader before tessellation takes it.
+        let mut edge = VertexBuffers::<Vertex, u32>::new();
+        if let Some(contours) = fringe {
+            push_fringe(&mut edge, &shader, self.transform, self.alpha, contours);
+        }
         let constructor = ShaderConstructor {
             transform: self.transform,
             shader,
@@ -557,7 +706,8 @@ impl<'a> Inner<'a> {
             &mut BuffersBuilder::new(&mut buffers, constructor),
         )
         .unwrap();
-        append_mesh(shapes, texture, buffers);
+        append_mesh(shapes, texture.clone(), buffers);
+        append_mesh(shapes, texture, edge);
     }
 }
 
@@ -616,7 +766,35 @@ impl ShapesBuilder<'_> {
     ) {
         let (columns, rows) = shader.subdivisions(rect);
         let columns = columns.max(1);
-        let rows = rows.max(1);
+        // Row positions (0..=1). Rounded corners add rows at the heights of
+        // the corner outline's vertices, so the grid's edge is exactly the
+        // antialiased outline and no gap opens between them.
+        let mut stops: Vec<f32> = (0..=rows.max(1))
+            .map(|y| y as f32 / rows.max(1) as f32)
+            .collect();
+        if !radii.is_zero() && rect.h > 0. {
+            let scale = device_scale(self.inner.transform);
+            for (radius, top) in [
+                (radii.top_left, true),
+                (radii.top_right, true),
+                (radii.bottom_right, false),
+                (radii.bottom_left, false),
+            ] {
+                if radius <= 0. {
+                    continue;
+                }
+                let segments = crate::paint::path::corner_segments(radius, scale);
+                for i in 0..=segments {
+                    let t = i as f32 / segments as f32 * std::f32::consts::FRAC_PI_2;
+                    let depth = radius * (1. - t.sin());
+                    let y = if top { depth } else { rect.h - depth };
+                    stops.push((y / rect.h).clamp(0., 1.));
+                }
+            }
+            stops.sort_by(f32::total_cmp);
+            stops.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+        }
+        let rows = stops.len() - 1;
         // Each tile fits even when a custom shader requests more than u16 vertices.
         // Sampling uses the original grid coordinates, including rounded edges/UVs.
         let tile_width = columns.min(MAX_TILE_CELLS);
@@ -640,8 +818,7 @@ impl ShapesBuilder<'_> {
                 }
                 let shape = self.shapes.shape_for_texture(texture.clone());
                 let offset = shape.buffers.vertices.len() as u16;
-                for y in y0..=y1 {
-                    let v = y as f32 / rows as f32;
+                for &v in &stops[y0..=y1] {
                     let py = rect.h * v;
                     let left = corner_inset(radii.top_left, radii.bottom_left, py, rect.h);
                     let right = corner_inset(radii.top_right, radii.bottom_right, py, rect.h);
@@ -675,27 +852,43 @@ impl ShapesBuilder<'_> {
         }
     }
 
-    /// Fill a path with the given shader.
+    /// Fill a path with the given shader (nonzero rule).
     pub fn fill_path<I, S>(&mut self, path: I, shader: S)
     where
         I: IntoIterator<Item = PathEvent>,
         S: IntoShader,
     {
-        self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
+        let events: Vec<PathEvent> = path.into_iter().collect();
+        let contours =
+            Contours::from_events(&events, FillRule::NonZero, self.fill_options.tolerance);
+        let options = self.fill_options;
+        self.inner.build_with_fringe(
+            self.shapes,
+            shader.into_shader(),
+            Some(&contours),
+            |cache, builder| {
                 cache
                     .fill_tess
-                    .tessellate(path, &self.fill_options, builder)
-            });
+                    .tessellate(events.iter().copied(), &options, builder)
+            },
+        );
     }
 
-    /// Fill a path with the given rule.
+    /// Fill a path with the given rule. Edges are antialiased.
     pub fn fill<S: IntoShader>(&mut self, path: &PathData, rule: FillRule, shader: S) {
         let options = self.fill_options.with_fill_rule(rule.into());
-        self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
-                cache.fill_tess.tessellate(path.iter(), &options, builder)
-            });
+        let events: Vec<PathEvent> = path.iter().collect();
+        let contours = Contours::from_events(&events, rule, self.fill_options.tolerance);
+        self.inner.build_with_fringe(
+            self.shapes,
+            shader.into_shader(),
+            Some(&contours),
+            |cache, builder| {
+                cache
+                    .fill_tess
+                    .tessellate(events.iter().copied(), &options, builder)
+            },
+        );
     }
 
     /// Stroke a path with the given line style.
@@ -724,55 +917,114 @@ impl ShapesBuilder<'_> {
     where
         S: IntoShader,
     {
-        let shader = shader.into_shader();
-        let radii = radii.fit(rect);
-        // Boundary-only tessellation misses the center of a radial gradient.
-        // Sample the interior too, curving the grid's edges around the corners.
-        if shader.subdivisions(rect) != (1, 1) || radii.is_zero() {
-            self.fill_quad(rect, radii, shader.texture(), None, shader);
-            return;
-        }
-        let mut path = lyon::path::Path::builder();
-        crate::paint::path::add_rounded_rect(&mut path, rect, radii, lyon::path::Winding::Positive);
-        let path = path.build();
-        self.inner.build(self.shapes, shader, |cache, builder| {
-            cache
-                .fill_tess
-                .tessellate(path.iter(), &self.fill_options, builder)
-        });
+        self.fill_shaped_rect(rect, radii, CornerShape::Round, shader);
     }
 
-    /// Fill the ring between `outer` and `inner` rounded rectangles.
-    pub(crate) fn fill_ring<S>(
+    /// Fill a rectangle whose corners have `radii` and `shape`, with
+    /// antialiased edges.
+    pub(crate) fn fill_shaped_rect<S>(
         &mut self,
-        outer: (Rect, CornerRadii),
-        inner: (Rect, CornerRadii),
+        rect: Rect,
+        radii: CornerRadii,
+        shape: CornerShape,
         shader: S,
     ) where
         S: IntoShader,
     {
-        let mut path = lyon::path::Path::builder();
-        crate::paint::path::add_rounded_rect(
-            &mut path,
-            outer.0,
-            outer.1,
-            lyon::path::Winding::Positive,
+        let shader = shader.into_shader();
+        let radii = radii.fit(rect);
+        if radii.is_zero() {
+            self.fill_quad(rect, radii, shader.texture(), None, shader);
+            return;
+        }
+        let mut outline = Vec::new();
+        crate::paint::path::corner_outline(
+            rect,
+            radii,
+            shape,
+            device_scale(self.inner.transform),
+            &mut outline,
         );
-        crate::paint::path::add_rounded_rect(
-            &mut path,
-            inner.0,
-            inner.1,
-            lyon::path::Winding::Negative,
-        );
-        let path = path.build();
-        let options = self
-            .fill_options
-            .with_fill_rule(lyon::tessellation::FillRule::EvenOdd);
+        let contours = Contours::single(outline);
+        // Boundary-only tessellation misses the center of a radial gradient.
+        // Round corners sample the interior on a grid curved around the corners.
+        if shader.subdivisions(rect) != (1, 1) && shape == CornerShape::Round {
+            let mut edge = VertexBuffers::<Vertex, u32>::new();
+            push_fringe(
+                &mut edge,
+                &shader,
+                self.inner.transform,
+                self.inner.alpha,
+                &contours,
+            );
+            let texture = shader.texture();
+            self.fill_quad(rect, radii, texture.clone(), None, shader);
+            append_mesh(self.shapes, texture, edge);
+            return;
+        }
+        let path = polygon_path(&contours.points);
+        let options = self.fill_options;
         self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
+            .build_with_fringe(self.shapes, shader, Some(&contours), |cache, builder| {
                 cache.fill_tess.tessellate(path.iter(), &options, builder)
             });
     }
+
+    /// Fill the ring between two rectangles whose corners share `shape`,
+    /// with antialiased edges.
+    pub(crate) fn fill_shaped_ring<S>(
+        &mut self,
+        outer: (Rect, CornerRadii),
+        inner: (Rect, CornerRadii),
+        shape: CornerShape,
+        shader: S,
+    ) where
+        S: IntoShader,
+    {
+        let scale = device_scale(self.inner.transform);
+        let mut outer_points = Vec::new();
+        crate::paint::path::corner_outline(outer.0, outer.1, shape, scale, &mut outer_points);
+        let mut inner_points = Vec::new();
+        crate::paint::path::corner_outline(inner.0, inner.1, shape, scale, &mut inner_points);
+        if outer_points.len() < 3 {
+            return;
+        }
+        let contours = if inner_points.len() >= 3 {
+            Contours {
+                points: vec![outer_points, inner_points],
+                holes: vec![false, true],
+            }
+        } else {
+            Contours::single(outer_points)
+        };
+        let path = polygon_path(&contours.points);
+        let options = self
+            .fill_options
+            .with_fill_rule(lyon::tessellation::FillRule::EvenOdd);
+        self.inner.build_with_fringe(
+            self.shapes,
+            shader.into_shader(),
+            Some(&contours),
+            |cache, builder| cache.fill_tess.tessellate(path.iter(), &options, builder),
+        );
+    }
+}
+
+/// A lyon path of closed polygons.
+fn polygon_path(contours: &[Vec<Vector>]) -> lyon::path::Path {
+    let mut builder = lyon::path::Path::builder();
+    for contour in contours {
+        let mut points = contour.iter();
+        let Some(first) = points.next() else {
+            continue;
+        };
+        builder.begin(lyon::math::point(first.x, first.y));
+        for point in points {
+            builder.line_to(lyon::math::point(point.x, point.y));
+        }
+        builder.end(true);
+    }
+    builder.build()
 }
 
 /// Horizontal inset of a rounded edge at height `py` within a box of height `h`.
@@ -892,12 +1144,13 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
                 return;
             }
             let radii = radii.get().fit(rect);
+            let shape = CornerShape::Round;
             let brush = background.get_clone();
             if !matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
                 if radii.is_zero() {
                     p.fill_rect(rect, brush.shader(rect));
                 } else {
-                    p.fill_rounded_rect(rect, radii, brush.shader(rect));
+                    p.fill_shaped_rect(rect, radii, shape, brush.shader(rect));
                 }
             }
             let border_brush = border_color.get_clone();
@@ -908,9 +1161,10 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
             };
             if !widths.is_zero() && !matches!(&border_brush, Brush::Solid(color) if color.a <= 0.) {
                 let inner = rect.deflate(widths);
-                p.fill_ring(
+                p.fill_shaped_ring(
                     (rect, radii),
                     (inner, radii.inset(widths)),
+                    shape,
                     border_brush.shader(rect),
                 );
             }
@@ -931,9 +1185,10 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
             let radii = radii.get().fit(rect);
             let inner = rect.outset(offset);
             let outer = inner.outset(width);
-            p.fill_ring(
+            p.fill_shaped_ring(
                 (outer, radii.outset(offset + width)),
                 (inner, radii.outset(offset)),
+                CornerShape::Round,
                 outline_color.get_clone().shader(outer),
             );
         }))
@@ -974,7 +1229,7 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
                         if radii.is_zero() {
                             p.fill_rect(rect, shader);
                         } else {
-                            p.fill_rounded_rect(rect, radii, shader);
+                            p.fill_shaped_rect(rect, radii, CornerShape::Round, shader);
                         }
                     });
                 });

@@ -52,6 +52,13 @@ hidden retained nodes too. Paint-building callbacks and their property producers
 should be pure geometry/value computations, not recursively draw or build nodes
 while the shared tessellator is borrowed.
 
+Filled shapes have antialiased edges: rounded backgrounds, borders,
+outlines, backdrop shapes, and vector path fills get a strip one device pixel
+wide along their outline that fades to transparent. The strip is ordinary
+geometry, so antialiased shapes still batch with everything else and need no
+multisampling. Straight axis-aligned rectangles have no fringe, and strokes are
+not antialiased yet.
+
 ### Box shadows
 
 `box-shadow` works as in CSS: each layer is the border box moved by an
