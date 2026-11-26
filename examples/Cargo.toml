@@ -186,6 +186,11 @@ path = "foundation/src/main.rs"
 doc = false
 
 [[example]]
+name = "guide"
+path = "guide/src/main.rs"
+doc = false
+
+[[example]]
 name = "text-input"
 path = "text-input/src/main.rs"
 doc = false

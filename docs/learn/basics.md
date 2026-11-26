@@ -1,155 +1,198 @@
-# Reactive state and children
+# State and lists
 
 [Learn contents][learn-index]
 
-## Decide who owns the state
+Focus can count down, but it forgets everything when a session ends. In this
+chapter you split the timer into parts that share state, keep a list of
+finished sessions, and hide that list behind a toggle.
 
-In the previous chapter, a component owned the playback flag. Now start with a control that can add an item to a queue or reset it from another button. Put the state above both controls so they read and write the same value.
+## Share state between parts
+
+When two parts of a view need the same value, create the signal in their
+common parent and hand it down. A part that only *reads* the value takes it as
+a normal parameter. A part that also *writes* it marks the parameter
+`#[model]`:
 
 ```rust
-use mue::prelude::*;
+use mue::{components::use_interval, prelude::*};
+use std::rc::Rc;
 
 #[component]
-fn queue_controls() -> impl Component {
-    let count = signal(0_u32);
-    let label = count.map(|n| format!("{n} queued"));
-    let empty = count.map(|n| n == 0);
+fn clock_face(remaining: u32) -> impl Component {
+    let label = remaining.map(|s| Rc::<str>::from(format!("{:02}:{:02}", s / 60, s % 60)));
+    text(label).style(style! { font-size: 64px; color: #2d2a26; })
+}
 
-    vstack().gap(12.).children((
-        text(label),
-        hstack().gap(8.).children((
-            button("Queue track").on_activate(move || count.update(|n| *n += 1)),
-            button("Clear").disabled(empty).on_activate(move || count.set(0)),
-        )),
+#[component]
+fn start_button(#[model] running: bool) -> impl Component {
+    button(running.pick("Pause", "Start"))
+        .primary(true)
+        .on_activate(move || running.update(|on| *on = !*on))
+}
+
+#[component]
+fn timer() -> impl Component {
+    let running = signal(false);
+    let remaining = signal(25 * 60_u32);
+    use_interval(1., move || {
+        if running.get() && remaining.get() > 0 {
+            remaining.update(|s| *s -= 1);
+        }
+    });
+
+    vstack().gap(16.).style(style! { align-items: center; }).children((
+        clock_face(remaining),
+        start_button(running),
     ))
 }
 ```
 
-Mount `queue_controls()` in the window from the previous chapter. Press **Queue track** twice, then **Clear**. Both the label and the button's enabled state come from `count`. If you mount two copies, each copy owns a different `count`. Move the signal to a shared parent when two groups should edit one queue.
+Inside `clock_face`, `remaining` is a `Prop<u32>`: it can be a fixed number or
+follow a signal, and `map` works on both. `clock_face(1500)` shows a fixed
+time; `clock_face(remaining)` follows the timer. Inside `start_button`,
+`running` is a writable `Signal<bool>` that belongs to the caller, so the
+button changes the parent's state directly.
 
-| Read | Use it for |
+| To read a signal | Use |
 | --- | --- |
-| `count.get()` | A snapshot of a `Copy` value, such as a limit check inside a button handler. |
-| `queue.get_clone()` | A snapshot of an owned value, such as a list you will send to a file writer. |
-| `count.map(...)` | A derived value that can follow one source. |
-| `computed(move \|_\| ...)` | A derived value that can track several sources. Put the reads inside the closure. |
+| `remaining.get()` | The current value, for `Copy` types, inside a handler. |
+| `history.get_clone()` | The current value of a type that must be cloned, such as a list. |
+| `remaining.map(...)` | A value derived from one signal that stays up to date. |
+| `computed(move \|_\| ...)` | A value derived from several signals; read them inside the closure. |
 
-When you create a binding during a component build, its owning node scope keeps it alive. If a host creates a signal before mounting any nodes, use `OwnedScope` and keep the owner alive for the lifetime of the view. The next example uses a tuple of mixed builders. For a list whose membership changes, give each row a key.
-## Lift state into the caller
+## Keep a list of sessions
 
-Move the count out of the controls when another part of the view needs to read it. The parent owns the signal and supplies it to the interactive child with `#[model]`. The summary gets a read-only projection from the same source.
+A finished session should appear in a history list. Store the list in a signal
+holding an `Rc<[Session]>`, and render it with `map_keyed`, which builds one
+row per item and identifies each item by a key:
 
-```rust
-use mue::prelude::*;
-
-#[component]
-fn queue_actions(#[model] count: u32) -> impl Component {
-    hstack().gap(8.).children((
-        button("Queue track").on_activate(move || count.update(|n| *n += 1)),
-        button("Clear").on_activate(move || count.set(0)),
-    ))
-}
-
-#[component]
-fn queue_panel() -> impl Component {
-    let count = signal(0_u32);
-    let summary = count.map(|n| format!("{n} tracks queued"));
-    vstack().gap(8.).children((text(summary), queue_actions(count)))
-}
-```
-
-Mount `queue_panel()` and add a second `queue_actions(count)` to its children. Both sets of controls affect the same summary. In the next section, a list signal replaces the scalar count when you need a node for each record.
-
-## Keep a list stable by key
-
-You can pass a tuple for a fixed group of mixed child builders, or a vector for a variable number of one builder type. For a list that changes over time, hand `map_keyed` an owned snapshot and a stable key for each item.
+<div class="mue-demo">
+<div class="mue-demo-code">
 
 ```rust
 use mue::{prelude::*, renderer::node::map_keyed};
 use std::rc::Rc;
 
-#[component]
-fn stations() -> impl Component {
-    let ids = signal(Rc::<[&'static str]>::from(["Ridge", "Creek"]));
-    let rows = map_keyed(ids, |id| *id, |id| text(*id));
+#[derive(Clone, PartialEq)]
+struct Session {
+    id: u32,
+    minutes: u32,
+}
 
-    vstack().children((
-        button("Reverse stations").on_activate(move || {
-            ids.set(ids.get_clone().iter().rev().copied().collect());
-        }),
+#[component]
+fn history() -> impl Component {
+    let sessions = signal(Rc::<[Session]>::from(vec![]));
+    let next_id = signal(1_u32);
+
+    let total = sessions.map(|list| {
+        let minutes: u32 = list.iter().map(|s| s.minutes).sum();
+        Rc::<str>::from(format!("{minutes} minutes today"))
+    });
+    let rows = map_keyed(sessions, |s| s.id, |s| {
+        text(Rc::<str>::from(format!("Session {}: {} min", s.id, s.minutes)))
+            .style(style! { color: #2d2a26; })
+    });
+
+    vstack().gap(8.).children((
+        text(total).style(style! { font-weight: 700; color: #2d2a26; }),
+        hstack().gap(8.).children((
+            button("Finish session").on_activate(move || {
+                let id = next_id.get();
+                next_id.set(id + 1);
+                let mut list = sessions.get_clone().to_vec();
+                list.push(Session { id, minutes: 25 });
+                sessions.set(list.into());
+            }),
+            button("Clear").on_activate(move || sessions.set(Rc::from(vec![]))),
+        )),
         rows,
     ))
 }
 ```
 
-Reversing the list moves each existing node to its new position. If a row has a local count, that count follows its key. Removing a key drops the node and its state. Use unique IDs when row names can repeat. For records whose content changes while their IDs stay fixed, use `map_keyed_prop` and bind each row to its current item value. The simpler `map_keyed` uses the item to construct the node the first time the key appears.
+</div>
+<figure class="mue-demo-preview mue-focus">
 
-## Edit a record without changing its key
+![A total of 75 minutes above three session rows][shot-guide-history]
 
-Use `map_keyed_prop` when the same ID can point to new values. Bind a retained row to `row.value` and `row.index`. The following button renames the first file and moves it to the end in a single write.
+</figure>
+</div>
+
+To change the list, build a new one and `set` it. mue compares the old and new
+keys: rows whose key is still there are kept (and moved if the order changed),
+new keys get new rows, and missing keys are removed. Keys must be unique; an ID
+is the usual choice.
+
+Use a tuple for a fixed set of different children, like `(text(total),
+hstack()...)` above, and a `Vec` or `map_keyed` when the number of children
+changes.
+
+## Update a row in place
+
+`map_keyed` builds each row from the item it first sees. If items can change
+while keeping their key, use `map_keyed_prop`, which gives the row the current
+value and index:
 
 ```rust
-use std::rc::Rc;
 use mue::{prelude::*, renderer::node::map_keyed_prop};
+use std::rc::Rc;
 
 #[component]
-fn exports() -> impl Component {
-    let files = signal(Rc::<[(u32, &'static str)]>::from([
-        (8, "draft.csv"), (12, "summary.csv"),
-    ]));
-    let rows = map_keyed_prop(files, |file| file.0, |row| {
+fn history_rows(sessions: Rc<[(u32, u32)]>) -> impl Component {
+    let rows = map_keyed_prop(sessions, |(id, _)| *id, |row| {
         let label = computed(move |_| {
-            let (_, name) = row.value.get();
-            format!("{}  {name}", row.index.get() + 1)
+            let (id, minutes) = row.value.get();
+            Rc::<str>::from(format!("#{} · session {id} · {minutes} min", row.index.get() + 1))
         });
-        text(label)
+        text(label).style(style! { color: #2d2a26; })
     });
-    vstack().gap(8.).children((
-        button("Publish draft").on_activate(move || {
-            files.set(Rc::from([(12, "summary.csv"), (8, "final.csv")]));
-        }),
-        rows,
-    ))
+    vstack().gap(4.).children(rows)
 }
 ```
 
-Row 8 keeps its node. Its label changes to `2  final.csv`. `map_keyed` could move that node but would still display the original title if its label came from the creation value. For a row that edits a record, capture its key and look up the record when a button runs. An index can change after construction.
+If a session's minutes change from 25 to 50, its row updates without being
+rebuilt.
 
 ## Conditional children
 
-`show_if` retains a child while hiding it from the displayed tree. Use it for a details section whose local input should survive a collapse. Build another node when showing the section should start a fresh session. Keep a details panel mounted to preserve its local count. Open it, record a sample, close it, and reopen it. The label should still show one sample.
+The history should only show when you ask for it. `show_if` keeps a child
+mounted but shows it only while a condition holds:
 
 ```rust
 use mue::{prelude::*, renderer::node::show_if};
 
 #[component]
-fn audit_details() -> impl Component {
-    let samples = signal(0_u32);
+fn history_panel() -> impl Component {
+    let open = signal(false);
     vstack().gap(8.).children((
-        text(samples.map(|n| format!("Samples recorded: {n}"))),
-        button("Record sample").on_activate(move || samples.update(|n| *n += 1)),
-    ))
-}
-
-#[component]
-fn audit_panel() -> impl Component {
-    let expanded = signal(false);
-    vstack().gap(8.).children((
-        button(expanded.pick("Hide details", "Show details"))
-            .on_activate(move || expanded.update(|open| *open = !*open)),
-        show_if(expanded, audit_details()),
+        button(open.pick("Hide history", "Show history"))
+            .on_activate(move || open.update(|o| *o = !*o)),
+        show_if(open, text("Your finished sessions appear here.").style(style! { color: #2d2a26; })),
     ))
 }
 ```
 
-An overlay has a different job. Use `overlay_host` for content that draws above the rest of the view. Bind an open flag and connect `.on_dismiss(...)` to close it when `.dismissible(true)` is set. For a Scene displaying gameplay, the Scene must also decide whether the raw input batch can reach gameplay. See [Scenes and input][scene-input-guide].
+Because the hidden child stays mounted, its own state survives: collapse the
+history and open it again, and the list is still there. When a child should
+start fresh each time it appears, or play an animation as it comes and goes,
+use `presence`, which you will meet in the next chapter.
 
-See the [state, children, and scope reference][state-reference] for ownership and keyed-list contracts.
+## What you learned
+
+- Create shared state in the closest common parent; pass read-only values as
+  parameters and writable ones with `#[model]`.
+- Store lists as `Rc<[T]>` in a signal and render them with `map_keyed`.
+- Use `map_keyed_prop` when items change while their keys stay the same.
+- `show_if` hides a child without losing its state.
+
+The [reactive runtime reference][state-reference] covers ownership, scopes,
+and keyed lists in detail.
 
 **Previous** [Your first window][getting-started-guide] · **Next** [Layout, paint, and motion][style-guide]
+
+[shot-guide-history]: ../images/guide-history.png
 
 [learn-index]: index.md
 [getting-started-guide]: first-step.md
 [style-guide]: style.md
-[scene-input-guide]: input.md
 [state-reference]: ../reference/state-children-and-scope.md

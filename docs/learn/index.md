@@ -1,20 +1,25 @@
 # Learn
 
-Follow the chapters in order, from the first window to a localized application. Each chapter links to the next one.
+This guide builds one small app from start to finish: **Focus**, a timer for
+focused work sessions. Each chapter adds one idea to the same project, so read
+them in order. Every chapter ends with a link to the next one.
 
-| Step | Chapter | What you build or practice |
+| Step | Chapter | What you add to Focus |
 | --- | --- | --- |
-| 1 | [Your first window][getting-started-guide] | Open a window and mount a view. |
-| 2 | [Reactive state and children][basics-guide] | Trace a signal write through a label and a retained child list. |
-| 3 | [Layout, paint, and motion][style-guide] | Arrange boxes, style labels, and animate a bound value. |
-| 4 | [Reusable views and custom nodes][components-guide] | Separate caller props, local state, and node hooks. |
-| 5 | [Shared appearance][themes-guide] | Share typed palette values across a subtree. |
-| 6 | [Screen navigation][scenes-guide] | Retain an editor under another screen and animate a stack change. |
-| 7 | [Input routing][scene-input-guide] | Connect controls and raw keyboard input to the same command. |
-| 8 | [Asynchronous work][tasks-guide] | Move file IO off the frame loop and publish results. |
-| 9 | [Localized interfaces][i18n-guide] | Bind messages to the locale and reactive arguments. |
+| 1 | [Your first window][getting-started-guide] | A window with a countdown and a Start button. |
+| 2 | [State and lists][basics-guide] | Shared state, a list of finished sessions, and a collapsible panel. |
+| 3 | [Layout, paint, and motion][style-guide] | A timer card with a progress ring, shadows, and animations. |
+| 4 | [Components][components-guide] | Reusable pieces with props, two-way values, events, and slots. |
+| 5 | [Themes][themes-guide] | Light and dark colors that every part of the app shares. |
+| 6 | [Screens][scenes-guide] | A settings screen that returns a new session length. |
+| 7 | [Keyboard and text input][scene-input-guide] | Shortcuts, focus, and a field for naming sessions. |
+| 8 | [Background work][tasks-guide] | Loading and saving the session history without freezing the window. |
+| 9 | [Localization][i18n-guide] | English and Chinese text that switches while the app runs. |
 
-Bring the chapters together in the [example app][release-checklist-guide].
+You need Rust 1.90 or newer. The [reference][guide-reference] describes every
+API in detail; the guide links to it where a topic goes deeper. When you finish,
+the [example app][release-checklist-guide] shows a larger program built the
+same way.
 
 [getting-started-guide]: first-step.md
 [basics-guide]: basics.md
@@ -25,4 +30,5 @@ Bring the chapters together in the [example app][release-checklist-guide].
 [scene-input-guide]: input.md
 [tasks-guide]: tasks.md
 [i18n-guide]: i18n.md
+[guide-reference]: ../reference/index.md
 [release-checklist-guide]: ../example-app.md
