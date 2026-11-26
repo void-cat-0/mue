@@ -4,6 +4,7 @@ The standalone examples package is excluded from the root workspace and its Rust
 
 - `style`: declaration syntax, transforms, transitions, and component composition;
 - `foundation`: borders, outlines, per-corner radii, vector `path` and `svg` nodes, grid layout, keyboard focus, teleported popovers and dialogs, offscreen filters, backdrop blur, a custom shader, and registered icons; set `MUE_CAPTURE=out.png` to save the third frame and exit;
+- `text-input`: single-line, password, number, and multiline inputs with IME composition, selection, clipboard, undo, input groups, and Vue-style model modifiers (see [Text input and IME](text-input.md));
 - `playground`: interactive layout, typography, graphics, input, application tokens, and style declarations;
 - `theme`: theme tokens, reactive button styles, hover, and light/dark switching;
 - [`tokens`](https://github.com/void-cat-0/mue/blob/main/examples/tokens/src/main.rs) demonstrates reactive application tokens in a complete app with a single dependency on `mue`.

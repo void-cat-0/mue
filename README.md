@@ -47,6 +47,7 @@ Run an example from the standalone examples package with Cargo, for example:
 ```sh
 cargo run --manifest-path examples/Cargo.toml --example basics
 cargo run --manifest-path examples/Cargo.toml --example foundation
+cargo run --manifest-path examples/Cargo.toml --example text-input
 cargo run --manifest-path examples/Cargo.toml --example scenes
 cargo run --manifest-path examples/Cargo.toml --example scene-flow
 cargo run --manifest-path examples/Cargo.toml --example scene-transitions
