@@ -6,6 +6,7 @@ mod capture;
 
 use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_components::prelude::*;
+use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     color::Color,
@@ -127,6 +128,26 @@ fn grid_row() -> impl Component {
         ))
 }
 
+fn focus_row() -> impl Component {
+    let presses = signal(0_u32);
+    let label =
+        presses.map(|n| format!("Tab / Shift+Tab between buttons; Enter or Space presses ({n})"));
+    hstack().style(style! { gap: 12px; }).children((
+        button("Primary")
+            .primary(true)
+            .on_activate(move || presses.set(presses.get() + 1)),
+        button("Secondary").on_activate(move || presses.set(presses.get() + 1)),
+        flexbox()
+            .focusable(true)
+            .focus_ring(2., Color::from_rgba(127, 209, 168, 255), 2.)
+            .cursor(Cursor::Text)
+            .style(style! { padding: 10px 14px; background: #222a3b; border-radius: 8px; })
+            .children(
+                text(label).style(style! { font-size: 14px; line-height: 20px; color: #c9d1e0; }),
+            ),
+    ))
+}
+
 fn ui() -> impl Component {
     stack()
         .style(style! { width: 100%; height: 100%; padding: 32px; gap: 32px; background: #161b26; })
@@ -135,6 +156,7 @@ fn ui() -> impl Component {
             paint_row(),
             vector_row(),
             grid_row(),
+            focus_row(),
         ))
 }
 
@@ -151,9 +173,14 @@ fn conf() -> Conf {
 async fn main() {
     let mut capture = capture::Capture::from_env();
     let mut app = App::new(ui());
+    let mut first = true;
     loop {
         clear_background(macroquad::color::BLACK);
         app.frame();
+        if std::mem::take(&mut first) && capture.enabled() {
+            // Show a keyboard focus ring in captured screenshots.
+            mue_macroquad::focus::move_focus(true);
+        }
         if capture.after_draw() {
             break;
         }

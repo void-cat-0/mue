@@ -173,8 +173,7 @@ angular boundary; feather only affects drawing. Import `Sector` from
 `variant(ButtonVariant::Ghost)` for other weights, `disabled(...)` and
 `loading(...)` with reactive values, and `on_activate(...)` for the action.
 The current overlay host is a single layer: stacking, enter/exit animation, and
-back priority are not implemented yet. IconButton and keyboard focus are also
-pending. Button colors are fixed for now; replacing them with application tokens
+back priority are not implemented yet. IconButton is also pending. Button colors are fixed for now; replacing them with application tokens
 is a follow-up.
 
 ## Vector paths and SVG

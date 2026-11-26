@@ -14,7 +14,6 @@ impl Capture {
         }
     }
 
-    #[allow(dead_code)]
     pub fn enabled(&self) -> bool {
         self.path.is_some()
     }

@@ -24,6 +24,9 @@ counts as interactive for hit testing even without pointer handlers.
 | `auto_focus(bool)` | Focus the node, or its first focusable descendant, each time it becomes displayed with a non-empty area. |
 | `on_focus`, `on_blur` | Receive a `FocusEvent` with the `FocusReason` and whether focus is visible. |
 
+`button` from `mue-components` is focusable, shows a focus ring for keyboard
+focus, and activates on Enter or Space.
+
 ## Tab order and focus scopes
 
 Tab moves focus forward and Shift+Tab backward, wrapping around, after the key

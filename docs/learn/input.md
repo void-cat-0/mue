@@ -39,7 +39,7 @@ fn save_button(requested: Signal<bool>) -> impl Component {
 Call `request_save_from_keys` from the active editor's `SceneEvent::Input` arm. Consume `requested` in `Scene::update`. The update should check whether the editor can save, since the keyboard path does not consult button state. A boolean request also merges a tap and a shortcut in one frame.
 ## Handle keys on a focused control
 
-Raw Scene input sees every key. When a key belongs to one control, make the control focusable and handle `on_key_down`: the event goes to the focused node and bubbles to its ancestors, and Tab moves focus between focusable nodes.
+Raw Scene input sees every key. When a key belongs to one control, make the control focusable and handle `on_key_down`: the event goes to the focused node and bubbles to its ancestors, and Tab moves focus between focusable nodes. `button` already activates on Enter and Space and shows a focus ring when reached by keyboard.
 
 ```rust
 use mue::{prelude::*, renderer::event::keyboard::KeyCode};
