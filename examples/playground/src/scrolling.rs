@@ -1,13 +1,38 @@
-use super::{controls::*, responsive};
+use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     math::Vector,
-    style::{Style, Styleable, vh, vw},
+    node::NodeHandle,
+    runtime::set_timeout,
+    style::{Styleable, StyleableExt},
 };
+use std::rc::Rc;
 
-pub fn page() -> Node {
-    let (axis, a) = choice(
+const PAGE: &str = "Scrolling";
+
+fn stripe(n: usize, wide: bool) -> Node {
+    center()
+        .style(mue_macroquad::style! {
+            flex: none;
+            height: {u(48.)};
+            border-radius: {u(8.)};
+            background: {if n.is_multiple_of(2) { BLUE } else { CORAL }};
+        })
+        .style(if wide {
+            mue_macroquad::style! { width: {u(900.)}; }
+        } else {
+            mue_macroquad::style! { width: 100%; }
+        })
+        .children(text(format!("Row {}", n + 1)).style(mue_macroquad::style! {
+            font-size: {f(15.)}; line-height: {u(22.)};
+            color: #131720;
+        }))
+        .into_node()
+}
+
+fn options_card() -> Node {
+    let (axis, axis_control) = segmented(
         "Axis",
         vec![
             ("Vertical", ScrollAxis::Vertical),
@@ -15,166 +40,298 @@ pub fn page() -> Node {
             ("Both", ScrollAxis::Both),
         ],
     );
-    let (touch, b) = toggle("Disable touch");
-    let (mouse, c) = toggle("Mouse drag");
-    let (wheel, d) = toggle("Disable wheel");
-    let (speed, e) = choice("Wheel speed", vec![("40", 40.), ("10", 10.), ("80", 80.)]);
-    let (threshold, f) = choice("Threshold", vec![("8", 8.), ("2", 2.), ("20", 20.)]);
-    let (lock, g) = toggle("Unlock axes");
-    let (momentum, h) = toggle("No momentum");
-    let (friction, i) = choice("Friction", vec![("8", 8.), ("3", 3.), ("16", 16.)]);
-    let (velocity, j) = choice(
-        "Max velocity",
-        vec![("6000", 6000.), ("800", 800.), ("2000", 2000.)],
-    );
-    let (chain, k) = toggle("Contain");
-    let (bars, l) = toggle("Hide bars");
+    let (friction, friction_control) =
+        segmented("Friction", vec![("Normal", 8.), ("Low", 3.), ("High", 16.)]);
+    let (touch, touch_control) = switch("Touch drag", true);
+    let (mouse, mouse_control) = switch("Mouse drag", false);
+    let (wheel, wheel_control) = switch("Wheel", true);
+    let (momentum, momentum_control) = switch("Momentum", true);
+    let (bars, bars_control) = switch("Scrollbars", true);
+    let (chain, chain_control) = switch("Chain to page", true);
     let offset = signal(Vector::ZERO);
-    let options = computed(move |_| {
+    let key = computed(move |_| {
         (
             axis.get(),
-            touch.get(),
-            mouse.get(),
-            wheel.get(),
-            speed.get(),
-            threshold.get(),
-            lock.get(),
-            momentum.get(),
             friction.get(),
-            velocity.get(),
-            chain.get(),
-            bars.get(),
+            [
+                touch.get(),
+                mouse.get(),
+                wheel.get(),
+                momentum.get(),
+                bars.get(),
+                chain.get(),
+            ],
         )
     });
-    // Options configure input recognizers at build time. A keyed revision replaces only this viewport.
-    let revision = signal(0u32);
-    watch(options, move |_| revision.update(|v| *v += 1));
-    let areas = keyed(revision, move |_| {
-        let (
-            axis,
-            touch,
-            mouse,
-            wheel,
-            speed,
-            threshold,
-            lock,
-            momentum,
-            friction,
-            velocity,
-            chain,
-            bars,
-        ) = options.get();
+    // Options configure input recognizers when the area is built.
+    let area = keyed(key, move |(axis, friction, flags)| {
+        let [touch, mouse_drag, wheel, momentum, scrollbars, chain] = *flags;
+        let wide = *axis != ScrollAxis::Vertical;
         scroll_area()
-            .style(mue_macroquad::style! {
-            height: {vh(38.75)};
-            width: 100%;
-            })
             .offset(offset)
-            .style(mue_macroquad::style! { background: {panel_brush()}; })
             .options(ScrollOptions {
-                axis,
-                touch: !touch,
-                mouse_drag: mouse,
-                wheel: !wheel,
-                wheel_speed: speed,
-                drag_threshold: threshold,
-                axis_lock: !lock,
-                momentum: !momentum,
-                friction,
-                max_velocity: velocity,
-                chain: !chain,
-                scrollbars: !bars,
+                axis: *axis,
+                friction: *friction,
+                touch,
+                mouse_drag,
+                wheel,
+                momentum,
+                scrollbars,
+                chain,
+                ..Default::default()
             })
-            .content_style(Style::new().style(mue_macroquad::style! {
-            gap: {vh(1.5)};
-            padding: {(vw(2.), vh(2.))};
-            }))
-            .children(
-                (0..20)
-                    .map(|n| {
-                        center()
-                            .style(mue_macroquad::style! {
-                            width: {responsive::ui(1200.)};
-                            height: {responsive::ui(54.)};
-                            flex: none;
-                            background: {if n % 2 == 0 { BLUE } else { CORAL }};
-                            })
-                            .children(text(format!("Row {n}")).style(mue_macroquad::style! {
-                            font-size: {responsive::font(22.)};
-                            line-height: {responsive::ui(32.)};
-                            }))
-                            .into_node()
-                    })
-                    .collect::<Vec<_>>(),
-            )
+            .style(mue_macroquad::style! {
+                width: 100%;
+                height: {u(240.)};
+                border-radius: {u(10.)};
+                background: {raised()};
+            })
+            .content_style(mue_macroquad::style! { gap: {u(8.)}; padding: {(u(12.),)}; })
+            .children((0..20).map(|n| stripe(n, wide)).collect::<Vec<_>>())
             .into_node()
     });
-    let page = signal(0usize);
-    let rows = map_keyed(
-        page.map(|p| (p * 5..p * 5 + 5).collect::<std::rc::Rc<[usize]>>()),
-        |n| *n,
-        |n| {
-            text(format!("Item {}", n + 1))
-                .style(mue_macroquad::style! {
-                font-size: {responsive::font(20.)};
-                line-height: {responsive::ui(28.)};
-                })
-                .into_node()
-        },
-    );
-    stack()
-        .style(mue_macroquad::style! {
-        width: 100%;
-        min-width: 0px;
-        gap: {vh(2.5)};
+    card(
+        "Scroll options",
+        "With chaining on, reaching the end of the box hands the gesture to the page.",
+        (
+            axis_control,
+            friction_control,
+            row((touch_control, mouse_control, wheel_control)),
+            row((momentum_control, bars_control, chain_control)),
+            area,
+            row((
+                button("Reset").on_activate(move || offset.set(Vector::ZERO)),
+                mono(offset.map(|v| Rc::<str>::from(format!("offset {:.0}, {:.0}", v.x, v.y)))),
+            )),
+        ),
+    )
+}
+
+fn handle_card() -> Node {
+    let list = ScrollAreaHandle::new();
+    let target = NodeHandle::new();
+    let (animated, animated_control) = switch("Animated", true);
+    let l = list.clone();
+    let top = move || l.scroll_to_top(animated.get_untracked());
+    let l = list.clone();
+    let end = move || l.scroll_to_end(animated.get_untracked());
+    let l = list.clone();
+    let down = move || l.scroll_by(Vector::new(0., 200.), animated.get_untracked());
+    let l = list.clone();
+    let reveal = move || {
+        if let Some(rect) = target.rect() {
+            l.scroll_into_view(rect, animated.get_untracked());
+        }
+    };
+    let rows = (0..40)
+        .map(|n| {
+            let row = stripe(n, false);
+            if n == 29 {
+                center()
+                    .node_handle(target)
+                    .style(mue_macroquad::style! {
+                        width: 100%; flex: none;
+                        height: {u(48.)};
+                        border-radius: {u(8.)};
+                        background: #7fd1a8;
+                    })
+                    .children(text("Row 30: the target").style(mue_macroquad::style! {
+                        font-size: {f(15.)}; line-height: {u(22.)};
+                        color: #131720;
+                    }))
+                    .into_node()
+            } else {
+                row
+            }
         })
-        .children((
-            controls(vec![a, b, c, d, e, f, g, h, i, j, k, l]),
-            areas,
-            wrap()
+        .collect::<Vec<_>>();
+    card(
+        "Scrolling from code",
+        "ScrollAreaHandle, like a Vue template ref with defineExpose.",
+        (
+            animated_control,
+            row((
+                button("Top").on_activate(top),
+                button("Down 200").on_activate(down),
+                button("Reveal row 30").on_activate(reveal),
+                button("End").on_activate(end),
+            )),
+            scroll_area()
+                .handle(list)
                 .style(mue_macroquad::style! {
-                width: 100%;
-                gap: {vw(1.)};
+                    width: 100%;
+                    height: {u(220.)};
+                    border-radius: {u(10.)};
+                    background: {raised()};
+                })
+                .content_style(mue_macroquad::style! { gap: {u(8.)}; padding: {(u(12.),)}; })
+                .children(rows),
+        ),
+    )
+}
+
+#[derive(Clone, PartialEq)]
+struct Mail {
+    id: u32,
+}
+
+fn feed_card() -> Node {
+    let next = signal(12u32);
+    let mails: Signal<Rc<[Mail]>> = signal((0..12).map(|id| Mail { id }).collect());
+    let refreshing = signal(false);
+    let loading = signal(false);
+    let status = signal(String::from(
+        "Pull down to refresh, scroll to the end to load more",
+    ));
+    let row_view = move |mail: &Mail| {
+        let id = mail.id;
+        let remove = move || {
+            let list: Rc<[Mail]> = mails
+                .get_clone_untracked()
+                .iter()
+                .filter(|m| m.id != id)
+                .cloned()
+                .collect();
+            mails.set(list);
+            log_event(format!("message {id} deleted"));
+        };
+        swipe_actions(
+            stack()
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    padding: {(u(14.), u(10.))};
+                    gap: {u(2.)};
+                    background: {panel_brush()};
+                    border-bottom-width: 1px;
+                    border-color: {border()};
                 })
                 .children((
-                    demo_button("Reset", move || offset.set(Vector::ZERO)),
-                    text(offset.map(|v| format!("{:.0}, {:.0}", v.x, v.y))).style(
-                        mue_macroquad::style! {
-                        font-size: {responsive::font(18.)};
-                        line-height: {responsive::ui(28.)};
-                        },
-                    ),
+                    text(format!("Message {id}")).style(mue_macroquad::style! {
+                        font-size: {f(15.)}; line-height: {u(21.)};
+                        color: {foreground()};
+                    }),
+                    hint("Swipe left to delete, right to archive"),
                 )),
-            section(
-                "Pagination",
-                stack().children((
-                    list()
-                        .style(mue_macroquad::style! {
-                        font-size: {responsive::font(20.)};
-                        line-height: {responsive::ui(28.)};
-                        gap: {responsive::ui(8.)};
-                        })
-                        .children(rows),
-                    wrap()
-                        .style(mue_macroquad::style! {
-                        width: 100%;
-                        gap: {vw(1.)};
-                        })
-                        .children((
-                            demo_button("Previous", move || {
-                                page.update(|p| *p = p.saturating_sub(1))
-                            }),
-                            text(page.map(|p| format!("{} / 8", p + 1)))
-                                .style(
-                                    mue_macroquad::style! { font-size: {responsive::font(18.)}; },
-                                )
-                                .style(
-                                    mue_macroquad::style! { line-height: {responsive::ui(28.)}; },
-                                ),
-                            demo_button("Next", move || page.update(|p| *p = (*p + 1).min(7))),
-                        )),
-                )),
+        )
+        .leading(
+            button("Archive")
+                .style(mue_macroquad::style! { border-radius: 0px; min-width: {u(88.)}; background: #2d6cdf; })
+                .on_activate(move || log_event(format!("message {id} archived"))),
+        )
+        .trailing(
+            button("Delete")
+                .style(mue_macroquad::style! { border-radius: 0px; min-width: {u(88.)}; background: #c0392b; })
+                .on_activate(remove),
+        )
+        .on_full_swipe_trailing(remove)
+        .mouse(true)
+    };
+    card(
+        "Pull to refresh, load more, swipe actions",
+        "Drag down past the top to refresh. Rows reveal actions when swiped; a long swipe deletes. Mouse drags work too.",
+        (
+            mono(status.map(|text| Rc::<str>::from(text.as_str()))),
+            scroll_area()
+                .options(ScrollOptions {
+                    mouse_drag: true,
+                    ..Default::default()
+                })
+                .on_refresh(refreshing, move || {
+                    status.set("Refreshing…".into());
+                    set_timeout(1.0, move || {
+                        let first = next.get_untracked();
+                        next.set(first + 2);
+                        let mut list: Vec<Mail> =
+                            (first..first + 2).map(|id| Mail { id }).collect();
+                        list.extend(mails.get_clone_untracked().iter().cloned());
+                        mails.set(list.into());
+                        refreshing.set(false);
+                        status.set("Refreshed: two new messages".into());
+                    });
+                })
+                .on_reach_end(120., move || {
+                    if loading.get_untracked() {
+                        return;
+                    }
+                    loading.set(true);
+                    status.set("Loading more…".into());
+                    set_timeout(0.6, move || {
+                        let first = next.get_untracked();
+                        next.set(first + 6);
+                        let mut list = mails.get_clone_untracked().to_vec();
+                        list.extend((first..first + 6).map(|id| Mail { id }));
+                        mails.set(list.into());
+                        loading.set(false);
+                        status.set(format!("{} messages", mails.get_clone_untracked().len()));
+                    });
+                })
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    height: {u(320.)};
+                    border-radius: {u(10.)};
+                    background: {raised()};
+                })
+                .children(map_keyed(mails, |mail| mail.id, row_view)),
+        ),
+    )
+}
+
+fn nested_card() -> Node {
+    let card_view = |n: usize| {
+        center()
+            .style(mue_macroquad::style! {
+                flex: none;
+                width: {u(150.)};
+                height: {u(100.)};
+                border-radius: {u(10.)};
+                background: {if n.is_multiple_of(2) { BLUE } else { CORAL }};
+            })
+            .children(
+                text(format!("Card {}", n + 1)).style(mue_macroquad::style! {
+                    font-size: {f(15.)}; line-height: {u(22.)};
+                    color: #131720;
+                }),
+            )
+            .into_node()
+    };
+    card(
+        "Nested scrolling",
+        "A horizontal carousel inside the vertically scrolling page. Horizontal drags move the carousel, vertical drags move the page.",
+        scroll_area()
+            .axis(ScrollAxis::Horizontal)
+            .options(ScrollOptions {
+                axis: ScrollAxis::Horizontal,
+                mouse_drag: true,
+                scrollbars: false,
+                ..Default::default()
+            })
+            .style(mue_macroquad::style! { width: 100%; height: {u(116.)}; })
+            .content_style(mue_macroquad::style! { gap: {u(10.)}; padding: {(u(0.), u(8.))}; })
+            .children((0..12).map(card_view).collect::<Vec<_>>()),
+    )
+}
+
+pub fn page() -> Node {
+    page_body(
+        "Scroll physics and options, scrolling from code, mobile list patterns, and nested scroll areas.",
+        (
+            options_card(),
+            handle_card(),
+            feed_card(),
+            nested_card(),
+            card("Events", "", event_log()),
+            checklist(
+                PAGE,
+                &[
+                    "Touch and wheel scrolling feel natural, with momentum",
+                    "Chaining hands the gesture to the page at the end of the box",
+                    "Scroll handle buttons move to the right place",
+                    "Pull to refresh shows the indicator and adds two rows",
+                    "Reaching the end loads more rows once per load",
+                    "Swipe actions open, close, and delete; only one row is open at a time",
+                    "The carousel scrolls sideways without moving the page",
+                ],
             ),
-        ))
-        .into_node()
+        ),
+    )
 }

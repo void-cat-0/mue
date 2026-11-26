@@ -1,132 +1,244 @@
-use super::{controls::*, responsive};
+use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
+    presence::{PresenceAnimation, presence},
     shader::Brush,
-    style::{Styleable, Transform, TransformOp, percent, vh, vw},
+    style::{Size, Styleable, Transform, TransformOp},
     transition::Transition,
+    transition_group::transition_group,
 };
+use std::rc::Rc;
 
-pub fn page() -> Node {
-    let (w, a) = toggle("Width");
-    let (h, b) = toggle("Height");
-    let (radius, c) = toggle("Radius");
-    let (padding, d) = toggle("Padding");
-    let (margin, e) = toggle("Margin");
-    let (opacity, f) = toggle("Opacity");
-    let (color, g) = toggle("Color");
-    let (font, hc) = toggle("Font size");
-    let (leading, i) = toggle("Line height");
-    let (gap, j) = toggle("Gap");
-    let (x, k) = choice(
-        "X",
-        vec![
-            ("0%", percent(0.)),
-            ("6%", percent(6.)),
-            ("-6%", percent(-6.)),
-        ],
-    );
-    let (y, l) = choice(
-        "Y",
-        vec![
-            ("0%", percent(0.)),
-            ("6%", percent(6.)),
-            ("-6%", percent(-6.)),
-        ],
-    );
-    let (rotate_z, m) = choice(
-        "Rotate Z",
-        vec![("0°", 0.), ("7°", 0.12), ("-7°", -0.12), ("18°", 0.31)],
-    );
-    let (scale_x, n) = choice(
-        "Scale X",
-        vec![("100%", 1.), ("115%", 1.15), ("85%", 0.85), ("130%", 1.3)],
-    );
-    let (scale_y, sy) = choice(
-        "Scale Y",
-        vec![("100%", 1.), ("115%", 1.15), ("85%", 0.85), ("130%", 1.3)],
-    );
-    let (rotate_x, rx) = choice("Rotate X", vec![("0°", 0.), ("12°", 0.21), ("-12°", -0.21)]);
-    let (rotate_y, ry) = choice("Rotate Y", vec![("0°", 0.), ("18°", 0.31), ("-18°", -0.31)]);
-    let (translate_z, tz) = choice(
-        "Translate Z",
-        vec![("0px", 0.), ("16px", 16.), ("-12px", -12.)],
-    );
-    let (scale_z, sz) = choice("Scale Z", vec![("1", 1.), ("0.8", 0.8), ("1.2", 1.2)]);
-    let (perspective, ps) = choice(
-        "Perspective",
-        vec![("900px", 900.), ("520px", 520.), ("1400px", 1400.)],
-    );
-    let (letter, o) = toggle("Letter spacing");
-    let (curve, p) = choice(
+const PAGE: &str = "Motion";
+
+fn transitions_card() -> Node {
+    let (curve, curve_control) = segmented(
         "Curve",
         vec![
             ("Spring", Transition::spring(0.65, 0.3)),
-            ("Soft", Transition::spring(0.9, 0.)),
-            ("Bounce", Transition::spring(0.8, 0.65)),
-            ("Linear", Transition::linear(0.6)),
+            ("Bouncy", Transition::spring(0.8, 0.65)),
             ("Ease", Transition::ease_in_out(0.6)),
+            ("Linear", Transition::linear(0.6)),
+            ("Instant", Transition::Instant),
         ],
     );
-    stack()
-        .style(mue_macroquad::style! {
-width: 100%;
-min-width: 0px;
-gap: {vh(3.)};
-})
-        .children((
-            controls(vec![a, b, c, d, e, f, g, hc, i, j, k, l, m, n, sy, rx, ry, tz, sz, ps, o, p]),
+    let (big, big_control) = switch("Size", false);
+    let (round, round_control) = switch("Radius", false);
+    let (warm, warm_control) = switch("Color", false);
+    let (faded, faded_control) = switch("Opacity", false);
+    let (moved, moved_control) = switch("Translate", false);
+    let (turned, turned_control) = switch("Rotate", false);
+    let (tilted, tilted_control) = switch("3D tilt", false);
+    let transform = computed(move |_| {
+        Transform(vec![
+            TransformOp::Perspective(700.),
+            TransformOp::Translate(Size::Px(if moved.get() { 60. } else { 0. }), Size::Px(0.)),
+            TransformOp::RotateX(if tilted.get() { 0.5 } else { 0. }),
+            TransformOp::RotateY(if tilted.get() { -0.4 } else { 0. }),
+            TransformOp::Rotate(if turned.get() { 0.4 } else { 0. }),
+        ])
+    });
+    card(
+        "Property transitions",
+        "Flip any switch; the box animates from its current value, even mid-animation.",
+        (
+            curve_control,
+            row((big_control, round_control, warm_control, faded_control)),
+            row((moved_control, turned_control, tilted_control)),
+            center()
+                .style(mue_macroquad::style! { width: 100%; height: {u(240.)}; })
+                .children(
+                    center()
+                        .style(mue_macroquad::style! {
+                            width: {super::responsive::ui(big.select(220., 140.))};
+                            height: {super::responsive::ui(big.select(150., 96.))};
+                            border-radius: {round.select(60., 10.)};
+                            background: {warm.select(Brush::Solid(CORAL), Brush::Solid(BLUE))};
+                            opacity: {faded.select(0.35, 1.)};
+                            transform: {transform};
+                            transition: {curve};
+                        })
+                        .children(text("mue").style(mue_macroquad::style! {
+                            font-size: {f(22.)}; line-height: {u(30.)};
+                            font-weight: 700;
+                            color: #131720;
+                        })),
+                ),
+        ),
+    )
+}
+
+fn presence_card() -> Node {
+    let (animation, animation_control) = segmented(
+        "Animation",
+        vec![
+            ("Fade", PresenceAnimation::fade()),
+            ("Scale", PresenceAnimation::fade().scale(0.85)),
+            ("Slide", PresenceAnimation::fade().slide(0., 24.)),
+            ("None", PresenceAnimation::none()),
+        ],
+    );
+    let shown = signal(true);
+    let panel = keyed(animation, move |animation| {
+        presence(shown, || {
             center()
                 .style(mue_macroquad::style! {
-width: 100%;
-height: {vh(52.5)};
-min-height: {responsive::ui(220.)};
-})
+                    width: 100%;
+                    height: {u(72.)};
+                    padding: {(u(12.),)};
+                    border-radius: {u(10.)};
+                    background: {BLUE};
+                })
                 .children(
-                    stack()
-                        .style(mue_macroquad::style! {
-min-width: 0px;
-width: {w.select(percent(65.), percent(40.))};
-height: {h.select(vh(37.5), vh(21.25))};
-min-height: {responsive::ui(140.)};
-border-radius: {radius.select(70., 12.)};
-padding: {(
-                            padding.select(vw(4.), vw(1.5)),
-                            padding.select(vh(4.), vh(1.5)),
-                        )};
-margin: {(margin.select(vw(3.), vw(0.)), margin.select(vh(3.), vh(0.)))};
-opacity: {opacity.select(0.35, 1.)};
-background: {color.select(Brush::Solid(CORAL), Brush::Solid(BLUE))};
-left: {x};
-top: {y};
-gap: {gap.select(vh(3.5), vh(1.))};
-transition: {curve};
-transform: {computed(move |_| {
-                            Transform(vec![
-                                TransformOp::Perspective(perspective.get()),
-                                TransformOp::RotateX(rotate_x.get()),
-                                TransformOp::RotateY(rotate_y.get()),
-                                TransformOp::TranslateZ(translate_z.get()),
-                                TransformOp::Scale3d(scale_x.get(), scale_y.get(), scale_z.get()),
-                                TransformOp::Rotate(rotate_z.get()),
-                            ])
-                        })};
-})
-                        .children((
-                            heading("Spring")
-                                .style(mue_macroquad::style! {
-font-size: {responsive::font(font.select(42., 26.))};
-line-height: {responsive::ui(leading.select(64., 38.))};
-letter-spacing: {responsive::ui(letter.select(3., 0.))};
-transition: {SPRING};
-}),
-                            text("Retarget any property")
-                                .style(mue_macroquad::style! {
-font-size: {responsive::font(18.)};
-line-height: {responsive::ui(28.)};
-}),
-                        )),
-                ),
-        ))
+                    text("Mounted while shown, unmounted after the exit animation").style(
+                        mue_macroquad::style! {
+                            font-size: {f(14.)}; line-height: {u(20.)};
+                            color: #131720;
+                            text-align: center;
+                        },
+                    ),
+                )
+        })
+        .animation(*animation)
+        .style(mue_macroquad::style! { width: 100%; })
         .into_node()
+    });
+    card(
+        "Presence (enter and exit)",
+        "Like Vue's <Transition>: content animates in when shown and out before it is removed.",
+        (
+            animation_control,
+            row((
+                button(shown.map(|on| Rc::<str>::from(if on { "Hide" } else { "Show" })))
+                    .primary(true)
+                    .on_activate(move || shown.toggle()),
+            )),
+            flexbox()
+                .style(mue_macroquad::style! { width: 100%; min-height: {u(72.)}; })
+                .children(panel),
+        ),
+    )
+}
+
+#[derive(Clone, PartialEq)]
+struct Item {
+    id: u32,
+    hue: u8,
+}
+
+fn list_card() -> Node {
+    let next = signal(5u32);
+    let items: Signal<Rc<[Item]>> = signal(
+        (0..5)
+            .map(|id| Item {
+                id,
+                hue: (id * 47 % 255) as u8,
+            })
+            .collect(),
+    );
+    let seed = signal(1u32);
+    let random = move |bound: usize| {
+        let mut x = seed.get_untracked();
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        seed.set(x);
+        x as usize % bound.max(1)
+    };
+    let add = move || {
+        let id = next.get_untracked();
+        next.set(id + 1);
+        let mut list = items.get_clone_untracked().to_vec();
+        let at = random(list.len() + 1);
+        list.insert(
+            at,
+            Item {
+                id,
+                hue: (id * 47 % 255) as u8,
+            },
+        );
+        items.set(list.into());
+    };
+    let remove = move || {
+        let mut list = items.get_clone_untracked().to_vec();
+        if !list.is_empty() {
+            list.remove(random(list.len()));
+            items.set(list.into());
+        }
+    };
+    let shuffle = move || {
+        let mut list = items.get_clone_untracked().to_vec();
+        for i in (1..list.len()).rev() {
+            list.swap(i, random(i + 1));
+        }
+        items.set(list.into());
+    };
+    let sort = move || {
+        let mut list = items.get_clone_untracked().to_vec();
+        list.sort_by_key(|item| item.id);
+        items.set(list.into());
+    };
+    let group = transition_group(
+        items,
+        |item: &Item| item.id,
+        |item: &Item| {
+            let tone = item.hue;
+            hstack()
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    padding: {(u(12.), u(8.))};
+                    gap: {u(10.)};
+                    border-radius: {u(8.)};
+                    background: {raised()};
+                    align-items: center;
+                })
+                .children((
+                    flexbox().style(mue_macroquad::style! {
+                        width: {u(14.)}; height: {u(14.)};
+                        border-radius: 9999px;
+                        background: {mue_macroquad::color::Color::from_rgba(120 + tone / 2, 140, 255 - tone / 2, 255)};
+                    }),
+                    text(format!("Item #{}", item.id)).style(mue_macroquad::style! {
+                        font-size: {f(14.)}; line-height: {u(20.)};
+                        color: {foreground()};
+                    }),
+                ))
+        },
+    )
+    .animation(PresenceAnimation::fade().slide(-16., 0.))
+    .style(mue_macroquad::style! { width: 100%; gap: {u(6.)}; flex-direction: column; });
+    card(
+        "Animated list",
+        "Like Vue's <TransitionGroup>: new items fade in, removed items fade out, and the rest slide to their new places.",
+        (
+            row((
+                button("Add").primary(true).on_activate(add),
+                button("Remove").on_activate(remove),
+                button("Shuffle").on_activate(shuffle),
+                button("Sort").on_activate(sort),
+            )),
+            group,
+        ),
+    )
+}
+
+pub fn page() -> Node {
+    page_body(
+        "Property transitions, enter and exit animations, and keyed list animations.",
+        (
+            transitions_card(),
+            presence_card(),
+            list_card(),
+            checklist(
+                PAGE,
+                &[
+                    "Transitions retarget smoothly when switched mid-animation",
+                    "Presence plays both the enter and the exit animation",
+                    "List items slide into place after add, remove, and shuffle",
+                    "Animations stay smooth (see FPS in the top bar)",
+                ],
+            ),
+        ),
+    )
 }
