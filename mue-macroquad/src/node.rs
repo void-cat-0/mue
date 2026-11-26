@@ -179,6 +179,12 @@ pub struct NodeRef {
     _thread_affinity: PhantomData<Rc<()>>,
 }
 
+impl std::fmt::Debug for NodeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NodeRef({:?})", self.id.data())
+    }
+}
+
 impl NodeRef {
     /// Observe an already enabled live node without allocating or retaining it.
     pub fn hovered(&self) -> Option<ReadSignal<bool>> {
@@ -593,6 +599,37 @@ pub fn add_gesture(gesture: impl crate::gesture::Gesture + 'static) {
 }
 
 impl NodeRef {
+    /// Whether the node is still alive.
+    pub fn is_live(&self) -> bool {
+        Runtime::try_with(|rt| rt.nodes.borrow().contains_key(self.id)).unwrap_or(false)
+    }
+
+    /// The node's absolute logical-pixel bounds, published by layout preparation.
+    /// `None` for disposed nodes and nodes without layout.
+    pub fn rect(&self) -> Option<ReadSignal<Rect>> {
+        Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .map(|node| *node.layout.rect)
+                .filter(|rect| !rect.is_null())
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// The node's resolved font size in logical pixels, after layout preparation.
+    pub fn font_size(&self) -> Option<f32> {
+        Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .and_then(|node| node.computed_font_size.try_get_untracked())
+        })
+        .ok()
+        .flatten()
+    }
+
     pub fn layout_id(&self) -> Option<taffy::NodeId> {
         Runtime::with(|rt| rt.node(self.id).layout_id)
     }

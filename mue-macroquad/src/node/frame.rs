@@ -112,10 +112,6 @@ impl NodeRef {
         panic!("layout dependencies did not stabilize before rendering");
     }
 
-    fn is_live(&self) -> bool {
-        Runtime::with(|rt| rt.nodes.borrow().contains_key(self.id))
-    }
-
     fn layout_roots(&self) -> Vec<taffy::NodeId> {
         let mut roots = Vec::new();
         self.collect_layout_roots(&mut roots);
