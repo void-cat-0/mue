@@ -183,7 +183,9 @@ impl<N: IntoNode + 'static> BuildNode for LayerHostBuilder<N> {
             set_children(children);
             use_container(style);
             host.rect.set(Some(crate::node::use_rect()));
+            // Render offscreen while any backdrop-blurred node needs a source.
             crate::node::NodeInner::with_mut(|node| {
+                node.offscreen = Some(crate::offscreen::OffscreenState::backdrop_root());
                 // The wrapped content stays the root for `rem` units.
                 node.font_root_transparent = true;
             });

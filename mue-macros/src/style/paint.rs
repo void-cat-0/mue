@@ -50,6 +50,25 @@ pub(super) fn declaration(
             length(input, host, false, false, true, false)?,
         ),
         "border" | "outline" => line_shorthand(name, input, host)?,
+        "backdrop-filter" => {
+            let ty = quote!(#host::style::Size);
+            let value = if let Some(expr) = expression_with_token(input, &ty)? {
+                expr
+            } else if input.peek(Ident) && input.fork().parse::<Ident>()? == "none" {
+                input.parse::<Ident>()?;
+                quote!(#host::style::Size::Px(0.))
+            } else {
+                keyword(input, &["blur"])?;
+                let args;
+                parenthesized!(args in input);
+                let value = length(&args, host, false, false, false, false)?;
+                if !args.is_empty() {
+                    return Err(args.error("blur() takes one length"));
+                }
+                value
+            };
+            setter("backdrop_blur", value)
+        }
         "cursor" => {
             let ty = quote!(#host::cursor::Cursor);
             let value = if let Some(value) = token(input, &ty)? {

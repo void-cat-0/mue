@@ -75,6 +75,7 @@ pub mod layout;
 pub mod material;
 pub mod math;
 pub mod node;
+pub mod offscreen;
 pub mod paint;
 pub mod path;
 pub mod presence;

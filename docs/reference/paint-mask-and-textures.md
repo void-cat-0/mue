@@ -5,6 +5,7 @@
 - [Choose when to build geometry](#choose-when-to-build-geometry)
 - [Background paint and shadows](#background-paint-and-shadows)
 - [Vector paths and SVG](#vector-paths-and-svg)
+- [Offscreen layers and backdrop blur](#offscreen-layers-and-backdrop-blur)
 - [Custom shaders](#custom-shaders)
 - [Textures](#textures)
 
@@ -215,6 +216,48 @@ gradients, `use`, masks, filters, and CSS selectors are ignored: a
 nothing; `inherit` and unknown paints keep the inherited paint. The `svg(doc)`
 node draws a document with the same fitting and measuring rules as `path`;
 `currentColor` follows the node's foreground `color`.
+
+## Offscreen layers and backdrop blur
+
+`mue_macroquad::offscreen::offscreen()` is a flex container whose subtree is
+rendered into a window-sized render target and composited once. Its `opacity`
+applies to the composited result (true group opacity: overlapping children do
+not show through each other), and `filter(..)` adds whole-layer effects:
+
+| `Filter` | Effect |
+| --- | --- |
+| `Blur(px)` | Gaussian-like blur; large radii run at half or quarter resolution |
+| `Grayscale(amount)` | 0 keeps colors, 1 is fully gray |
+| `Brightness(factor)` | Multiplies color |
+| `Custom(Rc<UiMaterial>)` | Composite with your fragment shader, which samples `Texture` at `v_uv` and receives `u_opacity` |
+
+Content keeps its screen position; ancestor transforms and clips still apply.
+`filters(prop)` replaces the list reactively.
+
+`backdrop_blur(px)` (`backdrop-filter: blur(12px)` in `style!`) blurs what was
+drawn behind a node, inside the nearest offscreen ancestor, before the node's
+background draws on top, following its corner radii (frosted glass). A layer
+host, and therefore every `App::new` root, becomes that ancestor automatically
+while at least one backdrop-blurred node exists. Give the root an opaque
+background so there is something to sample.
+
+```rust
+use mue::{prelude::*, renderer::offscreen::{Filter, offscreen}};
+
+let disabled_group = offscreen().opacity(0.6).filter(Filter::Grayscale(1.));
+let glass = flexbox().style(style! {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    backdrop-filter: blur(12px);
+});
+```
+
+Each active layer costs a full-window render target (pooled) and one composite;
+blur adds two passes. Offscreen rendering uses OpenGL; on other backends the
+subtree draws directly and backdrop blur draws nothing. Content is drawn into a
+transparent target with the default blending, so alpha is reconstructed when
+compositing; one level of translucency is exact, stacked translucency inside
+one layer is approximate.
 
 ## Custom shaders
 

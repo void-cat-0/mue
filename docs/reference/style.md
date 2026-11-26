@@ -112,6 +112,7 @@ let banner = flexbox().style(style! { grid-column: 1 / -1; });
 | `outline-width`, `outline-color`, `outline-offset` | Outline width, paint, and distance from the border box (offset may be negative) |
 | `outline` | `none`, or a width, an optional `solid`, and a color: `outline: 2px #7fd1a8` |
 | `opacity` | A fraction or percentage clamped into `0..=1` by the literal parser, or `{f32}` |
+| `backdrop-filter` | `blur(Npx)`, `none`, or `{Size}`; blurs what is behind the node ([rendering][paint-reference]) |
 | `cursor` | `auto`, `default`, `pointer`, `text`, `crosshair`, `move`, `not-allowed`, `wait`, `help`, `ew-resize`, `ns-resize`, `nesw-resize`, `nwse-resize`, or `{Cursor}`; see [cursors][focus-reference] |
 
 Radii follow CSS: one value sets all corners, two set top-left/bottom-right and top-right/bottom-left, three set top-left, top-right/bottom-left, and bottom-right. Radii that would overlap along a side are scaled down together, so `border-radius: 9999px` makes a pill or circle. The border is painted inside the border box with the same radii; inner corners shrink by the adjacent widths. The outline draws outside the border box after the node's children, is not clipped by the node's own clip, and does not take part in layout or hit testing. Only solid lines are supported. In Rust, `StyleableExt::radius` sets all corners and `radius_top`, `radius_bottom`, `radius_left`, and `radius_right` set two; `border_all(width, brush)` and `outline(width, brush, offset)` combine the related setters.

@@ -13,7 +13,8 @@ use mue_macroquad::{
     color::Color,
     layer::{Layer, teleport},
     math::{Rect, Vector, vec2},
-    node::NodeHandle,
+    node::{NodeHandle, shader_box},
+    offscreen::{Filter, offscreen},
     presence::{PresenceAnimation, presence},
     shader::linear_gradient,
 };
@@ -210,6 +211,90 @@ fn layers_row(menu_open: bool) -> impl Component {
     ))
 }
 
+const STRIPES: &str = r#"#version 100
+precision mediump float;
+varying highp vec2 v_pos;
+varying lowp vec4 v_color;
+uniform float u_time;
+uniform vec4 u_rect;
+void main() {
+    // Diagonal stripes sliding over time.
+    float w = (v_pos.x - u_rect.x) * 0.79 + (v_pos.y - u_rect.y) * 0.61 - u_time * 12.0;
+    float band = step(mod(w, 14.0), 8.0);
+    gl_FragColor = vec4(v_color.rgb, v_color.a * (0.06 + 0.10 * band));
+}
+"#;
+
+fn pair() -> impl Component {
+    let dot = |color: &'static str, left: f32| {
+        flexbox()
+            .absolute()
+            .inset_left(left)
+            .inset_top(8.)
+            .width(48.)
+            .height(48.)
+            .radius(24.)
+            .background(match color {
+                "a" => Color::from_rgba(239, 146, 90, 255),
+                _ => Color::from_rgba(111, 168, 255, 255),
+            })
+    };
+    flexbox()
+        .relative()
+        .width(96.)
+        .height(64.)
+        .children((dot("a", 8.), dot("b", 40.)))
+}
+
+fn effects_row() -> impl Component {
+    let stripes = mue_macroquad::UiMaterial::new(STRIPES, Vec::new(), Vec::new()).expect("stripes");
+    let backdrop = flexbox().relative().width(220.).height(96.).children((
+        flexbox().absolute().inset_left(0.).inset_top(0.).width(80.).height(80.).radius(40.)
+            .background(Color::from_rgba(239, 146, 90, 255)),
+        flexbox().absolute().inset_left(120.).inset_top(16.).width(90.).height(70.).radius(12.)
+            .background(Color::from_rgba(111, 168, 255, 255)),
+        text("GLASS").style(style! { position: absolute; left: 60px; top: 30px; font-size: 26px; line-height: 30px; color: #ffd36e; }),
+        center()
+            .style(style! {
+                position: absolute; left: 36px; top: 20px; width: 150px; height: 56px;
+                border-radius: 14px; background: rgba(255, 255, 255, 0.14);
+                border: 1px solid rgba(255, 255, 255, 0.35);
+            })
+            .backdrop_blur(10.)
+            .children(text("backdrop blur").style(style! { font-size: 14px; line-height: 18px; color: #ffffff; })),
+    ));
+    hstack()
+        .style(style! { gap: 28px; align-items: start; })
+        .children((
+        swatch_node("opacity 0.5", pair().opacity(0.5)),
+        swatch_node("group opacity", offscreen().opacity(0.5).children(pair())),
+        swatch_node(
+            "blur(4)",
+            offscreen().filter(Filter::Blur(4.)).children(pair()),
+        ),
+        swatch_node(
+            "grayscale",
+            offscreen().filter(Filter::Grayscale(1.)).children(pair()),
+        ),
+        swatch_node(
+            "shader_box",
+            shader_box(stripes).style(style! {
+                width: 96px; height: 64px; border-radius: 10px; background: #26304a; color: #ffffff;
+            }),
+        ),
+        backdrop,
+    ))
+}
+
+fn swatch_node(label: &'static str, content: impl IntoNode + 'static) -> impl Component {
+    stack()
+        .style(style! { align-items: center; gap: 8px; })
+        .children((
+            content.into_node(),
+            text(label).style(style! { font-size: 14px; line-height: 18px; color: #c9d1e0; }),
+        ))
+}
+
 fn ui(capture: bool) -> impl Component {
     stack()
         .style(style! { width: 100%; height: 100%; padding: 32px; gap: 32px; background: #161b26; })
@@ -219,6 +304,7 @@ fn ui(capture: bool) -> impl Component {
             vector_row(),
             grid_row(),
             focus_row(),
+            effects_row(),
             layers_row(capture),
         ))
 }

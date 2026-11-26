@@ -831,6 +831,10 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let outline_color = style.take_outline_color();
     let shadow = style.take_shadow();
     let shadow_cache = style.take_shadow_cache();
+    let backdrop_blur =
+        crate::style::units::resolve_length(style.take_backdrop_blur(), "backdrop-blur");
+    let backdrop = (!matches!(backdrop_blur, Prop::Static(blur) if blur <= 0.))
+        .then(crate::offscreen::backdrop_user);
     let mut shadow_mask = crate::shadow::ShadowMaskState::default();
     let paint = use_paint(style);
     let border = crate::node::NodeInner::with_mut(|node| *node.layout.border);
@@ -903,6 +907,28 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
             crate::shadow::draw_shadow(&paint, rect, shadow, shadow_cache.get(), &mut shadow_mask);
         } else {
             shadow_mask.reset();
+        }
+        if backdrop.is_some() {
+            let blur = backdrop_blur.get();
+            if blur > 0. {
+                let radii = radii.get().fit(rect);
+                crate::offscreen::draw_backdrop(blur, |texture| {
+                    let texture = SharedTexture::from(texture.clone());
+                    paint.draw(|p| {
+                        let shader = crate::shader::TextureShader::new(
+                            texture,
+                            Rect::new(0., 0., 1., 1.),
+                            rect,
+                            crate::color::Color::WHITE,
+                        );
+                        if radii.is_zero() {
+                            p.fill_rect(rect, shader);
+                        } else {
+                            p.fill_rounded_rect(rect, radii, shader);
+                        }
+                    });
+                });
+            }
         }
         // Keep submission on the immediate path so neighboring backgrounds can batch.
         if let Some(shapes) = shapes {

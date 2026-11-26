@@ -73,6 +73,7 @@ pub(crate) struct NodeInner {
     pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
     pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
     pub(crate) z_index: Option<Prop<i32>>,
+    pub(crate) offscreen: Option<Rc<crate::offscreen::OffscreenState>>,
     /// Wrapper nodes (layer hosts) that must not become the `rem` root.
     pub(crate) font_root_transparent: bool,
     node_handles: Vec<NodeHandle>,
@@ -155,6 +156,7 @@ impl NodeInner {
             focus: None,
             cursor: None,
             z_index: None,
+            offscreen: None,
             font_root_transparent: false,
             node_handles: Vec::new(),
             child_offset: None,
@@ -267,15 +269,18 @@ impl NodeRef {
     fn render_inner(&self) {
         // Keep the per-level call chain short: debug builds recurse once per
         // tree level and the main thread's stack is small on some platforms.
-        let Some(transform) = Runtime::with(|rt| {
+        let Some((transform, offscreen)) = Runtime::with(|rt| {
             let nodes = rt.nodes.borrow();
             let node = nodes.get(self.id)?;
-            Some(node.transform())
+            Some((node.transform(), node.offscreen.clone()))
         }) else {
             return;
         };
         let transform = transform.resolve();
-        crate::paint::with_transform(transform, || self.render_content());
+        crate::paint::with_transform(transform, || match &offscreen {
+            Some(state) => crate::offscreen::render(state, || self.render_content()),
+            None => self.render_content(),
+        });
     }
 
     /// Draw this node and its subtree under its clips, then its post-clip hooks.

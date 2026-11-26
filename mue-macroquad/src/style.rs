@@ -144,6 +144,9 @@ define_style! {
     /// new masks require stable parameters, and Auto also requires substantial recent coverage.
     /// Currently native OpenGL only; unsupported, small or changing shadows stay analytic.
     shadow_cache: ShadowCache = ShadowCache::Auto;
+    /// Blur what is drawn behind this node's background by this radius
+    /// (frosted glass). Requires an offscreen ancestor; App roots provide one.
+    backdrop_blur: Size = Size::Px(0.);
     /// Clip children to a rounded rectangle with this radius (px/vw/vh;
     /// percent is not resolved).
     clip_radius: Size = Size::Px(0.);
