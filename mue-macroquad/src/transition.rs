@@ -579,6 +579,29 @@ macro_rules! bind_property {
 }
 pub(crate) use bind_property;
 
+/// Follow `target` with an animation: when it changes, the result moves from
+/// its current value to the new one along `curve`. Animations advance once per
+/// App frame. A static target or `Transition::Instant` curve returns `target`.
+///
+/// ```
+/// use mue_core::prelude::*;
+/// use mue_macroquad::transition::{Transition, animated};
+///
+/// # let owner = mue_core::scope::OwnedScope::new();
+/// # owner.run(|| {
+/// let open = signal(false);
+/// let target: Prop<f32> = open.map(|open| if open { 1. } else { 0. }).into();
+/// let progress = animated::<f32>(target, Transition::ease_out(0.2));
+/// assert_eq!(progress.get(), 0.);
+/// # });
+/// ```
+pub fn animated<T: Interpolatable>(
+    target: impl Into<Prop<T>>,
+    curve: impl Into<Prop<Transition>>,
+) -> Prop<T> {
+    bind_projected(target.into(), Some(curve.into()))
+}
+
 pub(crate) fn bind_projected<T: Interpolatable>(
     value: Prop<T>,
     transition: Option<Prop<Transition>>,

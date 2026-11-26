@@ -77,6 +77,7 @@ pub mod math;
 pub mod node;
 pub mod paint;
 pub mod path;
+pub mod presence;
 pub mod render;
 pub mod runtime;
 pub mod scene;

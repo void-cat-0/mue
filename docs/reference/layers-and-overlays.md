@@ -5,6 +5,7 @@
 - [Paint order and z-index](#paint-order-and-z-index)
 - [Layer hosts and teleports](#layer-hosts-and-teleports)
 - [Anchored content](#anchored-content)
+- [Presence animations](#presence-animations)
 - [Node handles](#node-handles)
 
 ## Paint order and z-index
@@ -36,10 +37,10 @@ that should accept teleports.
 `teleport(layer, || view)` builds `view` where it is declared, so the subtree
 keeps that position's `provide`/`inject` context, themes, inherited paint, and
 lifetime, but draws it in the nearest host's layer. The placeholder takes no
-space. Removing the placeholder (for example through `keyed`)
+space. Removing the placeholder (for example through `keyed` or `presence`)
 removes the teleported subtree. `show_if` keeps nodes mounted, so a teleport
-inside a hidden `show_if` stays visible; mount it conditionally with `keyed`
-instead. Without a host, the teleport draws in place.
+inside a hidden `show_if` stays visible; wrap the teleported view in
+`presence` instead. Without a host, the teleport draws in place.
 
 Each teleported view sits in a full-size surface over the host. The surface is
 transparent to the pointer: only its children can be hit, so an empty layer
@@ -84,15 +85,37 @@ and the `anchor` rectangle.
 ```rust
 use mue::{prelude::*, renderer::{anchor::{Placement, anchored}, layer::{Layer, teleport}}};
 
+let open = signal(false);
 let trigger = NodeHandle::new();
-let button = button("More").node_handle(trigger);
+let button = button("More").node_handle(trigger).on_activate(move || open.set(!open.get()));
 let menu = teleport(Layer::Popover, move || {
-    anchored(trigger)
-        .placement(Placement::BottomEnd)
-        .offset(6.)
-        .children(text("Menu"))
+    presence(open, move || {
+        anchored(trigger)
+            .placement(Placement::BottomEnd)
+            .offset(6.)
+            .children(text("Menu"))
+    })
 });
 ```
+
+## Presence animations
+
+`presence(present, || view)` (Vue's `<Transition>`) mounts `view` when `present`
+becomes true and animates a progress value from 0 to 1. When `present` becomes
+false, progress animates back to 0 and the view is unmounted afterwards, so
+exit animations play. `keep_mounted(true)` builds the view once and keeps it
+(hidden with `display: none`) to preserve its state.
+
+`PresenceAnimation` applies wrapper effects from progress: `fade()`,
+`.scale(from)`, `.slide(dx, dy)`, or `none()`. `transition(Transition)` sets
+the curve and duration for both directions (default `ease_out(0.2)`). Content
+reads `use_presence()` for `present` and `progress` to drive custom effects.
+Animations advance once per App frame; `Transition::Instant` switches
+immediately.
+
+`mue_macroquad::transition::animated(target, curve)` is the same primitive for
+any interpolatable value: the returned property follows `target` along
+`curve`.
 
 ## Node handles
 

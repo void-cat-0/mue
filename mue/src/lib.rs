@@ -57,6 +57,7 @@ pub mod prelude {
             Component, IntoNode, Node, NodeContext, NodeHandle, NodeRef, flexbox, path, svg, text,
         },
         path::{PathData, StrokeStyle},
+        presence::presence,
         style::{Style, Styleable, StyleableExt},
         svg::SvgDocument,
     };

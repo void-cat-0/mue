@@ -129,6 +129,7 @@ pub use mue_macroquad::{
     focus::FocusScope,
     layer::{Layer, layer_host, teleport},
     node::NodeHandle,
+    presence::{PresenceAnimation, presence, use_presence},
 };
 pub use mue_macros::{component, node, style};
 pub use overlay::*;
