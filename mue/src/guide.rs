@@ -47,6 +47,7 @@ pub mod reference {
         illustrated
     );
     guide!(style_syntax, "../../docs/reference/style.md");
+    guide!(focus_keyboard, "../../docs/reference/focus-and-keyboard.md");
     guide!(scene_runtime, "../../docs/reference/scene.md", illustrated);
     guide!(theme_store, "../../docs/reference/themes-and-tokens.md");
     guide!(executor, "../../docs/reference/tasks.md");

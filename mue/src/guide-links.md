@@ -18,6 +18,7 @@
 [state-reference]: mod@crate::guide::reference::reactive_runtime
 [paint-reference]: mod@crate::guide::reference::rendering
 [style-reference]: mod@crate::guide::reference::style_syntax
+[focus-reference]: mod@crate::guide::reference::focus_keyboard
 [scenes-reference]: mod@crate::guide::reference::scene_runtime
 [scene-input-reference]: mod@crate::guide::reference::scene_runtime#input
 [scene-transitions-reference]: mod@crate::guide::reference::scene_runtime#scene-transitions

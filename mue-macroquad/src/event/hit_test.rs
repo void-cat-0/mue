@@ -62,6 +62,7 @@ pub(crate) fn is_interactive(node: NodeRef) -> bool {
         !inner.hooks.pointer_event.is_empty()
             || !inner.gestures.is_empty()
             || inner.hit_test.is_some()
+            || crate::focus::declares_focus(inner)
     })
 }
 

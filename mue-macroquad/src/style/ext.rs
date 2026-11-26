@@ -192,6 +192,40 @@ pub trait StyleableExt: Styleable {
         })
     }
 
+    /// Configure styles from this node's focus state.
+    ///
+    /// The callback runs once now with live signals for "focused" and "focus
+    /// visible" (focused by keyboard). Use it for focus rings:
+    ///
+    /// ```
+    /// use mue_macroquad::{color::Color, node::flexbox, style::{Styleable, StyleableExt}};
+    ///
+    /// let _field = flexbox().focusable(true).with_focus(|style, focus| {
+    ///     style.outline_width(focus.visible.map(|visible| if visible { 2. } else { 0. }))
+    ///         .outline_color(Color::from_rgba(111, 168, 255, 255))
+    ///         .outline_offset(2.)
+    /// });
+    /// ```
+    fn with_focus(mut self, f: impl FnOnce(Self, crate::focus::FocusState) -> Self) -> Self {
+        let owner = self.style_mut().ensure_focus_owner();
+        f(self, owner.state())
+    }
+
+    /// Show an outline only while focus is visible (keyboard focus).
+    fn focus_ring(self, width: f32, color: impl Into<Prop<Brush>>, offset: f32) -> Self {
+        let color = color.into();
+        self.with_focus(move |style, focus| {
+            style
+                .outline_width(
+                    focus
+                        .visible
+                        .map(move |visible| if visible { width } else { 0. }),
+                )
+                .outline_color(color)
+                .outline_offset(offset)
+        })
+    }
+
     /// Configure styles from this node's shared, read-only hover state.
     ///
     /// The callback runs once now. Reactive values created inside it belong to

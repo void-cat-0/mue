@@ -212,3 +212,4 @@ Bare identifiers are stringified and string literals pass through, so `token!("t
 [scene-transitions-reference]: scene.md#scene-transitions
 
 Return to the [illustrated style chapter][style-guide] for rendered comparisons.
+[focus-reference]: focus-and-keyboard.md

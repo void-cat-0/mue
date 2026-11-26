@@ -115,6 +115,7 @@ pub mod typography;
 pub use controls::*;
 pub use graphics::*;
 pub use layout::*;
+pub use mue_macroquad::focus::FocusScope;
 pub use mue_macroquad::node::{
     BuildNode, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
     KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ShapeBuilder, Span, SpanStyle, SvgBuilder,

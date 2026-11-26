@@ -1,4 +1,8 @@
-use crate::event::{pointer::PointerEvent, wheel::WheelEvent};
+use crate::event::{
+    keyboard::{CharEvent, FocusEvent, KeyEvent},
+    pointer::PointerEvent,
+    wheel::WheelEvent,
+};
 
 type CallbackFunction<T> = Option<Box<dyn FnMut(&T, &dyn Fn() -> bool) + 'static>>;
 
@@ -79,4 +83,9 @@ pub(crate) struct NodeHooks {
     pub pointer_event: CallbackList<PointerEvent>,
     pub hover_event: CallbackList<PointerEvent>,
     pub wheel_event: CallbackList<WheelEvent>,
+    pub key_down: CallbackList<KeyEvent>,
+    pub key_up: CallbackList<KeyEvent>,
+    pub char: CallbackList<CharEvent>,
+    pub focus: CallbackList<FocusEvent>,
+    pub blur: CallbackList<FocusEvent>,
 }

@@ -37,6 +37,26 @@ fn save_button(requested: Signal<bool>) -> impl Component {
 ```
 
 Call `request_save_from_keys` from the active editor's `SceneEvent::Input` arm. Consume `requested` in `Scene::update`. The update should check whether the editor can save, since the keyboard path does not consult button state. A boolean request also merges a tap and a shortcut in one frame.
+## Handle keys on a focused control
+
+Raw Scene input sees every key. When a key belongs to one control, make the control focusable and handle `on_key_down`: the event goes to the focused node and bubbles to its ancestors, and Tab moves focus between focusable nodes.
+
+```rust
+use mue::{prelude::*, renderer::event::keyboard::KeyCode};
+
+let volume = signal(5_i32);
+let slider = flexbox()
+    .focusable(true)
+    .focus_ring(2., mue::renderer::color::Color::WHITE, 2.)
+    .on_key_down(move |event| match event.key {
+        KeyCode::Left => { volume.set(volume.get() - 1); event.stop_propagation(); }
+        KeyCode::Right => { volume.set(volume.get() + 1); event.stop_propagation(); }
+        _ => {}
+    });
+```
+
+See [focus and keyboard][focus-reference] for Tab order, focus scopes for dialogs, and programmatic focus.
+
 ## Track a drag in one node
 
 Use a gesture hook when a drag needs to compete with a tap. This pad shows horizontal displacement from the press. Release it or drag outside the pad to see how a captured pointer differs from a fresh hit test. Place the pointer down on the pad first.
@@ -105,3 +125,4 @@ See the [Scene input reference][scene-input-reference] for capture, resize, and 
 [scenes-guide]: scenes.md
 [tasks-guide]: tasks.md
 [scene-input-reference]: ../reference/scene.md#input
+[focus-reference]: ../reference/focus-and-keyboard.md

@@ -707,6 +707,7 @@ impl PointerManager {
     pub(crate) fn process_input(&mut self, root_node: NodeRef, input: &InputBatch) {
         self.update_window_metrics();
         self.root_node = root_node;
+        crate::focus::set_roots([root_node]);
         let plan = InputPlan::new(root_node, input, &self.hover, self.dpi_scale);
         // Cancellation callbacks may mutate UI too, so plan before invoking them.
         self.handle_interruption(input);
@@ -738,6 +739,12 @@ impl PointerManager {
         roots: &[SceneRoot],
         input: &InputBatch,
     ) {
+        crate::focus::set_roots(
+            roots
+                .iter()
+                .filter(|root| root.input != RootInput::None)
+                .map(|root| root.node),
+        );
         // Cancellation can invoke callbacks, so every target is planned first.
         self.handle_interruption(input);
         self.reconcile_roots(roots);
@@ -975,6 +982,7 @@ impl PointerManager {
 
     fn on_pointer_start(&mut self, id: PointerId, pointer_type: PointerType, pos: Vector) {
         let path = self.hit_path(pos);
+        crate::focus::pointer_down(&path);
         // A repeated native touch id starts a new sequence, not a second Down
         // on the old recognizer state.
         self.on_pointer_cancel(id);
@@ -1025,6 +1033,7 @@ impl PointerManager {
             return;
         }
         let path = self.hit_path(pos);
+        crate::focus::pointer_down(&path);
         if let Some(track) = self.tracks.get_mut(&id) {
             track.event.button_state.insert(button_state);
             Self::on_track_down(track, path, pos);
@@ -1124,6 +1133,29 @@ impl EventHandler for PointerManager {
         for id in ids {
             self.on_pointer_cancel(id);
         }
+    }
+
+    fn key_down_event(
+        &mut self,
+        keycode: miniquad::KeyCode,
+        modifiers: miniquad::KeyMods,
+        repeat: bool,
+    ) {
+        crate::focus::dispatch_key_down(crate::event::keyboard::KeyEvent::new(
+            keycode, modifiers, repeat,
+        ));
+    }
+
+    fn key_up_event(&mut self, keycode: miniquad::KeyCode, modifiers: miniquad::KeyMods) {
+        crate::focus::dispatch_key_up(crate::event::keyboard::KeyEvent::new(
+            keycode, modifiers, false,
+        ));
+    }
+
+    fn char_event(&mut self, character: char, modifiers: miniquad::KeyMods, repeat: bool) {
+        crate::focus::dispatch_char(crate::event::keyboard::CharEvent::new(
+            character, modifiers, repeat,
+        ));
     }
 
     fn window_restored_event(&mut self) {

@@ -28,7 +28,11 @@ use std::{mem, rc::Rc};
 use taffy::{BoxSizing, Display, Overflow, Position};
 
 use crate::{
-    event::{pointer::PointerEvent, wheel::WheelEvent},
+    event::{
+        keyboard::{CharEvent, FocusEvent, KeyEvent},
+        pointer::PointerEvent,
+        wheel::WheelEvent,
+    },
     gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent, TransformEvent},
     hook::{CallbackList, NodeHooks},
     math::Matrix,
@@ -176,6 +180,17 @@ define_style! {
     letter_spacing: Size = Size::Px(0.);
     tab_width: u16 = 4;
 
+    // Focus and pointer presentation
+    /// Accept keyboard focus. Pressing the node focuses it; Tab reaches it.
+    focusable: bool = false;
+    /// Tab order: positive values first (ascending), then 0 in tree order;
+    /// negative values are skipped by Tab but still focusable.
+    tab_index: i32 = 0;
+    /// Keep Tab inside this subtree and restore focus when it is removed.
+    focus_scope: crate::focus::FocusScope = crate::focus::FocusScope::None;
+    /// Focus this node, or its first focusable descendant, each time it becomes displayed.
+    auto_focus: bool = false;
+
     @rects {
         margin: taffy::Rect<Size> = Size::Px(0.);
         padding: taffy::Rect<Size> = Size::Px(0.);
@@ -195,6 +210,16 @@ define_style! {
         on_pointer_event: CallbackList<PointerEvent>;
         on_hover_event: CallbackList<PointerEvent>;
         on_wheel_event: CallbackList<WheelEvent>;
+        /// A key press on the focused node or one of its descendants (bubbles).
+        on_key_down: CallbackList<KeyEvent>;
+        /// A key release, delivered like `on_key_down`.
+        on_key_up: CallbackList<KeyEvent>;
+        /// Text input, delivered like `on_key_down`.
+        on_char: CallbackList<CharEvent>;
+        /// This node received focus.
+        on_focus: CallbackList<FocusEvent>;
+        /// This node lost focus.
+        on_blur: CallbackList<FocusEvent>;
 
         on_tap: CallbackList<()>;
         on_long_press: CallbackList<()>;
@@ -225,6 +250,15 @@ impl Style {
         owner
     }
 
+    pub(crate) fn ensure_focus_owner(&mut self) -> Rc<crate::focus::FocusOwner> {
+        if let Some(owner) = self.focus_owners.first() {
+            return owner.clone();
+        }
+        let owner = crate::focus::FocusOwner::new();
+        self.focus_owners.push(owner.clone());
+        owner
+    }
+
     pub(crate) fn build_hooks(&mut self) -> NodeHooks {
         NodeHooks {
             update: self.take_on_update(),
@@ -235,6 +269,11 @@ impl Style {
             pointer_event: self.take_on_pointer_event(),
             hover_event: self.take_on_hover_event(),
             wheel_event: self.take_on_wheel_event(),
+            key_down: self.take_on_key_down(),
+            key_up: self.take_on_key_up(),
+            char: self.take_on_char(),
+            focus: self.take_on_focus(),
+            blur: self.take_on_blur(),
         }
     }
 }

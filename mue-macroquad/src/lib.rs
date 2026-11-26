@@ -62,6 +62,7 @@ pub mod clip;
 pub mod color;
 mod error;
 pub mod event;
+pub mod focus;
 pub mod font;
 pub mod gesture;
 pub mod hook;

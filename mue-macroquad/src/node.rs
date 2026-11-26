@@ -68,6 +68,7 @@ pub(crate) struct NodeInner {
     pub(crate) clip: Option<ReadSignal<Rect>>,
     pub(crate) clip_radius: Option<Prop<f32>>,
     pub(crate) clip_sector: Option<Prop<Sector>>,
+    pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
     pub(crate) matrix_transform: Prop<Matrix>,
@@ -144,6 +145,7 @@ impl NodeInner {
             clip: None,
             clip_radius: None,
             clip_sector: None,
+            focus: None,
             child_offset: None,
             center_on_layout_origin: false,
             matrix_transform: Prop::Static(Matrix::IDENTITY),
@@ -466,6 +468,7 @@ impl Node {
             if !matches!(clip_sector, Prop::Static(sector) if !sector.is_visible()) {
                 NodeInner::with_mut(|node| node.clip_sector = Some(clip_sector));
             }
+            let focus_mount = bind_focus(style);
             NodeInner::with_mut(|node| {
                 let after_children = std::mem::take(&mut node.hooks.after_children);
                 let after_clip = std::mem::take(&mut node.hooks.after_clip);
@@ -481,9 +484,50 @@ impl Node {
                     .with_borrow_mut(|stack| stack.pop().expect("node being finished is missing"));
                 nodes.insert(*node)
             });
+            if let Some((auto_focus, contain)) = focus_mount {
+                crate::focus::mounted(id, auto_focus, contain);
+            }
             Self(NodeRef::from_id(id).owned())
         })
     }
+}
+
+/// Move focus declarations into the node. Returns `(auto_focus, contain)` when
+/// the node needs mount-time focus handling.
+fn bind_focus(style: &mut Style) -> Option<(bool, bool)> {
+    use crate::focus::{FocusScope, FocusSlot};
+    let declared = style.declared_focusable().is_some()
+        || style.declared_tab_index().is_some()
+        || style.declared_focus_scope().is_some()
+        || !style.focus_owners.is_empty();
+    let auto_focus = style.take_auto_focus().get_untracked();
+    if !declared {
+        return auto_focus.then_some((true, false));
+    }
+    let slot = FocusSlot {
+        focusable: style.take_focusable(),
+        tab_index: style.take_tab_index(),
+        scope: style.take_focus_scope(),
+        owners: std::mem::take(&mut style.focus_owners),
+        return_to: Rc::default(),
+    };
+    let contain = slot.scope.get_untracked() == FocusScope::Contain;
+    NodeInner::with_mut(|node| match &mut node.focus {
+        // `use_focus` in the body may have created a slot already.
+        Some(existing) => {
+            // Keep every owner: styles may already be bound to each one.
+            let mut owners = std::mem::take(&mut existing.owners);
+            owners.extend(slot.owners);
+            let return_to = existing.return_to.clone();
+            **existing = FocusSlot {
+                owners,
+                return_to,
+                ..slot
+            };
+        }
+        None => node.focus = Some(Box::new(slot)),
+    });
+    Some((auto_focus, contain))
 }
 
 fn append_hooks(node: &mut NodeInner, style: &mut Style) {
