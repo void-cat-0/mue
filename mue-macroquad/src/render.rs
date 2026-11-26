@@ -76,3 +76,69 @@ impl Drop for RenderStateGuard {
         }
     }
 }
+
+thread_local! {
+    static OPAQUE_ALPHA: std::cell::OnceCell<Option<macroquad::material::Material>> =
+        const { std::cell::OnceCell::new() };
+}
+
+/// Set the current target's alpha channel to 1 inside `rect` (logical pixels)
+/// without changing its color.
+///
+/// The default blending writes `alpha * alpha` into the alpha channel, so
+/// translucent UI (shadows, translucent backgrounds) leaves the framebuffer
+/// partly transparent. That is invisible in an ordinary desktop window, but it
+/// shows as light halos in screenshots and on surfaces that honor window alpha.
+/// [`crate::App`] runs this after each frame unless
+/// [`App::set_opaque_window(false)`](crate::App::set_opaque_window).
+pub fn restore_opaque_alpha(rect: crate::math::Rect) {
+    use macroquad::{
+        material::{MaterialParams, gl_use_default_material, gl_use_material, load_material},
+        miniquad::{BlendFactor, BlendState, Equation, PipelineParams, ShaderSource},
+    };
+    OPAQUE_ALPHA.with(|material| {
+        let material = material.get_or_init(|| {
+            load_material(
+                ShaderSource::Glsl {
+                    vertex: crate::material::UI_VERTEX,
+                    fragment: "#version 100\nprecision mediump float;\nvoid main() { gl_FragColor = vec4(1.0); }",
+                },
+                MaterialParams {
+                    pipeline_params: PipelineParams {
+                        // Keep RGB through blending (not a color mask, which later
+                        // GL clears would inherit) and replace alpha with 1.
+                        color_blend: Some(BlendState::new(
+                            Equation::Add,
+                            BlendFactor::Zero,
+                            BlendFactor::One,
+                        )),
+                        alpha_blend: Some(BlendState::new(
+                            Equation::Add,
+                            BlendFactor::One,
+                            BlendFactor::Zero,
+                        )),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .ok()
+        });
+        let Some(material) = material else {
+            return;
+        };
+        let _state = RenderStateGuard::enter();
+        let gl = unsafe { get_internal_gl() }.quad_gl;
+        gl.scissor(None);
+        gl.draw_mode(DrawMode::Triangles);
+        gl_use_material(material);
+        macroquad::shapes::draw_rectangle(
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            macroquad::color::WHITE,
+        );
+        gl_use_default_material();
+    });
+}

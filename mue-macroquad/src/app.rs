@@ -120,6 +120,7 @@ pub struct App {
     displayed: Vec<SceneRoot>,
     layout: SceneLayout,
     pointer_manager: PointerManager,
+    opaque_window: bool,
 }
 
 impl Drop for App {
@@ -207,7 +208,15 @@ impl App {
             displayed: Vec::new(),
             layout: SceneLayout::default(),
             pointer_manager: PointerManager::new(),
+            opaque_window: true,
         }
+    }
+
+    /// Whether each frame ends by forcing the window's alpha channel to 1
+    /// (default true). Turn it off for a host that renders into a deliberately
+    /// transparent surface. See [`crate::render::restore_opaque_alpha`].
+    pub fn set_opaque_window(&mut self, opaque: bool) {
+        self.opaque_window = opaque;
     }
 
     /// Test the roots drawn in the last successful frame, in actual drawing order.
@@ -490,6 +499,9 @@ impl App {
         } else {
             draw_normal(scene, None)?
         };
+        if self.opaque_window {
+            crate::render::restore_opaque_alpha(frame.viewport);
+        }
         self.pointer_manager
             .mark_undisplayed_captures(&self.displayed, |parent, child| {
                 self.layout
