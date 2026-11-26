@@ -173,6 +173,7 @@ pub use mue_macroquad::svg::SvgDocument;
 pub use mue_macroquad::{
     anchor::{Placement, anchored, use_anchor},
     cursor::Cursor,
+    feedback::{HapticStyle, SoundCue},
     focus::FocusScope,
     layer::{Layer, layer_host, teleport},
     node::{NodeHandle, shader_box},

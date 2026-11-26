@@ -3,7 +3,7 @@
 //!
 //! A [`Directive`] adds hooks or styles to a node. Attach one with
 //! [`WithDirective::directive`]. Built-in directives: [`Hotkey`],
-//! [`ClickOutside`], and [`LongPressRepeat`].
+//! [`ClickOutside`], [`LongPressRepeat`], [`Haptic`], and [`Sound`].
 //!
 //! ```
 //! use mue_components::prelude::*;
@@ -22,6 +22,7 @@ use mue_macroquad::{
         keyboard::{KeyCode, KeyEvent},
         pointer::{PointerAction, use_pointer_down_observer},
     },
+    feedback::{self, HapticStyle, SoundCue},
     math::Vector,
     node::{NodeHandle, NodeRef},
     style::{Style, Styleable},
@@ -297,6 +298,88 @@ impl Repeater {
             self.next += self.interval / speedup;
         }
         fires
+    }
+}
+
+/// When a feedback directive plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeedbackTrigger {
+    /// The pointer goes down on the node.
+    Press,
+    /// A completed tap (the default).
+    Tap,
+    LongPress,
+}
+
+/// Play a haptic pattern when the node is tapped, pressed, or long-pressed.
+///
+/// ```
+/// use mue_components::prelude::*;
+///
+/// let _like = button("Like").directive(Haptic::new(HapticStyle::Light));
+/// let _menu = flexbox().directive(Haptic::on(FeedbackTrigger::LongPress, HapticStyle::Heavy));
+/// ```
+pub struct Haptic {
+    trigger: FeedbackTrigger,
+    style: HapticStyle,
+}
+
+impl Haptic {
+    pub fn new(style: HapticStyle) -> Self {
+        Self::on(FeedbackTrigger::Tap, style)
+    }
+
+    pub fn on(trigger: FeedbackTrigger, style: HapticStyle) -> Self {
+        Self { trigger, style }
+    }
+}
+
+impl Directive for Haptic {
+    fn apply(self, style: &mut Style) {
+        let haptic = self.style;
+        on_trigger(style, self.trigger, move || feedback::haptic(haptic));
+    }
+}
+
+/// Play a UI sound (through the app's [`feedback::set_sound_handler`]) when
+/// the node is tapped, pressed, or long-pressed.
+///
+/// ```
+/// use mue_components::prelude::*;
+///
+/// let _save = button("Save").directive(Sound::new(SoundCue::Click));
+/// ```
+pub struct Sound {
+    trigger: FeedbackTrigger,
+    cue: SoundCue,
+}
+
+impl Sound {
+    pub fn new(cue: SoundCue) -> Self {
+        Self::on(FeedbackTrigger::Tap, cue)
+    }
+
+    pub fn on(trigger: FeedbackTrigger, cue: SoundCue) -> Self {
+        Self { trigger, cue }
+    }
+}
+
+impl Directive for Sound {
+    fn apply(self, style: &mut Style) {
+        let cue = self.cue;
+        on_trigger(style, self.trigger, move || feedback::sound(cue));
+    }
+}
+
+fn on_trigger(style: &mut Style, trigger: FeedbackTrigger, play: impl Fn() + 'static) {
+    match trigger {
+        FeedbackTrigger::Press => style.on_pointer_event.append(move |event| {
+            if event.action() == PointerAction::Down {
+                play();
+            }
+        }),
+        FeedbackTrigger::Tap => style.on_tap.append(move |_| play()),
+        FeedbackTrigger::LongPress => style.on_long_press.append(move |_| play()),
     }
 }
 
