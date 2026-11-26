@@ -21,7 +21,8 @@ use mue_macroquad::{
 /// declared. It fades in and out, captures pointer input while open, and keeps
 /// the content mounted while hidden. Keyboard focus moves into the content
 /// when it opens, Tab stays inside it, and focus returns when it closes. Use
-/// `dismissible`/`on_dismiss` for a backdrop tap or Escape; content taps are
+/// `dismissible`/`on_dismiss` for a backdrop tap, Escape, or back (the
+/// Android back button, [`back_swipe`](fn@crate::back_swipe)); content taps are
 /// swallowed so they do not dismiss the modal. Builder styles apply to the
 /// backdrop layer.
 pub struct OverlayHostBuilder {
@@ -88,6 +89,10 @@ impl BuildNode for OverlayHostBuilder {
             }
         };
         let mut content = Some(content);
+        // Back (the Android back button, an edge swipe) closes it too.
+        if dismissible {
+            mue_macroquad::back::use_back_handler(open, fire.clone());
+        }
         teleport(Layer::Modal, move || {
             let on_escape = fire.clone();
             let on_backdrop = fire.clone();

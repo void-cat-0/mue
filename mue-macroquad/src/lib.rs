@@ -59,6 +59,7 @@
 
 pub mod anchor;
 mod app;
+pub mod back;
 pub mod clip;
 pub mod color;
 pub mod cursor;

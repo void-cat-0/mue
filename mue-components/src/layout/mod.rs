@@ -56,6 +56,7 @@
 //! polls, see [`scope_future`](mue_core::scope::scope_future).
 
 pub mod aspect_ratio;
+pub mod back_swipe;
 pub mod center;
 pub mod container;
 pub mod div;
@@ -69,6 +70,7 @@ pub mod stack;
 pub mod wrap;
 
 pub use aspect_ratio::*;
+pub use back_swipe::*;
 pub use center::*;
 pub use container::*;
 pub use div::*;

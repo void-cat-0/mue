@@ -27,6 +27,7 @@ fn every_component_builder_is_styleable() {
         styleable(hstack());
         styleable(wrap());
         styleable(aspect_ratio());
+        styleable(back_swipe());
         styleable(overlay_host(false, flexbox()));
         styleable(pages(0_usize, Vec::<Node>::new()));
         styleable(heading("A"));

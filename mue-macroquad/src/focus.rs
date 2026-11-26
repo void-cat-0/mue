@@ -540,6 +540,11 @@ pub(crate) fn dispatch_key_down(event: KeyEvent) {
             move_focus(!event.modifiers.shift);
         });
     }
+    // Escape and the Android back button navigate back unless handled.
+    if !event.is_handled() && !event.repeat && matches!(event.key, KeyCode::Escape | KeyCode::Back)
+    {
+        crate::back::dispatch_back();
+    }
 }
 
 pub(crate) fn dispatch_key_up(event: KeyEvent) {
