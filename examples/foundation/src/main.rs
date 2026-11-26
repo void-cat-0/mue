@@ -8,9 +8,13 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App,
+    App, Shadow,
+    anchor::{Placement, anchored},
     color::Color,
+    layer::{Layer, teleport},
     math::{Rect, Vector, vec2},
+    node::NodeHandle,
+    presence::{PresenceAnimation, presence},
     shader::linear_gradient,
 };
 
@@ -148,7 +152,65 @@ fn focus_row() -> impl Component {
     ))
 }
 
-fn ui() -> impl Component {
+fn menu_item(label: &'static str) -> impl Component {
+    flexbox()
+        .focusable(true)
+        .cursor(Cursor::Pointer)
+        .with_hovered(|style, hovered| {
+            style.background(hovered.map(|hovered| {
+                mue_macroquad::shader::Brush::Solid(if hovered {
+                    Color::from_rgba(255, 255, 255, 24)
+                } else {
+                    Color::TRANSPARENT
+                })
+            }))
+        })
+        .focus_ring(2., Color::from_rgba(120, 170, 255, 255), -2.)
+        .style(style! { padding: 8px 12px; border-radius: 6px; })
+        .children(text(label).style(style! { font-size: 14px; line-height: 18px; color: #e6ebf5; }))
+}
+
+fn layers_row(menu_open: bool) -> impl Component {
+    let menu = signal(menu_open);
+    let dialog = signal(false);
+    let trigger = NodeHandle::new();
+    hstack().style(style! { gap: 12px; }).children((
+        button("Menu ▾")
+            .node_handle(trigger)
+            .on_activate(move || menu.set(!menu.get())),
+        button("Open dialog").on_activate(move || dialog.set(true)),
+        // Popover: built here, drawn in the Popover layer, attached to the button.
+        teleport(Layer::Popover, move || {
+            presence(menu, move || {
+                anchored(trigger)
+                    .placement(Placement::BottomStart)
+                    .offset(6.)
+                    .style(style! {
+                        padding: 6px; background: #2a3345; border-radius: 10px;
+                        border: 1px solid #3b4862; flex-direction: column; min-width: 180px;
+                    })
+                    .shadow(Shadow::new(18., 10.))
+                    .children((menu_item("Rename"), menu_item("Duplicate"), menu_item("Delete")))
+            })
+            .animation(PresenceAnimation::fade().slide(0., -6.))
+        }),
+        overlay_host(
+            dialog,
+            stack()
+                .style(style! { padding: 24px; gap: 16px; background: #222a3b; border-radius: 14px; width: 320px; })
+                .children((
+                    heading("Dialog").level(HeadingLevel::H4).style(style! { color: #ffffff; }),
+                    text("Tab stays inside. Escape or the backdrop closes it.")
+                        .style(style! { font-size: 14px; line-height: 20px; color: #c9d1e0; }),
+                    button("Close").primary(true).on_activate(move || dialog.set(false)),
+                )),
+        )
+        .dismissible(true)
+        .on_dismiss(move || dialog.set(false)),
+    ))
+}
+
+fn ui(capture: bool) -> impl Component {
     stack()
         .style(style! { width: 100%; height: 100%; padding: 32px; gap: 32px; background: #161b26; })
         .children((
@@ -157,6 +219,7 @@ fn ui() -> impl Component {
             vector_row(),
             grid_row(),
             focus_row(),
+            layers_row(capture),
         ))
 }
 
@@ -172,7 +235,7 @@ fn conf() -> Conf {
 #[macroquad::main(conf)]
 async fn main() {
     let mut capture = capture::Capture::from_env();
-    let mut app = App::new(ui());
+    let mut app = App::new(ui(capture.enabled()));
     let mut first = true;
     loop {
         clear_background(macroquad::color::BLACK);

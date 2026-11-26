@@ -60,6 +60,10 @@ let toast = teleport(Layer::Toast, || {
 });
 ```
 
+`overlay_host(open, content)` in `mue-components` combines these pieces: a
+teleport into `Layer::Modal`, a backdrop, a fade presence, a `Contain` focus
+scope with auto focus, and Escape or backdrop dismissal when `dismissible`.
+
 ## Anchored content
 
 `anchored(target)` is an absolutely positioned container that places itself

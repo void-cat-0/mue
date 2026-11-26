@@ -134,10 +134,14 @@ App owns frame scheduling; the [Scene API][scenes-guide] can submit multiple roo
 
 ## Modal controls
 
-`overlay_host(open, content)` renders a full-screen modal layer. It is hidden
-when `open` is false, captures pointer input while open, and keeps the content
-mounted while hidden. Content taps are swallowed; a backdrop tap only dismisses
-when `dismissible(true)` is set.
+`overlay_host(open, content)` renders a full-screen modal layer, teleported
+into the `Modal` layer of the nearest layer host, so it covers the window
+wherever it is declared. It fades in and out, captures pointer input while
+open, and keeps the content mounted while hidden. Focus moves into the content
+when it opens, Tab stays inside it, and focus returns when it closes. Content
+taps are swallowed; a backdrop tap or Escape only dismisses when
+`dismissible(true)` is set. See [layers, overlays, and anchoring][layers-reference]
+for the building blocks.
 
 ```rust,no_run
 use mue::{components::overlay_host, prelude::*, renderer::Shadow};
