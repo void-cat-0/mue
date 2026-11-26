@@ -150,6 +150,20 @@ pub(super) fn declaration(
         )?,
         "flex-grow" | "flex-shrink" => setter(method, scalar(input, &quote!(f32), false)?),
         "flex" => flex(input, host)?,
+        "z-index" => setter("z_index", {
+            if let Some(value) = token(input, &quote!(i32))? {
+                value
+            } else if let Some(expr) = expression_with_token(input, &quote!(i32))? {
+                expr
+            } else {
+                let (value, unit, at) = number(input)?;
+                if !unit.is_empty() || value.fract() != 0. {
+                    return Err(syn::Error::new(at, "z-index expects an integer"));
+                }
+                let value = value as i32;
+                quote!(#value)
+            }
+        }),
         "aspect-ratio" => {
             let value = if let Some(value) = token(input, &quote!(Option<f32>))? {
                 value

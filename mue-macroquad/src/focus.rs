@@ -315,7 +315,7 @@ fn topmost_contain_scope() -> Option<NodeRef> {
         if slot_info(node).is_some_and(|(_, _, scope)| scope == FocusScope::Contain) {
             *found = Some(node);
         }
-        for &child in children_of(node).iter() {
+        for &child in crate::node::paint_order(children_of(node)).iter() {
             visit(child, found);
         }
     }

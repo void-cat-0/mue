@@ -190,6 +190,9 @@ define_style! {
     focus_scope: crate::focus::FocusScope = crate::focus::FocusScope::None;
     /// Focus this node, or its first focusable descendant, each time it becomes displayed.
     auto_focus: bool = false;
+    /// Paint and hit-test order among siblings: higher values draw on top.
+    /// Siblings with equal values keep tree order.
+    z_index: i32 = 0;
     /// Mouse cursor while hovering this node. `Auto` defers to ancestors.
     cursor: crate::cursor::Cursor = crate::cursor::Cursor::Auto;
 

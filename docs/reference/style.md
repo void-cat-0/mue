@@ -57,6 +57,7 @@ let panel = flexbox().style(style! {
 | `align-content`, `justify-content` | `start`, `end`, `flex-start`, `flex-end`, `center`, `stretch`, `space-between`, `space-around`, `space-evenly`, `normal` |
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `clip`, `scroll` |
 | `flex-grow`, `flex-shrink` | Nonnegative number or `{f32}` binding |
+| `z-index` | An integer or `{i32}`; higher siblings paint and hit-test on top |
 
 `border-box` includes padding and borders in the declared size. `content-box` adds those edges to it. An absolute child leaves the parent flow. A relative child keeps its slot. `overflow` takes one keyword for both axes or two in x/y order. For a scroll gesture and scrollbar, use `scroll_area`.
 

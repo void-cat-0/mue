@@ -131,7 +131,7 @@ fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
     } else {
         // Preserve the parent list for custom callbacks deeper in this subtree.
         result.frames.push((node, children.clone()));
-        let child_hit = children
+        let child_hit = crate::node::paint_order(children.clone())
             .iter()
             .rev()
             .any(|&child| visit(child, pos, result));

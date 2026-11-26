@@ -70,6 +70,7 @@ pub(crate) struct NodeInner {
     pub(crate) clip_sector: Option<Prop<Sector>>,
     pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
     pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
+    pub(crate) z_index: Option<Prop<i32>>,
     node_handles: Vec<NodeHandle>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
@@ -149,6 +150,7 @@ impl NodeInner {
             clip_sector: None,
             focus: None,
             cursor: None,
+            z_index: None,
             node_handles: Vec::new(),
             child_offset: None,
             center_on_layout_origin: false,
@@ -314,12 +316,35 @@ impl NodeRef {
         let children =
             Runtime::with(|rt| rt.nodes.borrow().get(self.id).map(|node| *node.children));
         if let Some(children) = children.filter(|children| !children.is_null()) {
-            for child in children.get_clone().iter() {
+            for child in paint_order(children.get_clone()).iter() {
                 child.render_inner();
             }
         }
         Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &()));
     }
+}
+
+/// Children in paint order: stable-sorted by `z_index` when any is non-zero.
+pub(crate) fn paint_order(children: Rc<[NodeRef]>) -> Rc<[NodeRef]> {
+    let keys: Option<Vec<i32>> = Runtime::with(|rt| {
+        let nodes = rt.nodes.borrow();
+        let keys: Vec<i32> = children
+            .iter()
+            .map(|child| {
+                nodes
+                    .get(child.id)
+                    .and_then(|node| node.z_index.as_ref())
+                    .map_or(0, |z| z.get())
+            })
+            .collect();
+        keys.iter().any(|z| *z != 0).then_some(keys)
+    });
+    let Some(keys) = keys else {
+        return children;
+    };
+    let mut order: Vec<usize> = (0..children.len()).collect();
+    order.sort_by_key(|&index| keys[index]);
+    order.into_iter().map(|index| children[index]).collect()
 }
 
 /// A slot that receives a node's [`NodeRef`] once the node is built (Vue's
@@ -531,6 +556,10 @@ impl Node {
                 NodeInner::with_mut(|node| node.clip_sector = Some(clip_sector));
             }
             let focus_mount = bind_focus(style);
+            let z_index = style.take_z_index();
+            if !matches!(z_index, Prop::Static(0)) {
+                NodeInner::with_mut(|node| node.z_index = Some(z_index));
+            }
             let handles = std::mem::take(&mut style.node_handles);
             if !handles.is_empty() {
                 NodeInner::with_mut(|node| node.node_handles = handles);
