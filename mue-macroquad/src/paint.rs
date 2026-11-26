@@ -23,6 +23,7 @@ use smallvec::SmallVec;
 
 use crate::{
     math::{Matrix, Rect, Vector, vec2},
+    path::{FillRule, PathData, StrokeStyle},
     shader::{Brush, IntoShader, Shader, SharedTexture},
     style::Style,
 };
@@ -658,8 +659,29 @@ impl ShapesBuilder<'_> {
             });
     }
 
-    /// Fill a rectangle with the given shader.
-    pub fn fill_rect<S>(&mut self, rect: Rect, shader: S)
+    /// Fill a path with the given rule.
+    pub fn fill<S: IntoShader>(&mut self, path: &PathData, rule: FillRule, shader: S) {
+        let options = self.fill_options.with_fill_rule(rule.into());
+        self.inner
+            .build(self.shapes, shader.into_shader(), |cache, builder| {
+                cache.fill_tess.tessellate(path.iter(), &options, builder)
+            });
+    }
+
+    /// Stroke a path with the given line style.
+    pub fn stroke<S: IntoShader>(&mut self, path: &PathData, style: &StrokeStyle, shader: S) {
+        if style.width <= 0. {
+            return;
+        }
+        let options = style.options(self.stroke_options.tolerance);
+        self.inner
+            .build(self.shapes, shader.into_shader(), |cache, builder| {
+                cache.stroke_tess.tessellate(path.iter(), &options, builder)
+            });
+    }
+
+    /// Fill an axis-aligned rectangle. Interior samples follow the shader.
+    pub(crate) fn fill_rect<S>(&mut self, rect: Rect, shader: S)
     where
         S: IntoShader,
     {
@@ -695,22 +717,6 @@ impl ShapesBuilder<'_> {
                 .tessellate(path.iter(), &self.fill_options, builder)
         });
     }
-
-    /// Fill a circle with the given shader.
-    pub fn fill_circle<S>(&mut self, center: Vector, radius: f32, shader: S)
-    where
-        S: IntoShader,
-    {
-        self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
-                cache.fill_tess.tessellate_circle(
-                    lyon::geom::point(center.x, center.y),
-                    radius,
-                    &self.fill_options,
-                    builder,
-                )
-            });
-    }
 }
 
 impl ShapesBuilder<'_> {
@@ -725,40 +731,6 @@ impl ShapesBuilder<'_> {
                 cache
                     .stroke_tess
                     .tessellate(path, &self.stroke_options, builder)
-            });
-    }
-
-    /// Stroke a rectangle with the given shader.
-    pub fn stroke_rect<S>(&mut self, rect: Rect, shader: S)
-    where
-        S: IntoShader,
-    {
-        self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
-                cache.stroke_tess.tessellate_rectangle(
-                    &lyon::geom::Box2D::from_origin_and_size(
-                        lyon::geom::point(rect.x, rect.y),
-                        lyon::geom::size(rect.w, rect.h),
-                    ),
-                    &self.stroke_options,
-                    builder,
-                )
-            });
-    }
-
-    /// Stroke a circle with the given shader.
-    pub fn stroke_circle<S>(&mut self, center: Vector, radius: f32, shader: S)
-    where
-        S: IntoShader,
-    {
-        self.inner
-            .build(self.shapes, shader.into_shader(), |cache, builder| {
-                cache.stroke_tess.tessellate_circle(
-                    lyon::geom::point(center.x, center.y),
-                    radius,
-                    &self.stroke_options,
-                    builder,
-                )
             });
     }
 }

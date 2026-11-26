@@ -51,7 +51,8 @@ pub mod prelude {
         signal::{Access, ReadSignal, Signal, signal},
     };
     pub use crate::renderer::{
-        node::{Component, IntoNode, Node, NodeContext, flexbox, text},
+        node::{Component, IntoNode, Node, NodeContext, flexbox, path, text},
+        path::{PathData, StrokeStyle},
         style::{Style, Styleable, StyleableExt},
     };
     pub use crate::{component, node, style};

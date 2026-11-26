@@ -4,6 +4,7 @@
 
 - [Choose when to build geometry](#choose-when-to-build-geometry)
 - [Background paint and shadows](#background-paint-and-shadows)
+- [Vector paths](#vector-paths)
 - [Textures](#textures)
 
 ## Choose when to build geometry
@@ -15,22 +16,25 @@
 | `use_paint(style).draw(...)` | Build and submit transient geometry in the current render callback. |
 | `Shapes::build(...)` | Own geometry independently of a node's style bindings. |
 
-A node's tree rendering applies its transform to the subtree. Build geometry in the supplied layout coordinates and let `use_paint` handle effective opacity. The following node caches a rectangle and invalidates it when its layout rect changes.
+A node's tree rendering applies its transform to the subtree. Build geometry in the supplied layout coordinates and let `use_paint` handle effective opacity. `ShapesBuilder` tessellates [`PathData`](#vector-paths-and-svg) with `fill(path, rule, shader)` and `stroke(path, stroke_style, shader)`, and draws textured quads with `draw_texture`. The following node caches a rounded track and invalidates it when its layout rect changes.
 
 ```rust,no_run
-use mue::{prelude::*, renderer::{color::Color, layout::use_layout, paint::use_paint}};
+use mue::{prelude::*, renderer::{color::Color, layout::use_layout, paint::use_paint, path::FillRule}};
 
 #[node]
 fn meter_track(ctx: NodeContext) -> Node {
     ctx.finish(style! { width: 100%; height: 6px; }, |style| {
         let rect = use_layout(style).rect;
         let geometry = use_paint(style).build(move |shapes| {
-            shapes.fill_rect(rect.get(), Color::from_rgba(60, 97, 145, 255));
+            let track = PathData::rounded_rect(rect.get(), 3.);
+            shapes.fill(&track, FillRule::NonZero, Color::from_rgba(60, 97, 145, 255));
         });
         style.on_render.append(move |_| geometry.get_clone().draw());
     })
 }
 ```
+
+`Layout` also publishes the resolved `border` and `padding` widths as `ReadSignal<Edges>`, so a custom node can draw inside its content box with `rect.get().deflate(border.get()).deflate(padding.get())`.
 
 ## Background paint and shadows
 
@@ -169,6 +173,33 @@ The current overlay host is a single layer: stacking, enter/exit animation, and
 back priority are not implemented yet. IconButton and keyboard focus are also
 pending. Button colors are fixed for now; replacing them with application tokens
 is a follow-up.
+
+## Vector paths
+
+`mue_macroquad::path::PathData` is an immutable, cheaply cloned path with cached
+bounds. Build one with `PathData::parse` (SVG path data with every command,
+relative forms, and compact numbers), the geometry constructors `rect`,
+`rounded_rect`, `circle`, `ellipse`, `line`, `polyline`, and `polygon`, or
+`PathData::from(lyon_path)`. `transformed(matrix)` applies an affine matrix.
+Equality is identity, so a newly parsed path always repaints.
+
+The `path(data)` node fits a path into its content box with `PathFit`
+(`Contain` by default, also `Cover`, `Fill`, and `None`). Its view box defaults to
+the path bounds; set `.view_box(rect)` to keep a fixed coordinate space, as
+icons do. Without `.fill(..)` or `.stroke(..)` the path is filled with the
+foreground `color`; `.stroke_current_color()` strokes with it instead. Stroke
+widths (`StrokeStyle`, `.stroke_width`) are in view-box units and scale with the
+fit. When width or height is `auto`, the node measures to the view box size.
+
+```rust
+use mue::{prelude::*, renderer::math::Rect};
+
+let check = path(PathData::parse("M4 12l5 5L20 6").unwrap())
+    .view_box(Rect::new(0., 0., 24., 24.))
+    .stroke_current_color()
+    .stroke_style(StrokeStyle::round(2.))
+    .style(style! { width: 24px; height: 24px; color: #7fd1a8; });
+```
 
 ## Textures
 

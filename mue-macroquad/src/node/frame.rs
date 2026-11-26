@@ -180,11 +180,21 @@ impl NodeRef {
                 (
                     node.layout.rect,
                     Rect::new(origin.x, origin.y, size.x, size.y),
+                    (node.layout.border, crate::math::Edges::from(layout.border)),
+                    (
+                        node.layout.padding,
+                        crate::math::Edges::from(layout.padding),
+                    ),
                 )
             })
         });
-        if let Some((signal, rect)) = geometry {
+        if let Some((signal, rect, border, padding)) = geometry {
             signal.set(rect);
+            for (signal, value) in [border, padding] {
+                if !signal.is_null() && signal.get_untracked() != value {
+                    signal.set(value);
+                }
+            }
         }
         Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.layout, &()));
         let state = Runtime::with(|rt| {
@@ -203,7 +213,7 @@ impl NodeRef {
         published.push(PublishedGeometry {
             node: *self,
             parent,
-            rect: geometry.map(|(_, rect)| rect),
+            rect: geometry.map(|(_, rect, _, _)| rect),
             offset,
             children: children.clone(),
         });

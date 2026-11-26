@@ -117,10 +117,11 @@ pub use graphics::*;
 pub use layout::*;
 pub use mue_macroquad::node::{
     BuildNode, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
-    KeyedItem, Node, NodeContext, NodeRef, ShapeBuilder, Span, SpanStyle, TextOverflow,
-    TextVerticalAlign, TextWrap, flexbox, join_children, keyed, map_keyed, map_keyed_prop, shape,
-    show_if, text,
+    KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ShapeBuilder, Span, SpanStyle,
+    TextOverflow, TextVerticalAlign, TextWrap, flexbox, join_children, keyed, map_keyed,
+    map_keyed_prop, path, shape, show_if, text,
 };
+pub use mue_macroquad::path::{FillRule, PathData, PathFit, StrokeStyle};
 pub use mue_macros::{component, node, style};
 pub use overlay::*;
 pub use tokens::{Theme, ThemeProvider, TokenSet, provide_theme};

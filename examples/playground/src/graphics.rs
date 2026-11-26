@@ -95,14 +95,21 @@ pub fn page() -> Node {
                 width: 100%;
                 flex: none;
             }),
-            // Shapes use the same paint API; a custom node can draw cached geometry.
-            shape(mue_core::prop::Prop::Static(
-                mue_macroquad::paint::Shapes::build(|p| {
-                    p.fill_circle(vec2(50., 50.), 40., BLUE);
-                    p.stroke_rect(Rect::new(110., 15., 120., 70.), CORAL);
-                }),
-            ))
-            .style(mue_macroquad::style! { height: 100px; }),
+            // Vector paths fit into their node; SVG path data and documents are supported.
+            hstack().children((
+                path(PathData::circle(vec2(50., 50.), 40.))
+                    .fill(BLUE)
+                    .style(mue_macroquad::style! { width: 100px; height: 100px; }),
+                path(PathData::rect(Rect::new(0., 0., 120., 70.)))
+                    .stroke(CORAL)
+                    .stroke_width(2.)
+                    .style(mue_macroquad::style! { width: 120px; height: 70px; }),
+                path(PathData::parse("M4 12l5 5L20 6").unwrap())
+                    .view_box(Rect::new(0., 0., 24., 24.))
+                    .stroke_current_color()
+                    .stroke_style(mue_macroquad::path::StrokeStyle::round(2.5))
+                    .style(mue_macroquad::style! { width: 72px; height: 72px; color: #7fd1a8; }),
+            )),
         ))
         .into_node()
 }

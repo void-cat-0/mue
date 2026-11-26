@@ -9,12 +9,14 @@ pub mod flexbox;
 pub mod portal;
 pub mod shape;
 pub mod text;
+pub mod vector;
 pub use atlas::GlyphAtlasStats;
 pub use children::*;
 pub use flexbox::{FlexboxBuilder, flexbox};
 pub use portal::portal;
 pub use shape::{ShapeBuilder, shape};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
+pub use vector::{PathBuilder, path};
 
 use std::{cell::RefCell, marker::PhantomData, ops::Deref, rc::Rc};
 

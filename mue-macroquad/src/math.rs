@@ -107,3 +107,209 @@ impl From<Rect> for macroquad::math::Rect {
         }
     }
 }
+
+impl Rect {
+    /// Grow every side by `amount`; negative values shrink the rectangle.
+    pub fn outset(&self, amount: f32) -> Rect {
+        Rect::new(
+            self.x - amount,
+            self.y - amount,
+            (self.w + 2. * amount).max(0.),
+            (self.h + 2. * amount).max(0.),
+        )
+    }
+
+    /// Shrink each side by the matching edge, clamping the size at zero.
+    pub fn deflate(&self, edges: Edges) -> Rect {
+        Rect::new(
+            self.x + edges.left,
+            self.y + edges.top,
+            (self.w - edges.left - edges.right).max(0.),
+            (self.h - edges.top - edges.bottom).max(0.),
+        )
+    }
+}
+
+/// Resolved per-side lengths in logical pixels, such as border or padding widths.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct Edges {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl Edges {
+    pub const ZERO: Self = Self::all(0.);
+
+    pub const fn all(value: f32) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.top <= 0. && self.right <= 0. && self.bottom <= 0. && self.left <= 0.
+    }
+}
+
+impl From<taffy::Rect<f32>> for Edges {
+    fn from(rect: taffy::Rect<f32>) -> Self {
+        Self {
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left,
+        }
+    }
+}
+
+/// Resolved corner radii in logical pixels, clockwise from the top-left corner.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct CornerRadii {
+    pub top_left: f32,
+    pub top_right: f32,
+    pub bottom_right: f32,
+    pub bottom_left: f32,
+}
+
+impl CornerRadii {
+    pub const ZERO: Self = Self::all(0.);
+
+    pub const fn all(radius: f32) -> Self {
+        Self {
+            top_left: radius,
+            top_right: radius,
+            bottom_right: radius,
+            bottom_left: radius,
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.top_left <= 0.
+            && self.top_right <= 0.
+            && self.bottom_right <= 0.
+            && self.bottom_left <= 0.
+    }
+
+    /// The common radius when all four corners match.
+    pub fn uniform(&self) -> Option<f32> {
+        (self.top_left == self.top_right
+            && self.top_left == self.bottom_right
+            && self.top_left == self.bottom_left)
+            .then_some(self.top_left)
+    }
+
+    pub fn max(&self) -> f32 {
+        self.top_left
+            .max(self.top_right)
+            .max(self.bottom_right)
+            .max(self.bottom_left)
+    }
+
+    /// Clamp negative radii to zero, then scale all radii down uniformly when
+    /// adjacent corners would overlap along a side (CSS corner-overlap rule).
+    pub fn fit(&self, rect: Rect) -> Self {
+        let r = Self {
+            top_left: self.top_left.max(0.),
+            top_right: self.top_right.max(0.),
+            bottom_right: self.bottom_right.max(0.),
+            bottom_left: self.bottom_left.max(0.),
+        };
+        let ratio = |side: f32, a: f32, b: f32| {
+            if a + b > side && a + b > 0. {
+                (side.max(0.)) / (a + b)
+            } else {
+                1.
+            }
+        };
+        let scale = ratio(rect.w, r.top_left, r.top_right)
+            .min(ratio(rect.w, r.bottom_left, r.bottom_right))
+            .min(ratio(rect.h, r.top_left, r.bottom_left))
+            .min(ratio(rect.h, r.top_right, r.bottom_right));
+        if scale < 1. { r.scale(scale) } else { r }
+    }
+
+    pub fn scale(&self, factor: f32) -> Self {
+        Self {
+            top_left: self.top_left * factor,
+            top_right: self.top_right * factor,
+            bottom_right: self.bottom_right * factor,
+            bottom_left: self.bottom_left * factor,
+        }
+    }
+
+    /// Radii for a rectangle grown by `amount` on every side. Square corners stay square.
+    pub fn outset(&self, amount: f32) -> Self {
+        let grow = |radius: f32| {
+            if radius > 0. {
+                (radius + amount).max(0.)
+            } else {
+                0.
+            }
+        };
+        Self {
+            top_left: grow(self.top_left),
+            top_right: grow(self.top_right),
+            bottom_right: grow(self.bottom_right),
+            bottom_left: grow(self.bottom_left),
+        }
+    }
+
+    /// Inner radii of a border with the given widths (each corner shrinks by
+    /// its wider adjacent edge).
+    pub fn inset(&self, edges: Edges) -> Self {
+        Self {
+            top_left: (self.top_left - edges.top.max(edges.left)).max(0.),
+            top_right: (self.top_right - edges.top.max(edges.right)).max(0.),
+            bottom_right: (self.bottom_right - edges.bottom.max(edges.right)).max(0.),
+            bottom_left: (self.bottom_left - edges.bottom.max(edges.left)).max(0.),
+        }
+    }
+}
+
+impl From<f32> for CornerRadii {
+    fn from(radius: f32) -> Self {
+        Self::all(radius)
+    }
+}
+
+impl mue_core::prop::PropValue for Rect {}
+impl mue_core::prop::PropValue for Edges {}
+impl mue_core::prop::PropValue for CornerRadii {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corner_radii_scale_down_when_adjacent_corners_overlap() {
+        let rect = Rect::new(0., 0., 100., 40.);
+        let fitted = CornerRadii::all(30.).fit(rect);
+        assert_eq!(fitted, CornerRadii::all(20.));
+        let uneven = CornerRadii {
+            top_left: 80.,
+            top_right: 20.,
+            bottom_right: 0.,
+            bottom_left: 0.,
+        }
+        .fit(rect);
+        assert!((uneven.top_left - 40.).abs() < 1e-4);
+        assert!((uneven.top_right - 10.).abs() < 1e-4);
+    }
+
+    #[test]
+    fn border_inner_radii_shrink_by_the_wider_edge() {
+        let inner = CornerRadii::all(10.).inset(Edges {
+            top: 4.,
+            right: 2.,
+            bottom: 12.,
+            left: 2.,
+        });
+        assert_eq!(inner.top_left, 6.);
+        assert_eq!(inner.bottom_right, 0.);
+    }
+}

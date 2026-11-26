@@ -4,6 +4,7 @@ use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
     math::Rect,
     paint::use_paint,
+    path::{FillRule, PathData},
     style::{Style, Styleable},
 };
 use std::rc::Rc;
@@ -24,8 +25,9 @@ pub fn blockquote(ctx: NodeContext, text: Rc<str>) -> Node {
             style.on_render.append(move |_| {
                 let bounds = rect.get();
                 paint.draw(|p| {
-                    p.fill_rect(
-                        Rect::new(bounds.x, bounds.y, 3., bounds.h),
+                    p.fill(
+                        &PathData::rect(Rect::new(bounds.x, bounds.y, 3., bounds.h)),
+                        FillRule::NonZero,
                         color.get_clone().shader(bounds),
                     )
                 });

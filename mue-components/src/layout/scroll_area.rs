@@ -14,6 +14,7 @@ use mue_macroquad::{
     math::{Rect, Vector},
     node::{BuildNode, IntoChildren, IntoNode, Node, NodeContext},
     paint::{use_background, use_paint},
+    path::{FillRule, PathData},
     style::{Style, Styleable, StyleableExt},
 };
 
@@ -268,10 +269,14 @@ impl BuildNode for ScrollAreaBuilder {
                     paint.draw(|p| {
                         for axis in 0..2 {
                             if let Some((track, thumb)) = state.bar(axis) {
-                                p.fill_rounded_rect(track, 3., Color::from_rgba(128, 128, 128, 40));
-                                p.fill_rounded_rect(
-                                    thumb,
-                                    3.,
+                                p.fill(
+                                    &PathData::rounded_rect(track, 3.),
+                                    FillRule::NonZero,
+                                    Color::from_rgba(128, 128, 128, 40),
+                                );
+                                p.fill(
+                                    &PathData::rounded_rect(thumb, 3.),
+                                    FillRule::NonZero,
                                     Color::from_rgba(128, 128, 128, 180),
                                 );
                             }

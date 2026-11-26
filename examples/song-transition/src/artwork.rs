@@ -4,6 +4,7 @@ use mue_macroquad::{
     SharedTexture,
     math::Rect,
     paint::{Shapes, with_clip},
+    path::{FillRule, PathData},
     shader::TextureShader,
 };
 use std::rc::Rc;
@@ -132,9 +133,9 @@ pub fn draw(artwork: &Artwork, surface: Surface, alpha: f32) {
     );
     with_clip(surface.clip, || {
         Shapes::build(|shapes| {
-            shapes.fill_rounded_rect(
-                surface.rect,
-                surface.radius,
+            shapes.fill(
+                &PathData::rounded_rect(surface.rect, surface.radius),
+                FillRule::NonZero,
                 TextureShader::new(artwork.texture.clone(), surface.uv, surface.rect, tint),
             )
         })

@@ -132,7 +132,8 @@ line-height: {responsive::ui(32.)};
                         .placement(placement)
                         .offset_x(offset.select(-20., 0.))
                         .offset_y(offset.select(20., 0.))
-                        .children(circle().style(mue_macroquad::style! {
+                        .children(flexbox().style(mue_macroquad::style! {
+border-radius: 9999px;
 width: {36.};
 height: {36.};
 background: {CORAL};

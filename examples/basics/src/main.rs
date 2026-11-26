@@ -130,7 +130,8 @@ async fn run() {
                             height: {Size::vh(15.)};
                             max-height: {responsive::ui(90.)};
                             })
-                            .children(circle().style(mue_macroquad::style! {
+                            .children(flexbox().style(mue_macroquad::style! {
+                            border-radius: 9999px;
                             width: {Size::vw(8.75)};
                             height: {Size::vw(8.75)};
                             max-width: {responsive::ui(70.)};

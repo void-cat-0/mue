@@ -168,7 +168,11 @@ fn ui() -> impl Component {
     let retained_shapes = Shapes::build(|p| {
         for y in 0..30 {
             for x in 0..40 {
-                p.fill_rect(MueRect::new(x as f32 * 2., y as f32 * 2., 2., 2.), YELLOW);
+                p.fill(
+                    &PathData::rect(MueRect::new(x as f32 * 2., y as f32 * 2., 2., 2.)),
+                    FillRule::NonZero,
+                    YELLOW,
+                );
             }
         }
     });
