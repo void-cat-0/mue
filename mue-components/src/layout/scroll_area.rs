@@ -126,6 +126,7 @@ impl Default for ScrollOptions {
 /// revealed on platforms whose keyboard covers the window (iOS, web).
 pub fn scroll_area() -> ScrollAreaBuilder {
     ScrollAreaBuilder {
+        handle: None,
         style: Style::new(),
         content_style: Style::new(),
         options: ScrollOptions::default(),
@@ -135,7 +136,93 @@ pub fn scroll_area() -> ScrollAreaBuilder {
     }
 }
 
+/// Imperative scrolling (Vue's template ref with `defineExpose`): bind with
+/// [`ScrollAreaBuilder::handle`], then scroll from code.
+///
+/// ```
+/// use mue_components::prelude::*;
+/// use mue_macroquad::math::Vector;
+///
+/// # let owner = mue_core::scope::OwnedScope::new();
+/// # owner.run(|| {
+/// let list = ScrollAreaHandle::new();
+/// let _area = scroll_area().handle(list.clone());
+/// let _to_top = button("Top").on_activate(move || list.scroll_to_top(true));
+/// # });
+/// ```
+#[derive(Clone, Default)]
+pub struct ScrollAreaHandle(Rc<RefCell<std::rc::Weak<RefCell<ScrollState>>>>);
+
+impl ScrollAreaHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn state(&self) -> Option<Rc<RefCell<ScrollState>>> {
+        self.0.borrow().upgrade()
+    }
+
+    /// The current offset (zero when unmounted).
+    pub fn offset(&self) -> Vector {
+        self.state()
+            .map_or(Vector::ZERO, |state| state.borrow().offset.get_untracked())
+    }
+
+    /// The largest offset on each axis.
+    pub fn max_offset(&self) -> Vector {
+        self.state()
+            .map_or(Vector::ZERO, |state| state.borrow().max)
+    }
+
+    /// Scroll to `offset` (clamped), easing over 0.3 s when `animated`.
+    pub fn scroll_to(&self, offset: Vector, animated: bool) {
+        if let Some(state) = self.state() {
+            state.borrow_mut().scroll_to(offset, animated);
+        }
+    }
+
+    pub fn scroll_by(&self, delta: Vector, animated: bool) {
+        self.scroll_to(self.offset() + delta, animated);
+    }
+
+    pub fn scroll_to_top(&self, animated: bool) {
+        self.scroll_to(Vector::new(self.offset().x, 0.), animated);
+    }
+
+    pub fn scroll_to_end(&self, animated: bool) {
+        let max = self.max_offset();
+        self.scroll_to(Vector::new(self.offset().x, max.y), animated);
+    }
+
+    /// Scroll the least amount that makes `rect` (window coordinates, such as
+    /// a node's [`rect`](mue_macroquad::node::NodeRef::rect)) visible.
+    pub fn scroll_into_view(&self, rect: Rect, animated: bool) {
+        let Some(state) = self.state() else {
+            return;
+        };
+        let (viewport, offset) = {
+            let state = state.borrow();
+            (state.viewport, state.offset.get_untracked())
+        };
+        let mut target = offset;
+        if rect.bottom() > viewport.bottom() {
+            target.y += rect.bottom() - viewport.bottom();
+        }
+        if rect.y < viewport.y {
+            target.y -= viewport.y - rect.y;
+        }
+        if rect.right() > viewport.right() {
+            target.x += rect.right() - viewport.right();
+        }
+        if rect.x < viewport.x {
+            target.x -= viewport.x - rect.x;
+        }
+        self.scroll_to(target, animated);
+    }
+}
+
 pub struct ScrollAreaBuilder {
+    handle: Option<ScrollAreaHandle>,
     style: Style,
     content_style: Style,
     options: ScrollOptions,
@@ -166,6 +253,12 @@ impl ScrollAreaBuilder {
 
     pub fn content_style(mut self, style: Style) -> Self {
         self.content_style = style;
+        self
+    }
+
+    /// Bind a handle for scrolling from code.
+    pub fn handle(mut self, handle: ScrollAreaHandle) -> Self {
+        self.handle = Some(handle);
         self
     }
 
@@ -203,6 +296,7 @@ impl Styleable for ScrollAreaBuilder {
 impl BuildNode for ScrollAreaBuilder {
     fn build(self, mut ctx: NodeContext) -> Node {
         let Self {
+            handle,
             style,
             mut content_style,
             options,
@@ -247,7 +341,11 @@ impl BuildNode for ScrollAreaBuilder {
                     armed: true,
                     last_max: 0.,
                 }),
+                animation: None,
             }));
+            if let Some(handle) = &handle {
+                *handle.0.borrow_mut() = Rc::downgrade(&state);
+            }
             let source = mue_macroquad::node::take_children();
             content_style.provide_defaults(Style::new().flex_none().min_width(0.).min_height(0.));
             if options.axis == ScrollAxis::Vertical {
@@ -546,6 +644,8 @@ struct ScrollState {
     pull: Signal<f32>,
     refresh: Option<Refresh>,
     end: Option<ReachEnd>,
+    /// A programmatic scroll in progress: from, to, elapsed fraction.
+    animation: Option<(Vector, Vector, f32)>,
 }
 
 impl ScrollState {
@@ -609,7 +709,32 @@ impl ScrollState {
         }
     }
 
+    fn scroll_to(&mut self, target: Vector, animated: bool) {
+        let target = self.options.axis.mask(target).clamp(Vector::ZERO, self.max);
+        self.velocity = Vector::ZERO;
+        if animated {
+            self.animation = Some((self.offset.get_untracked(), target, 0.));
+        } else {
+            self.animation = None;
+            self.set_offset(target);
+            self.last_offset = self.offset.get_untracked();
+        }
+    }
+
     fn advance_motion(&mut self, dt: f32) {
+        if let Some((from, to, t)) = self.animation {
+            if self.drag.is_some() {
+                // A touch takes over from the animation.
+                self.animation = None;
+            } else {
+                let t = (t + dt.clamp(0., 0.05) / 0.3).min(1.);
+                let eased = 1. - (1. - t) * (1. - t) * (1. - t);
+                self.set_offset(from + (to - from) * eased);
+                self.last_offset = self.offset.get_untracked();
+                self.animation = (t < 1.).then_some((from, to, t));
+                return;
+            }
+        }
         self.correct_offset();
         if self.drag.is_none() && self.options.momentum {
             let dt = dt.clamp(0., 0.05);
