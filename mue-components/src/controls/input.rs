@@ -28,14 +28,14 @@ use std::{rc::Rc, str::FromStr};
 
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
+    input::text_input::{TextCapitalization, TextFormatter, TextInputAction, TextInputKind},
     node::{
         BuildNode, IntoChildren, IntoNode, Node, NodeContext, TextEditBuilder, TextEditHandle,
         flexbox::use_container, text_edit,
     },
-    shader::Brush,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Size, Style, Styleable, StyleableExt},
-    text_input::{TextCapitalization, TextFormatter, TextInputAction, TextInputKind},
 };
 
 /// Field size: padding, font size, and minimum height.

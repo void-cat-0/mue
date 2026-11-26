@@ -18,7 +18,7 @@
 //! ```
 //! use mue_components::prelude::*;
 //! use mue_core::prelude::*;
-//! use mue_macroquad::color::Color;
+//! use mue_macroquad::paint::color::Color;
 //!
 //! #[component]
 //! fn toggle_chip(

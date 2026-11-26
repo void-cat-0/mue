@@ -35,13 +35,13 @@ use mue_core::{
 use slotmap::{Key, new_key_type};
 
 use crate::{
-    clip::Sector,
-    event::hit_test::HitTestFn,
-    gesture::GestureId,
+    app::runtime::Runtime,
     hook::NodeHooks,
+    input::gesture::GestureId,
+    input::hit_test::HitTestFn,
     layout::OwnedLayout,
     math::{Matrix, Rect, Vector},
-    runtime::Runtime,
+    paint::clip::Sector,
     style::{
         FontSize, FontSizeExt, SizeExt, Style, Styleable, StyleableExt, Transform, TransformOrigin,
     },
@@ -74,12 +74,12 @@ pub(crate) struct NodeInner {
     pub(crate) clip: Option<ReadSignal<Rect>>,
     pub(crate) clip_radius: Option<Prop<f32>>,
     pub(crate) clip_sector: Option<Prop<Sector>>,
-    pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
-    pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
+    pub(crate) focus: Option<Box<crate::input::focus::FocusSlot>>,
+    pub(crate) cursor: Option<Prop<crate::input::cursor::Cursor>>,
     /// `(hit_slop, min_hit_size)` when either is declared.
     pub(crate) hit_area: Option<(Prop<f32>, Prop<f32>)>,
     pub(crate) z_index: Option<Prop<i32>>,
-    pub(crate) offscreen: Option<Rc<crate::offscreen::OffscreenState>>,
+    pub(crate) offscreen: Option<Rc<crate::paint::offscreen::OffscreenState>>,
     /// Wrapper nodes (layer hosts) that must not become the `rem` root.
     pub(crate) font_root_transparent: bool,
     node_handles: Vec<NodeHandle>,
@@ -288,7 +288,7 @@ impl NodeRef {
         }
         let transform = transform.resolve();
         crate::paint::with_transform(transform, || match &offscreen {
-            Some(state) => crate::offscreen::render(state, || self.render_content()),
+            Some(state) => crate::paint::offscreen::render(state, || self.render_content()),
             None => self.render_content(),
         });
     }
@@ -317,9 +317,13 @@ impl NodeRef {
             .filter(|radius| *radius > 0.);
         let clipped = || {
             if let Some(sector) = sector {
-                crate::clip::with_clip_sector(layout_rect.get(), sector, || self.render_children());
+                crate::paint::clip::with_clip_sector(layout_rect.get(), sector, || {
+                    self.render_children()
+                });
             } else if let Some(radius) = radius {
-                crate::clip::with_clip_radius(layout_rect.get(), radius, || self.render_children());
+                crate::paint::clip::with_clip_radius(layout_rect.get(), radius, || {
+                    self.render_children()
+                });
             } else {
                 self.render_children();
             }
@@ -415,7 +419,8 @@ impl NodeHandle {
 
     /// Focus the bound node or its first focusable descendant.
     pub fn focus_within(&self) -> bool {
-        self.get_untracked().is_some_and(crate::focus::focus_within)
+        self.get_untracked()
+            .is_some_and(crate::input::focus::focus_within)
     }
 
     pub fn blur(&self) {
@@ -560,7 +565,7 @@ impl Node {
             let mut node = NodeInner::new(scope, children);
             node.owned_scopes.push(owner);
             CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
-            crate::transition::bind_style(style);
+            crate::motion::transition::bind_style(style);
             crate::paint::bind_node_style(style);
             let font_size = style.declared_font_size();
             let matrix = style.take_matrix_transform();
@@ -605,7 +610,7 @@ impl Node {
                 NodeInner::with_mut(|node| node.node_handles = handles);
             }
             let cursor = style.take_cursor();
-            if !matches!(cursor, Prop::Static(crate::cursor::Cursor::Auto)) {
+            if !matches!(cursor, Prop::Static(crate::input::cursor::Cursor::Auto)) {
                 NodeInner::with_mut(|node| node.cursor = Some(cursor));
             }
             let hit_slop = style.take_hit_slop();
@@ -640,7 +645,7 @@ impl Node {
                 handle.bind(Some(NodeRef::from_id(id)));
             }
             if let Some((auto_focus, contain)) = focus_mount {
-                crate::focus::mounted(id, auto_focus, contain);
+                crate::input::focus::mounted(id, auto_focus, contain);
             }
             Self(NodeRef::from_id(id).owned())
         })
@@ -650,7 +655,7 @@ impl Node {
 /// Move focus declarations into the node. Returns `(auto_focus, contain)` when
 /// the node needs mount-time focus handling.
 fn bind_focus(style: &mut Style) -> Option<(bool, bool)> {
-    use crate::focus::{FocusScope, FocusSlot};
+    use crate::input::focus::{FocusScope, FocusSlot};
     let declared = style.declared_focusable().is_some()
         || style.declared_tab_index().is_some()
         || style.declared_focus_scope().is_some()
@@ -686,7 +691,7 @@ fn bind_focus(style: &mut Style) -> Option<(bool, bool)> {
 }
 
 fn append_hooks(node: &mut NodeInner, style: &mut Style) {
-    use crate::gesture;
+    use crate::input::gesture;
 
     Runtime::with(|rt| {
         let mut gestures = rt.gestures.borrow_mut();
@@ -812,7 +817,7 @@ pub fn on_after_clip(hook: impl FnMut(&()) + 'static) {
     NodeInner::with_mut(|node| node.hooks.after_clip.append(hook));
 }
 
-pub fn add_gesture(gesture: impl crate::gesture::Gesture + 'static) {
+pub fn add_gesture(gesture: impl crate::input::gesture::Gesture + 'static) {
     let id = Runtime::with(|rt| rt.gestures.borrow_mut().insert(Some(Box::new(gesture))));
     NodeInner::with_mut(|node| node.gestures.push(id));
 }

@@ -168,17 +168,17 @@ pub use mue_macroquad::node::{
     SpanStyle, SvgBuilder, TextOverflow, TextVerticalAlign, TextWrap, flexbox, join_children,
     keyed, map_keyed, map_keyed_prop, path, shape, show_if, svg, text,
 };
-pub use mue_macroquad::path::{FillRule, PathData, PathFit, StrokeStyle};
-pub use mue_macroquad::svg::SvgDocument;
+pub use mue_macroquad::paint::path::{FillRule, PathData, PathFit, StrokeStyle};
+pub use mue_macroquad::paint::svg::SvgDocument;
 pub use mue_macroquad::{
-    anchor::{Placement, anchored, use_anchor},
-    cursor::Cursor,
-    feedback::{HapticStyle, SoundCue},
-    focus::FocusScope,
-    layer::{Layer, layer_host, teleport},
+    input::cursor::Cursor,
+    input::feedback::{HapticStyle, SoundCue},
+    input::focus::FocusScope,
+    motion::presence::{PresenceAnimation, presence, use_presence},
     node::{NodeHandle, shader_box},
-    offscreen::{Filter, offscreen},
-    presence::{PresenceAnimation, presence, use_presence},
+    overlay::anchor::{Placement, anchored, use_anchor},
+    overlay::layer::{Layer, layer_host, teleport},
+    paint::offscreen::{Filter, offscreen},
 };
 pub use mue_macros::{component, node, style};
 pub use overlay::*;

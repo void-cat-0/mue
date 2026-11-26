@@ -1,4 +1,4 @@
-use crate::event::{
+use crate::input::{
     keyboard::{CharEvent, FocusEvent, KeyEvent},
     pointer::PointerEvent,
     wheel::WheelEvent,

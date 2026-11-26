@@ -4,11 +4,11 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color,
     math::{Rect, Vector},
+    motion::transition::Transition,
     paint::Shapes,
-    shader::SharedTexture,
-    transition::Transition,
+    paint::color::Color,
+    paint::shader::SharedTexture,
 };
 
 fn main() {

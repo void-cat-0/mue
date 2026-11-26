@@ -569,7 +569,7 @@ Give a menu row a selected state. The color follows a signal because you pass th
 
 ```rust
 use mue::prelude::*;
-use mue::renderer::color::Color;
+use mue::renderer::paint::color::Color;
 
 let selected = signal(false);
 let fill = selected.pick(
@@ -673,7 +673,7 @@ fn tide_marker() -> impl Component {
 Attach the transition to the row itself and bind its background. Use this for a selection marker that should not move its siblings. Compare it with the width binding above, which requests new layout as the width changes.
 
 ```rust
-use mue::{prelude::*, renderer::color::Color};
+use mue::{prelude::*, renderer::paint::color::Color};
 
 #[component]
 fn selection_row() -> impl Component {

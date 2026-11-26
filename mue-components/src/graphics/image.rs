@@ -5,9 +5,9 @@ use taffy::{AvailableSpace, Size};
 use mue_macroquad::{
     layout::use_layout,
     math::{Rect, Vector, vec2},
+    paint::shader::SharedTexture,
     paint::use_background,
     paint::use_paint,
-    shader::SharedTexture,
     style::Style,
 };
 

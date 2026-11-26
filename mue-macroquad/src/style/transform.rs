@@ -1,7 +1,7 @@
 //! Transform functions, projected onto the node's two-dimensional canvas plane.
 use super::{Size, SizeExt};
 use crate::math::{Matrix, Rect, Vector};
-use crate::transition::Interpolatable as _;
+use crate::motion::transition::Interpolatable as _;
 use mue_core::prop::PropValue;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,7 +164,7 @@ macro_rules! reactive_transform {
 reactive_transform!(Matrix, Matrix);
 reactive_transform!(Transform, Functions);
 
-impl crate::transition::Interpolatable for TransformOrigin {
+impl crate::motion::transition::Interpolatable for TransformOrigin {
     fn can_interpolate(from: &Self, to: &Self) -> bool {
         Size::can_interpolate(&from.0, &to.0) && Size::can_interpolate(&from.1, &to.1)
     }
@@ -206,7 +206,7 @@ fn zero(size: Size) -> Size {
     }
 }
 
-impl crate::transition::Interpolatable for Transform {
+impl crate::motion::transition::Interpolatable for Transform {
     fn can_interpolate(from: &Self, to: &Self) -> bool {
         if from.0.is_empty() || to.0.is_empty() {
             return true;

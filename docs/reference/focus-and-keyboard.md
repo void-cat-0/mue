@@ -66,12 +66,12 @@ global shortcut.
 | `on_key_up` | `KeyEvent` with `repeat == false` |
 | `on_char` | `CharEvent { character, modifiers, repeat }` for text input |
 
-`KeyCode` and `KeyMods` are re-exported from `mue_macroquad::event::keyboard`.
+`KeyCode` and `KeyMods` are re-exported from `mue_macroquad::input::keyboard`.
 Node keyboard routing is independent of the Scene's raw input: the active Scene
 still receives every key in `SceneEvent::Input`.
 
 ```rust
-use mue::{prelude::*, renderer::event::keyboard::KeyCode};
+use mue::{prelude::*, renderer::input::keyboard::KeyCode};
 
 let saved = signal(false);
 let editor = flexbox().focusable(true).on_key_down(move |event| {
@@ -91,11 +91,11 @@ already visible), like CSS `:focus-visible`. Pointer focus is not visible.
   `focus.visible` signals for styling, in the same way `with_hovered` does.
 - `StyleableExt::focus_ring(width, brush, offset)` shows an outline only while
   focus is visible.
-- `mue_macroquad::focus::use_focus()` returns the same signals inside a
+- `mue_macroquad::input::focus::use_focus()` returns the same signals inside a
   `#[node]` body.
 
 ```rust
-use mue::{prelude::*, renderer::color::Color};
+use mue::{prelude::*, renderer::paint::color::Color};
 
 let field = flexbox()
     .focusable(true)

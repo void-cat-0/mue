@@ -4,14 +4,14 @@ use std::{cell::RefCell, rc::Rc};
 
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    event::keyboard::KeyCode,
-    focus::FocusScope,
-    layer::{Layer, teleport},
+    input::focus::FocusScope,
+    input::keyboard::KeyCode,
+    motion::presence::{PresenceAnimation, presence},
+    motion::transition::Transition,
     node::{BuildNode, IntoNode, Node, NodeContext, flexbox},
-    presence::{PresenceAnimation, presence},
+    overlay::layer::{Layer, teleport},
+    paint::color::Color,
     style::{Size, Style, Styleable, StyleableExt},
-    transition::Transition,
 };
 
 /// A full-screen modal layer with a backdrop and a centered content node.
@@ -91,7 +91,7 @@ impl BuildNode for OverlayHostBuilder {
         let mut content = Some(content);
         // Back (the Android back button, an edge swipe) closes it too.
         if dismissible {
-            mue_macroquad::back::use_back_handler(open, fire.clone());
+            mue_macroquad::input::back::use_back_handler(open, fire.clone());
         }
         teleport(Layer::Modal, move || {
             let on_escape = fire.clone();

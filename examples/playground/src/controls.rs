@@ -5,10 +5,10 @@ use super::responsive;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    shader::Brush,
+    motion::transition::Transition,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{FontSize, Size, Styleable, StyleableExt},
-    transition::Transition,
 };
 use std::{cell::RefCell, rc::Rc};
 

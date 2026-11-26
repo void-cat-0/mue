@@ -33,7 +33,7 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     font::{self, fontdb},
-    shader::Brush,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;
@@ -185,7 +185,7 @@ fn nav_item(index: usize, selected: Signal<usize>, compact: bool) -> Node {
             padding: {(u(12.), u(7.))};
             min-height: {u(34.)};
             border-radius: {u(8.)};
-            background: {active.pick(Brush::Solid(BLUE), Brush::Solid(mue_macroquad::color::Color::TRANSPARENT))};
+            background: {active.pick(Brush::Solid(BLUE), Brush::Solid(mue_macroquad::paint::color::Color::TRANSPARENT))};
             align-items: center;
             flex-direction: row;
             transition: 120ms ease-out;
@@ -199,7 +199,7 @@ fn nav_item(index: usize, selected: Signal<usize>, compact: bool) -> Node {
         .children(text(PAGES[index].0).style(mue_macroquad::style! {
             font-size: {f(14.)};
             line-height: {u(20.)};
-            color: {active.pick(Brush::Solid(mue_macroquad::color::Color::from_rgba(19, 23, 32, 255)), foreground())};
+            color: {active.pick(Brush::Solid(mue_macroquad::paint::color::Color::from_rgba(19, 23, 32, 255)), foreground())};
             text-wrap: {false};
         }))
         .into_node()
@@ -343,7 +343,7 @@ fn build_ui() -> impl IntoNode + 'static {
         let selected = SELECTED.with(|selected| *selected);
         // Tabs replace the sidebar when it would leave the page less than
         // 560 design units (narrow phones, or a high zoom setting).
-        let viewport = mue_macroquad::viewport::use_viewport();
+        let viewport = mue_macroquad::app::viewport::use_viewport();
         let zoom = responsive::zoom();
         let compact = computed(move |_| {
             let viewport = viewport.get();
@@ -360,7 +360,7 @@ fn build_ui() -> impl IntoNode + 'static {
             .transition_curve(SPRING)
             .into_node();
         // Back steps to the previous page before the app closes.
-        mue_macroquad::back::use_back_handler(selected.map(|index| index > 0), move || {
+        mue_macroquad::input::back::use_back_handler(selected.map(|index| index > 0), move || {
             selected.update(|index| *index = index.saturating_sub(1))
         });
         stack()

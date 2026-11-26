@@ -3,9 +3,9 @@ use macroquad::prelude::{Color, FilterMode, Image, Texture2D};
 use mue_macroquad::{
     SharedTexture,
     math::Rect,
+    paint::path::{FillRule, PathData},
+    paint::shader::TextureShader,
     paint::{Shapes, with_clip},
-    path::{FillRule, PathData},
-    shader::TextureShader,
 };
 use std::rc::Rc;
 

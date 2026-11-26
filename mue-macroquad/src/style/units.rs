@@ -7,7 +7,7 @@
 use mue_core::{effect::computed, prop::Prop, signal::Access};
 use taffy::{Dimension, LengthPercentage, LengthPercentageAuto};
 
-use crate::viewport;
+use crate::app::viewport;
 
 pub use mue_core::{FontSize, Size};
 

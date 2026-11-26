@@ -2,9 +2,9 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
+    app::runtime::set_timeout,
     math::Vector,
     node::NodeHandle,
-    runtime::set_timeout,
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;

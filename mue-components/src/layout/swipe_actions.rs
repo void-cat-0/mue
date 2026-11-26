@@ -5,10 +5,10 @@ use std::{
 
 use mue_core::prelude::*;
 use mue_macroquad::{
-    event::pointer::{
+    input::gesture::Gesture,
+    input::pointer::{
         ButtonState, ClaimToken, PointerAction, PointerEvent, PointerId, PointerType,
     },
-    gesture::Gesture,
     math::Vector,
     node::{
         BuildNode, IntoChildren, IntoNode, Node, NodeContext, NodeHandle, flexbox,

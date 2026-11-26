@@ -2,7 +2,7 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    shader::Brush,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt, Transform, TransformOp},
 };
 use std::rc::Rc;
@@ -153,7 +153,7 @@ fn media_card() -> Node {
                             flex: none; width: {u(16.)};
                             font-size: {f(15.)}; line-height: {u(20.)};
                             font-family: monospace;
-                            color: {matches.map(|on| Brush::Solid(if on { GREEN } else { mue_macroquad::color::Color::from_rgba(146, 157, 178, 255) }))};
+                            color: {matches.map(|on| Brush::Solid(if on { GREEN } else { mue_macroquad::paint::color::Color::from_rgba(146, 157, 178, 255) }))};
                         },
                     ),
                     mono(query),

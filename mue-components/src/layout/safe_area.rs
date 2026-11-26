@@ -1,13 +1,13 @@
 use mue_core::{effect::computed, signal::Access};
 use mue_macroquad::{
+    app::viewport::safe_area as insets,
     node::{Component, flexbox},
     style::{Size, Styleable, StyleableExt},
-    viewport::safe_area as insets,
 };
 
 /// A full-size column padded by the platform's safe-area insets (notches,
 /// rounded corners, system bars). The host publishes the insets with
-/// [`mue_macroquad::viewport::set_safe_area`]; on desktop they are zero.
+/// [`mue_macroquad::app::viewport::set_safe_area`]; on desktop they are zero.
 /// Disable individual edges with the boolean setters.
 ///
 /// ```

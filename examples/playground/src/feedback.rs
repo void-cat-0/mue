@@ -3,9 +3,9 @@ use macroquad::miniquad::{HapticFeedback, window::haptic_feedback};
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    event::keyboard::KeyCode,
-    feedback::{haptic, set_haptic_handler, set_sound_handler, sound},
+    input::feedback::{haptic, set_haptic_handler, set_sound_handler, sound},
+    input::keyboard::KeyCode,
+    paint::color::Color,
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;

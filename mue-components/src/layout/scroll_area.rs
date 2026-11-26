@@ -5,16 +5,16 @@ use mue_core::prelude::*;
 use taffy::Overflow;
 
 use mue_macroquad::{
-    color::Color,
-    event::pointer::{
+    input::gesture::Gesture,
+    input::pointer::{
         ButtonState, ClaimToken, PointerAction, PointerEvent, PointerId, PointerType,
     },
-    gesture::Gesture,
     layout::use_layout,
     math::{Rect, Vector},
     node::{BuildNode, IntoChildren, IntoNode, Node, NodeContext, NodeHandle, NodeRef},
+    paint::color::Color,
+    paint::path::{FillRule, PathData},
     paint::{use_background, use_paint},
-    path::{FillRule, PathData},
     style::{Style, Styleable, StyleableExt},
 };
 
@@ -412,9 +412,9 @@ impl BuildNode for ScrollAreaBuilder {
             let reveal = std::rc::Rc::new(std::cell::Cell::new(false));
             {
                 let reveal = reveal.clone();
-                let focused = mue_macroquad::focus::focused_signal();
-                let inset = mue_macroquad::text_input::keyboard_inset();
-                let caret = mue_macroquad::text_input::caret_rect();
+                let focused = mue_macroquad::input::focus::focused_signal();
+                let inset = mue_macroquad::input::text_input::keyboard_inset();
+                let caret = mue_macroquad::input::text_input::caret_rect();
                 let relative = computed(move |_| {
                     let caret = caret.get()?;
                     let origin = focused.get()?.rect()?.get_untracked();
@@ -500,7 +500,7 @@ impl BuildNode for ScrollAreaBuilder {
                 state: state.clone(),
             });
             // Scrollbar input should not activate the content beneath it.
-            mue_macroquad::event::hit_test::set_hit_test_fn(Rc::new(move |node, pos, result| {
+            mue_macroquad::input::hit_test::set_hit_test_fn(Rc::new(move |node, pos, result| {
                 let state = state.borrow();
                 if !state.viewport.contains(&pos) {
                     return;
@@ -514,7 +514,7 @@ impl BuildNode for ScrollAreaBuilder {
                 if !on_bar {
                     let children = node.children();
                     for child in children.get_clone().iter().rev() {
-                        mue_macroquad::event::hit_test::hit_test_into(*child, pos, result);
+                        mue_macroquad::input::hit_test::hit_test_into(*child, pos, result);
                     }
                 }
                 result.hit_self(node);
@@ -526,7 +526,8 @@ impl BuildNode for ScrollAreaBuilder {
 /// Scroll so the focused node's caret (or the node) is visible above the
 /// soft keyboard, if this is the innermost scroll area containing it.
 fn reveal_focused(area: NodeHandle, state: &mut ScrollState) {
-    let (Some(area), Some(focused)) = (area.get_untracked(), mue_macroquad::focus::focused())
+    let (Some(area), Some(focused)) =
+        (area.get_untracked(), mue_macroquad::input::focus::focused())
     else {
         return;
     };
@@ -543,14 +544,14 @@ fn reveal_focused(area: NodeHandle, state: &mut ScrollState) {
     if inner {
         return;
     }
-    let target = mue_macroquad::text_input::caret_rect()
+    let target = mue_macroquad::input::text_input::caret_rect()
         .get_untracked()
         .or_else(|| focused.rect().map(|rect| rect.get_untracked()));
     let Some(target) = target else {
         return;
     };
-    let window = mue_macroquad::viewport::use_viewport().get_untracked();
-    let inset = mue_macroquad::text_input::keyboard_inset().get_untracked();
+    let window = mue_macroquad::app::viewport::use_viewport().get_untracked();
+    let inset = mue_macroquad::input::text_input::keyboard_inset().get_untracked();
     let viewport = state.viewport;
     let bottom = viewport.bottom().min(window.height - inset) - REVEAL_MARGIN;
     let top = viewport.y + REVEAL_MARGIN.min(viewport.h / 4.);
@@ -593,7 +594,7 @@ fn draw_refresh_indicator(
         state.viewport.y + (pull / 2.).max(radius + 6.).min(refresh.hold / 2. + 8.),
     );
     let (start, sweep) = if refreshing {
-        let spin = (mue_macroquad::runtime::get_time() * 5.) % (2. * PI);
+        let spin = (mue_macroquad::app::runtime::get_time() * 5.) % (2. * PI);
         (spin, 1.5 * PI)
     } else {
         let progress = (pull / refresh.threshold).clamp(0., 1.);
@@ -626,7 +627,7 @@ fn draw_refresh_indicator(
         );
         p.stroke(
             &arc,
-            &mue_macroquad::path::StrokeStyle::round(2.5),
+            &mue_macroquad::paint::path::StrokeStyle::round(2.5),
             Color::new(0.55, 0.72, 1., alpha),
         );
     });

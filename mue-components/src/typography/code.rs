@@ -2,7 +2,7 @@ use super::{document::Document, text::render_text};
 use cosmic_text::FamilyOwned;
 use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
-    color::Color,
+    paint::color::Color,
     style::{Style, Styleable, StyleableExt},
 };
 use std::rc::Rc;

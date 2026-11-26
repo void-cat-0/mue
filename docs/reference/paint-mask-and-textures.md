@@ -21,7 +21,7 @@
 A node's tree rendering applies its transform to the subtree. Build geometry in the supplied layout coordinates and let `use_paint` handle effective opacity. `ShapesBuilder` tessellates [`PathData`](#vector-paths-and-svg) with `fill(path, rule, shader)` and `stroke(path, stroke_style, shader)`, and draws textured quads with `draw_texture`. The following node caches a rounded track and invalidates it when its layout rect changes.
 
 ```rust,no_run
-use mue::{prelude::*, renderer::{color::Color, layout::use_layout, paint::use_paint, path::FillRule}};
+use mue::{prelude::*, renderer::{paint::color::Color, layout::use_layout, paint::use_paint, paint::path::FillRule}};
 
 #[node]
 fn meter_track(ctx: NodeContext) -> Node {
@@ -181,7 +181,7 @@ is a follow-up.
 
 ## Vector paths and SVG
 
-`mue_macroquad::path::PathData` is an immutable, cheaply cloned path with cached
+`mue_macroquad::paint::path::PathData` is an immutable, cheaply cloned path with cached
 bounds. Build one with `PathData::parse` (SVG path data with every command,
 relative forms, and compact numbers), the geometry constructors `rect`,
 `rounded_rect`, `circle`, `ellipse`, `line`, `polyline`, and `polygon`, or
@@ -219,7 +219,7 @@ node draws a document with the same fitting and measuring rules as `path`;
 
 ## Offscreen layers and backdrop blur
 
-`mue_macroquad::offscreen::offscreen()` is a flex container whose subtree is
+`mue_macroquad::paint::offscreen::offscreen()` is a flex container whose subtree is
 rendered into a window-sized render target and composited once. Its `opacity`
 applies to the composited result (true group opacity: overlapping children do
 not show through each other), and `filter(..)` adds whole-layer effects:
@@ -242,7 +242,7 @@ while at least one backdrop-blurred node exists. Give the root an opaque
 background so there is something to sample.
 
 ```rust
-use mue::{prelude::*, renderer::offscreen::{Filter, offscreen}};
+use mue::{prelude::*, renderer::paint::offscreen::{Filter, offscreen}};
 
 let disabled_group = offscreen().opacity(0.6).filter(Filter::Grayscale(1.));
 let glass = flexbox().style(style! {

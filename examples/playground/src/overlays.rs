@@ -3,14 +3,14 @@ use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     Shadow,
-    anchor::{Placement, anchored},
-    back::{can_go_back, dispatch_back, use_back_handler},
-    color::Color,
-    cursor::Cursor,
-    layer::{Layer, teleport},
+    input::back::{can_go_back, dispatch_back, use_back_handler},
+    input::cursor::Cursor,
+    motion::presence::{PresenceAnimation, presence},
     node::NodeHandle,
-    presence::{PresenceAnimation, presence},
-    shader::Brush,
+    overlay::anchor::{Placement, anchored},
+    overlay::layer::{Layer, teleport},
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;

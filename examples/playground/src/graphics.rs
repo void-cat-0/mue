@@ -3,10 +3,10 @@ use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     Shadow,
-    color::Color,
     math::{Rect, Vector, vec2},
-    offscreen::{Filter, offscreen},
-    shader::{ColorStop, linear_gradient, radial_gradient, solid},
+    paint::color::Color,
+    paint::offscreen::{Filter, offscreen},
+    paint::shader::{ColorStop, linear_gradient, radial_gradient, solid},
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;

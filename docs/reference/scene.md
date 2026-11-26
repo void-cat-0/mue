@@ -381,7 +381,7 @@ Scene transitions are optional presentation attached to a deferred Scene request
 `push`, `pop`, `pop_with_result`, `replace` and `exit` return a `SceneRequest` configuration handle. Host-side `push_scene`, `pop_scene`, `pop_scene_with_result`, `replace_scene` and `reset_scene` do the same.
 
 ```rust
-use mue::{Scene, renderer::{SceneContext, SceneTransition, transition::Transition}};
+use mue::{Scene, renderer::{SceneContext, SceneTransition, motion::transition::Transition}};
 
 struct Details;
 impl Scene for Details {}
@@ -461,7 +461,7 @@ Never-entered sources and fault/exit recovery also commit instantaneously withou
 ```rust
 use mue::{
     macroquad::prelude::{DrawTextureParams, WHITE, draw_texture_ex, vec2},
-    renderer::{SceneTransition, transition::Transition},
+    renderer::{SceneTransition, motion::transition::Transition},
 };
 
 fn slide() -> SceneTransition {
@@ -514,7 +514,7 @@ Changing the selected QuadGl material alone does not apply its mask. Metal compo
 ```rust
 use mue::{
     macroquad::prelude::{Color, draw_rectangle},
-    renderer::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition},
+    renderer::{SceneTransition, TransitionPhase, TransitionTiming, motion::transition::Transition},
 };
 
 fn black_cover() -> SceneTransition {

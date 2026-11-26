@@ -9,11 +9,11 @@ use mue_core::{
 };
 use mue_macroquad::{
     App,
-    color::Color,
     font::{Weight, load_font},
-    shader::SharedTexture,
+    motion::transition::Transition,
+    paint::color::Color,
+    paint::shader::SharedTexture,
     style::{Size, Styleable, StyleableExt},
-    transition::Transition,
 };
 
 fn main() {

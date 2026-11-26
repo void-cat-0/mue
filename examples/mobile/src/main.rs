@@ -16,8 +16,8 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, back::use_back_handler, presence::PresenceAnimation, runtime::set_timeout,
-    transition_group::transition_group,
+    App, app::runtime::set_timeout, input::back::use_back_handler,
+    motion::presence::PresenceAnimation, motion::transition_group::transition_group,
 };
 
 #[derive(Clone, PartialEq)]

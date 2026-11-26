@@ -2,7 +2,7 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
+    paint::color::Color,
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;
@@ -107,7 +107,7 @@ fn grid_card() -> Node {
         vec![("Auto fill 120px", 0usize), ("2", 2), ("4", 4)],
     );
     let cell = |label: &'static str, accent: bool| {
-        use mue_macroquad::shader::Brush;
+        use mue_macroquad::paint::shader::Brush;
         let fill: Prop<Brush> = if accent {
             Brush::Solid(BLUE).into()
         } else {

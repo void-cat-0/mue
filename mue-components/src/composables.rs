@@ -22,7 +22,7 @@ use mue_core::{
     effect::{on_cleanup, watch, watch_effect},
     prelude::*,
 };
-use mue_macroquad::runtime::{TimeoutHandle, set_timeout};
+use mue_macroquad::app::runtime::{TimeoutHandle, set_timeout};
 
 /// An open/closed state for dialogs, menus, and collapsible sections.
 #[derive(Clone, Copy)]
@@ -139,14 +139,14 @@ pub fn use_clipboard() -> Clipboard {
 }
 
 /// Which of the ascending width `thresholds` the window has reached; see
-/// [`mue_macroquad::viewport::breakpoint`].
+/// [`mue_macroquad::app::viewport::breakpoint`].
 pub fn use_breakpoint(thresholds: &[f32]) -> ReadSignal<usize> {
-    mue_macroquad::viewport::breakpoint(thresholds)
+    mue_macroquad::app::viewport::breakpoint(thresholds)
 }
 
 /// Safe-area insets in logical pixels (notches, rounded corners, system bars).
 pub fn use_safe_area() -> ReadSignal<mue_macroquad::math::Edges> {
-    mue_macroquad::viewport::safe_area()
+    mue_macroquad::app::viewport::safe_area()
 }
 
 /// The soft keyboard, for layouts that adapt to it (scroll areas already keep
@@ -162,9 +162,9 @@ pub struct Keyboard {
 
 pub fn use_keyboard() -> Keyboard {
     Keyboard {
-        visible: mue_macroquad::text_input::keyboard_visible(),
-        inset: mue_macroquad::text_input::keyboard_inset(),
-        frame: mue_macroquad::text_input::keyboard_frame(),
+        visible: mue_macroquad::input::text_input::keyboard_visible(),
+        inset: mue_macroquad::input::text_input::keyboard_inset(),
+        frame: mue_macroquad::input::text_input::keyboard_frame(),
     }
 }
 
@@ -272,8 +272,8 @@ pub fn use_color_mode() -> ColorModeState {
 pub fn use_media_query(query: &str) -> ReadSignal<bool> {
     let alternatives: Vec<(bool, Vec<Feature>)> =
         query.split(',').map(parse_media_alternative).collect();
-    let viewport = mue_macroquad::viewport::use_viewport();
-    let hover = mue_macroquad::event::hover::hover_capable();
+    let viewport = mue_macroquad::app::viewport::use_viewport();
+    let hover = mue_macroquad::input::hover::hover_capable();
     let reduced = REDUCED_MOTION.with(|signal| **signal);
     let scheme = use_color_mode().scheme;
     computed(move |_| {

@@ -11,11 +11,11 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App, Sector, Shadow, UiMaterial,
-    color::Color as MueColor,
     math::{Matrix, Rect as MueRect, vec2},
     node::{BuildNode, Node, NodeContext, flexbox, flexbox::use_container, use_rect},
+    paint::color::Color as MueColor,
+    paint::shader::SharedTexture,
     paint::{Shapes, use_paint},
-    shader::SharedTexture,
     style::{Size, Style, Styleable, StyleableExt, Transform, TransformOp},
 };
 

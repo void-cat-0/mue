@@ -1,6 +1,8 @@
 //! Draw-only effects; callbacks do not borrow or mutate Scene state.
 use macroquad::prelude::*;
-use mue_macroquad::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition};
+use mue_macroquad::{
+    SceneTransition, TransitionPhase, TransitionTiming, motion::transition::Transition,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Effect {

@@ -3,8 +3,8 @@ use paste::paste;
 use taffy::{AlignContent, AlignItems, FlexDirection, Position};
 
 use crate::{
-    event::pointer::{PointerAction, PointerId},
-    shader::Brush,
+    input::pointer::{PointerAction, PointerId},
+    paint::shader::Brush,
 };
 
 use super::{Size, Styleable};
@@ -204,7 +204,7 @@ pub trait StyleableExt: Styleable {
     /// visible" (focused by keyboard). Use it for focus rings:
     ///
     /// ```
-    /// use mue_macroquad::{color::Color, node::flexbox, style::{Styleable, StyleableExt}};
+    /// use mue_macroquad::{paint::color::Color, node::flexbox, style::{Styleable, StyleableExt}};
     ///
     /// let _field = flexbox().focusable(true).with_focus(|style, focus| {
     ///     style.outline_width(focus.visible.map(|visible| if visible { 2. } else { 0. }))
@@ -212,7 +212,7 @@ pub trait StyleableExt: Styleable {
     ///         .outline_offset(2.)
     /// });
     /// ```
-    fn with_focus(mut self, f: impl FnOnce(Self, crate::focus::FocusState) -> Self) -> Self {
+    fn with_focus(mut self, f: impl FnOnce(Self, crate::input::focus::FocusState) -> Self) -> Self {
         let owner = self.style_mut().ensure_focus_owner();
         f(self, owner.state())
     }

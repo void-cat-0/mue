@@ -2,10 +2,10 @@
 use super::*;
 
 pub(super) fn color(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
-    if let Some(value) = token(input, &quote!(#host::shader::Brush))? {
+    if let Some(value) = token(input, &quote!(#host::paint::shader::Brush))? {
         return Ok(value);
     }
-    if let Some(expr) = expression_with_token(input, &quote!(#host::shader::Brush))? {
+    if let Some(expr) = expression_with_token(input, &quote!(#host::paint::shader::Brush))? {
         return Ok(expr);
     }
     if input.peek(Token![#]) || input.peek(LitStr) {
@@ -39,7 +39,7 @@ pub(super) fn color(input: ParseStream, host: &TokenStream) -> Result<TokenStrea
             byte(4),
             if digits.len() == 8 { byte(6) } else { 255 },
         );
-        return Ok(quote!(#host::color::Color::from_rgba(#r,#g,#b,#a)));
+        return Ok(quote!(#host::paint::color::Color::from_rgba(#r,#g,#b,#a)));
     }
     let (name, span) = property(input)?;
     if matches!(name.as_str(), "rgb" | "rgba") {
@@ -78,7 +78,7 @@ pub(super) fn color(input: ParseStream, host: &TokenStream) -> Result<TokenStrea
             return Err(args.error("unexpected color argument"));
         }
         let (r, g, b) = (channels[0], channels[1], channels[2]);
-        return Ok(quote!(#host::color::Color::new(#r,#g,#b,#alpha)));
+        return Ok(quote!(#host::paint::color::Color::new(#r,#g,#b,#alpha)));
     }
     let (r, g, b, a) = match name.as_str() {
         "transparent" => (0, 0, 0, 0),
@@ -108,5 +108,5 @@ pub(super) fn color(input: ParseStream, host: &TokenStream) -> Result<TokenStrea
         }
     };
     let (r, g, b, a) = (r as u8, g as u8, b as u8, a as u8);
-    Ok(quote!(#host::color::Color::from_rgba(#r,#g,#b,#a)))
+    Ok(quote!(#host::paint::color::Color::from_rgba(#r,#g,#b,#a)))
 }

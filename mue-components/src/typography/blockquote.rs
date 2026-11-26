@@ -3,8 +3,8 @@ use mue_core::signal::Access;
 use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
     math::Rect,
+    paint::path::{FillRule, PathData},
     paint::use_paint,
-    path::{FillRule, PathData},
     style::{Style, Styleable},
 };
 use std::rc::Rc;
@@ -18,7 +18,7 @@ pub fn blockquote(ctx: NodeContext, text: Rc<str>) -> Node {
             let color = style
                 .declared_color()
                 .or_else(mue_macroquad::inherit::inherited_foreground)
-                .unwrap_or_else(|| mue_macroquad::color::Color::WHITE.into());
+                .unwrap_or_else(|| mue_macroquad::paint::color::Color::WHITE.into());
             let paint = use_paint(style);
             render_text(style, text.map(|text| Document::plain(text.to_string())));
             let rect = mue_macroquad::node::use_rect();

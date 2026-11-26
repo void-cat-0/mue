@@ -32,11 +32,11 @@ use mue_macroquad::{
         BuildNode, Node, NodeContext, use_font_size,
         vector::{paint_path, paint_svg},
     },
+    paint::path::{FillRule, PathData, PathFit, StrokeStyle},
+    paint::shader::{Brush, SharedTexture},
+    paint::svg::SvgDocument,
     paint::{use_background, use_paint},
-    path::{FillRule, PathData, PathFit, StrokeStyle},
-    shader::{Brush, SharedTexture},
     style::{Size, Style, Styleable},
-    svg::SvgDocument,
 };
 
 /// What an icon draws.

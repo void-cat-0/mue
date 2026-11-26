@@ -2,8 +2,8 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId, PointerType},
-    gesture::{Gesture, GesturePhase},
+    input::gesture::{Gesture, GesturePhase},
+    input::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId, PointerType},
     math::{Rect, Vector},
     node::{BuildNode, NodeContext, add_gesture, flexbox::use_container, use_rect},
     style::{Size, Style, Styleable, StyleableExt, Transform, TransformOp},
@@ -134,7 +134,7 @@ fn touch_card() -> Node {
                 .style(mue_macroquad::style! {
                     width: 56px; height: 56px;
                     border-radius: 28px;
-                    background: {index.map(|i| mue_macroquad::shader::Brush::Solid(if i % 2 == 0 { BLUE } else { CORAL }))};
+                    background: {index.map(|i| mue_macroquad::paint::shader::Brush::Solid(if i % 2 == 0 { BLUE } else { CORAL }))};
                 })
                 .children(text(index.map(|i| Rc::<str>::from(format!("{}", i + 1)))).style(
                     mue_macroquad::style! { font-size: 18px; line-height: 24px; color: #131720; },
@@ -208,7 +208,7 @@ fn press_card() -> Node {
             .with_hovered(move |view, hover| {
                 view.style(mue_macroquad::style! {
                     border-width: 2px;
-                    border-color: {hover.map(|on| mue_macroquad::shader::Brush::Solid(if on { BLUE } else { mue_macroquad::color::Color::TRANSPARENT }))};
+                    border-color: {hover.map(|on| mue_macroquad::paint::shader::Brush::Solid(if on { BLUE } else { mue_macroquad::paint::color::Color::TRANSPARENT }))};
                 })
                 .children((
                     mono(computed(move |_| {

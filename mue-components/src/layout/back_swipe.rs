@@ -1,13 +1,13 @@
 use mue_macroquad::{
-    event::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId, PointerType},
-    gesture::Gesture,
+    input::gesture::Gesture,
+    input::pointer::{ClaimToken, PointerAction, PointerEvent, PointerId, PointerType},
     math::Vector,
     node::{BuildNode, Node, NodeContext, flexbox::use_container},
     style::{Style, Styleable, StyleableExt},
 };
 
 /// A container that turns a rightward swipe from its left edge into a back
-/// press ([`dispatch_back`](mue_macroquad::back::dispatch_back)), like iOS
+/// press ([`dispatch_back`](mue_macroquad::input::back::dispatch_back)), like iOS
 /// navigation. Wrap a page (usually the app root) in it.
 ///
 /// The swipe must start within [`BackSwipeBuilder::edge`] of the left edge,
@@ -146,7 +146,7 @@ impl Gesture for EdgeSwipe {
                     && swipe.claimed
                     && event.position().x - swipe.origin.x >= self.distance
                 {
-                    mue_macroquad::back::dispatch_back();
+                    mue_macroquad::input::back::dispatch_back();
                 }
                 token.dismiss();
             }

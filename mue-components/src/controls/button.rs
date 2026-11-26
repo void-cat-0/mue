@@ -4,11 +4,11 @@ use std::rc::Rc;
 
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    cursor::Cursor,
-    event::{keyboard::KeyCode, pointer::PointerAction},
+    input::cursor::Cursor,
+    input::{keyboard::KeyCode, pointer::PointerAction},
     node::{BuildNode, IntoChildren, Node, NodeContext, flexbox::use_container, text},
-    shader::Brush,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Size, Style, Styleable, StyleableExt},
 };
 

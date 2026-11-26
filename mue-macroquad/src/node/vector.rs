@@ -13,11 +13,11 @@ use super::{BuildNode, Node, NodeContext};
 use crate::{
     layout::use_layout,
     math::{Rect, Vector},
+    paint::path::{FillRule, PathData, PathFit, StrokeStyle},
+    paint::shader::Brush,
+    paint::svg::{SvgDocument, SvgPaint},
     paint::{ShapesBuilder, use_background, use_paint},
-    path::{FillRule, PathData, PathFit, StrokeStyle},
-    shader::Brush,
     style::{Style, Styleable},
-    svg::{SvgDocument, SvgPaint},
 };
 
 fn natural_size(natural: Vector) -> impl Fn(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32> {
@@ -74,12 +74,12 @@ pub struct PathBuilder {
 /// fixed coordinate space, as icons usually do.
 ///
 /// ```
-/// use mue_macroquad::{math::Rect, node::path, path::{PathData, StrokeStyle}, style::Styleable};
+/// use mue_macroquad::{math::Rect, node::path, paint::path::{PathData, StrokeStyle}, style::Styleable};
 ///
 /// let check = PathData::parse("M4 12l5 5L20 6").unwrap();
 /// let _icon = path(check)
 ///     .view_box(Rect::new(0., 0., 24., 24.))
-///     .stroke(mue_macroquad::color::Color::WHITE)
+///     .stroke(mue_macroquad::paint::color::Color::WHITE)
 ///     .stroke_style(StrokeStyle::round(2.))
 ///     .width(24.)
 ///     .height(24.);
@@ -231,7 +231,7 @@ pub struct SvgBuilder {
 /// Draw a parsed [`SvgDocument`] fitted into the node's content box.
 ///
 /// `currentColor` uses the foreground `color`, so the same icon document can
-/// follow text color. See [`crate::svg`] for the supported subset.
+/// follow text color. See [`crate::paint::svg`] for the supported subset.
 pub fn svg(document: impl Into<Prop<SvgDocument>>) -> SvgBuilder {
     SvgBuilder {
         document: document.into(),

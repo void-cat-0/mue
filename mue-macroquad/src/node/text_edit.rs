@@ -1,7 +1,7 @@
 //! The editable text node: [`text_edit()`].
 //!
 //! A focused `text_edit` is the client of the platform text input connection
-//! ([`crate::text_input`]). It keeps its own [`TextEditingValue`], applies
+//! ([`crate::input::text_input`]). It keeps its own [`TextEditingValue`], applies
 //! keyboard, pointer, clipboard, and input-method edits to it, runs input
 //! formatters, records undo history, and draws the text with its selection,
 //! composition underline, and caret. Layout and hit testing reuse
@@ -9,7 +9,7 @@
 //!
 //! ```
 //! use mue_core::prelude::*;
-//! use mue_macroquad::{node::text_edit, style::Styleable, text_input::TextInputKind};
+//! use mue_macroquad::{node::text_edit, style::Styleable, input::text_input::TextInputKind};
 //!
 //! # let owner = mue_core::scope::OwnedScope::new();
 //! # owner.run(|| {
@@ -41,23 +41,23 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::{BuildNode, Node, NodeContext, NodeHandle, text::FontState};
 use crate::{
-    color::Color,
-    event::{
+    app::runtime::Runtime,
+    input::text_input::{
+        self, EditKind, ImeEvent, MaxLength, SharedFormatter, SingleLine, TextCapitalization,
+        TextEditingValue, TextInputAction, TextInputConfig, TextInputKind, TextSelection, TextUnit,
+        UndoHistory,
+    },
+    input::{
         keyboard::{CharEvent, KeyCode, KeyEvent},
         pointer::{ButtonState, PointerAction, PointerEvent, PointerType},
     },
     layout::use_layout,
     math::{Rect, Vector, vec2},
+    paint::color::Color,
+    paint::path::{FillRule, PathData},
+    paint::shader::Brush,
     paint::{current_transform, use_background, use_paint},
-    path::{FillRule, PathData},
-    runtime::Runtime,
-    shader::Brush,
     style::{Style, Styleable, StyleableExt},
-    text_input::{
-        self, EditKind, ImeEvent, MaxLength, SharedFormatter, SingleLine, TextCapitalization,
-        TextEditingValue, TextInputAction, TextInputConfig, TextInputKind, TextSelection, TextUnit,
-        UndoHistory,
-    },
 };
 
 type TextHandler = Rc<dyn Fn(&str)>;
@@ -349,7 +349,7 @@ enum Granularity {
 }
 
 struct Press {
-    pointer: crate::event::pointer::PointerId,
+    pointer: crate::input::pointer::PointerId,
     touch: bool,
     /// The range selected by the press itself (a word for a double click).
     anchor: Range<usize>,
@@ -659,7 +659,7 @@ impl Field {
             .find('\n')
             .map_or(display.text.len(), |end| line_start + end);
         let offset = (line_start + cursor.index).min(line_end);
-        display.to_real(crate::text_input::floor(&display.text, offset))
+        display.to_real(crate::input::text_input::floor(&display.text, offset))
     }
 
     /// The caret rectangle of `offset` relative to the text origin.
@@ -798,7 +798,7 @@ impl BuildNode for TextEditBuilder {
         ctx.push_style(style);
         let defaults = Style::new()
             .focusable(disabled.map(|disabled| !disabled))
-            .cursor(crate::cursor::Cursor::Text)
+            .cursor(crate::input::cursor::Cursor::Text)
             .min_hit_size(44.);
         ctx.finish(defaults, move |style| {
             let initial = editing
@@ -1009,7 +1009,7 @@ impl BuildNode for TextEditBuilder {
             }
 
             // Focus: attach to and detach from the platform input method.
-            let focus = crate::focus::use_focus();
+            let focus = crate::input::focus::use_focus();
             {
                 let field = field.clone();
                 watch_effect(move || {
@@ -1732,7 +1732,7 @@ fn pointer(field: &Rc<Field>, event: &PointerEvent) {
 fn long_press_tick(field: &Rc<Field>) {
     let target = {
         let mut state = field.state.borrow_mut();
-        let now = crate::runtime::get_time();
+        let now = crate::app::runtime::get_time();
         match state.press.as_mut() {
             Some(press)
                 if press.touch

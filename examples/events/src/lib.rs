@@ -5,8 +5,8 @@ use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color as UiColor,
-    runtime::set_timeout,
+    app::runtime::set_timeout,
+    paint::color::Color as UiColor,
     style::{Styleable, StyleableExt, vh, vw},
 };
 

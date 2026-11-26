@@ -4,10 +4,10 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     layout::use_layout,
     math::Vector,
+    motion::transition::{self, Driver, Transition as Curve},
     node::{BuildNode, IntoNode, Node, NodeContext, NodeRef},
     paint::use_background,
     style::{Style, Styleable, StyleableExt},
-    transition::{self, Driver, Transition as Curve},
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -253,12 +253,12 @@ where
             });
             let layout = use_layout(style);
             mue_macroquad::node::set_clip(layout.rect);
-            mue_macroquad::event::hit_test::set_hit_test_fn(Rc::new(move |node, pos, result| {
+            mue_macroquad::input::hit_test::set_hit_test_fn(Rc::new(move |node, pos, result| {
                 if !layout.rect.get().contains(&pos) {
                     return;
                 }
                 if let Some(page) = interactive.get_untracked() {
-                    mue_macroquad::event::hit_test::hit_test_into(page, pos, result);
+                    mue_macroquad::input::hit_test::hit_test_into(page, pos, result);
                 }
                 result.hit_self(node);
             }));

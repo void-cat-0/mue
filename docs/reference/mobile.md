@@ -22,20 +22,20 @@ its layout or paint ([style reference][style-reference]). `button` uses
 
 A finger has no hover. After a touch, mouse events that the platform
 emulates from it are ignored for a short grace period, so a tapped control
-does not stay in its hover style. `mue_macroquad::event::hover::hover_capable()`
+does not stay in its hover style. `mue_macroquad::input::hover::hover_capable()`
 is a signal that is true while the most recent pointer can hover (a mouse or
 pen); `use_media_query("(hover: none)")` reads the same value.
 
 ## Back navigation
 
-`mue_macroquad::back` routes back presses to a stack of handlers, like
+`mue_macroquad::input::back` routes back presses to a stack of handlers, like
 Android's `OnBackPressedDispatcher`. A back press comes from the Android back
 button or back gesture, from Escape or the Back key when no focused control
 handles it, or from `dispatch_back()`.
 
 ```rust
 use mue::prelude::*;
-use mue::renderer::back::use_back_handler;
+use mue::renderer::input::back::use_back_handler;
 
 let owner = OwnedScope::new();
 owner.run(|| {
@@ -106,7 +106,7 @@ IME][text-input-reference] for input methods.
 
 ## Haptics and sounds
 
-`mue_macroquad::feedback` plays interaction feedback:
+`mue_macroquad::input::feedback` plays interaction feedback:
 
 - `haptic(HapticStyle)` uses the platform by default: Android
   `performHapticFeedback`, iOS feedback generators, and `navigator.vibrate`

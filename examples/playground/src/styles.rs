@@ -2,8 +2,8 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    shader::Brush,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Styleable, Transform, TransformOp},
 };
 use std::f32::consts::TAU;

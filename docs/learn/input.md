@@ -42,12 +42,12 @@ Call `request_save_from_keys` from the active editor's `SceneEvent::Input` arm. 
 Raw Scene input sees every key. When a key belongs to one control, make the control focusable and handle `on_key_down`: the event goes to the focused node and bubbles to its ancestors, and Tab moves focus between focusable nodes. `button` already activates on Enter and Space and shows a focus ring when reached by keyboard.
 
 ```rust
-use mue::{prelude::*, renderer::event::keyboard::KeyCode};
+use mue::{prelude::*, renderer::input::keyboard::KeyCode};
 
 let volume = signal(5_i32);
 let slider = flexbox()
     .focusable(true)
-    .focus_ring(2., mue::renderer::color::Color::WHITE, 2.)
+    .focus_ring(2., mue::renderer::paint::color::Color::WHITE, 2.)
     .on_key_down(move |event| match event.key {
         KeyCode::Left => { volume.set(volume.get() - 1); event.stop_propagation(); }
         KeyCode::Right => { volume.set(volume.get() + 1); event.stop_propagation(); }
@@ -62,7 +62,7 @@ See [focus, keyboard, and cursors][focus-reference] for Tab order, focus scopes 
 Use a gesture hook when a drag needs to compete with a tap. This pad shows horizontal displacement from the press. Release it or drag outside the pad to see how a captured pointer differs from a fresh hit test. Place the pointer down on the pad first.
 
 ```rust
-use mue::{prelude::*, renderer::gesture::GesturePhase};
+use mue::{prelude::*, renderer::input::gesture::GesturePhase};
 
 #[component]
 fn drag_pad() -> impl Component {

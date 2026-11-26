@@ -15,8 +15,10 @@ pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
-pub use crate::shadow::ShadowCache;
-use crate::{clip::Sector, color::Color, shader::Brush, shadow::Shadow};
+pub use crate::paint::shadow::ShadowCache;
+use crate::{
+    paint::clip::Sector, paint::color::Color, paint::shader::Brush, paint::shadow::Shadow,
+};
 use cosmic_text::Align;
 use cosmic_text::{FamilyOwned, Weight};
 pub use ext::StyleableExt;
@@ -28,13 +30,13 @@ use std::{mem, rc::Rc};
 use taffy::{BoxSizing, Display, Overflow, Position};
 
 use crate::{
-    event::{
+    hook::{CallbackList, NodeHooks},
+    input::gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent, TransformEvent},
+    input::{
         keyboard::{CharEvent, FocusEvent, KeyEvent},
         pointer::PointerEvent,
         wheel::WheelEvent,
     },
-    gesture::{PanEvent, PinchEvent, RotateEvent, SwipeEvent, TransformEvent},
-    hook::{CallbackList, NodeHooks},
     math::Matrix,
     node::{ChildrenPlan, HoverOwner, IntoChildren},
 };
@@ -106,7 +108,7 @@ define_style! {
     /// Set how much this node shrinks when flex children exceed available space.
     flex_shrink: f32 = 1.0;
 
-    transition: crate::transition::Transition = crate::transition::Transition::Instant;
+    transition: crate::motion::transition::Transition = crate::motion::transition::Transition::Instant;
 
     // Paint
       /// Transform this node and its descendants without changing layout size.
@@ -190,14 +192,14 @@ define_style! {
     /// negative values are skipped by Tab but still focusable.
     tab_index: i32 = 0;
     /// Keep Tab inside this subtree and restore focus when it is removed.
-    focus_scope: crate::focus::FocusScope = crate::focus::FocusScope::None;
+    focus_scope: crate::input::focus::FocusScope = crate::input::focus::FocusScope::None;
     /// Focus this node, or its first focusable descendant, each time it becomes displayed.
     auto_focus: bool = false;
     /// Paint and hit-test order among siblings: higher values draw on top.
     /// Siblings with equal values keep tree order.
     z_index: i32 = 0;
     /// Mouse cursor while hovering this node. `Auto` defers to ancestors.
-    cursor: crate::cursor::Cursor = crate::cursor::Cursor::Auto;
+    cursor: crate::input::cursor::Cursor = crate::input::cursor::Cursor::Auto;
     /// Extra pointer-hit distance around the border box, in logical pixels,
     /// without changing layout or paint (Android's `TouchDelegate`).
     hit_slop: f32 = 0.;
@@ -270,11 +272,11 @@ impl Style {
         owner
     }
 
-    pub(crate) fn ensure_focus_owner(&mut self) -> Rc<crate::focus::FocusOwner> {
+    pub(crate) fn ensure_focus_owner(&mut self) -> Rc<crate::input::focus::FocusOwner> {
         if let Some(owner) = self.focus_owners.first() {
             return owner.clone();
         }
-        let owner = crate::focus::FocusOwner::new();
+        let owner = crate::input::focus::FocusOwner::new();
         self.focus_owners.push(owner.clone());
         owner
     }

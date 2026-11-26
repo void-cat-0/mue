@@ -9,14 +9,14 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App, Shadow,
-    anchor::{Placement, anchored},
-    color::Color,
-    layer::{Layer, teleport},
     math::{Rect, Vector, vec2},
+    motion::presence::{PresenceAnimation, presence},
     node::{NodeHandle, shader_box},
-    offscreen::{Filter, offscreen},
-    presence::{PresenceAnimation, presence},
-    shader::linear_gradient,
+    overlay::anchor::{Placement, anchored},
+    overlay::layer::{Layer, teleport},
+    paint::color::Color,
+    paint::offscreen::{Filter, offscreen},
+    paint::shader::linear_gradient,
 };
 
 const ICON: &str = r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -71,8 +71,8 @@ fn paint_row() -> impl Component {
                         vec2(0., 0.),
                         vec2(1., 1.),
                         [
-                            mue_macroquad::shader::ColorStop::new(0., Color::from_rgba(255, 110, 150, 255)),
-                            mue_macroquad::shader::ColorStop::new(1., Color::from_rgba(110, 170, 255, 255)),
+                            mue_macroquad::paint::shader::ColorStop::new(0., Color::from_rgba(255, 110, 150, 255)),
+                            mue_macroquad::paint::shader::ColorStop::new(1., Color::from_rgba(110, 170, 255, 255)),
                         ],
                     ),
                 ),
@@ -175,7 +175,7 @@ fn menu_item(label: &'static str) -> impl Component {
         .cursor(Cursor::Pointer)
         .with_hovered(|style, hovered| {
             style.background(hovered.map(|hovered| {
-                mue_macroquad::shader::Brush::Solid(if hovered {
+                mue_macroquad::paint::shader::Brush::Solid(if hovered {
                     Color::from_rgba(255, 255, 255, 24)
                 } else {
                     Color::TRANSPARENT
@@ -345,7 +345,7 @@ async fn main() {
         app.frame();
         if std::mem::take(&mut first) && capture.enabled() {
             // Show a keyboard focus ring in captured screenshots.
-            mue_macroquad::focus::move_focus(true);
+            mue_macroquad::input::focus::move_focus(true);
         }
         if capture.after_draw() {
             break;

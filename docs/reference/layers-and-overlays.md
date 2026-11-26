@@ -20,7 +20,7 @@ siblings; use a teleport for that.
 
 ## Layer hosts and teleports
 
-`mue_macroquad::layer::layer_host(content)` is a full-size block container that
+`mue_macroquad::overlay::layer::layer_host(content)` is a full-size block container that
 draws `content` and then a fixed stack of overlay layers:
 
 | `Layer` | Typical use |
@@ -53,7 +53,7 @@ insertion order applies. Keyboard events bubble through the surface and host,
 not through the placeholder's ancestors.
 
 ```rust
-use mue::{prelude::*, renderer::layer::{Layer, teleport}};
+use mue::{prelude::*, renderer::overlay::layer::{Layer, teleport}};
 
 let toast = teleport(Layer::Toast, || {
     flexbox()
@@ -89,7 +89,7 @@ flipping, the `arrow` offset of the anchor's center along the content's edge,
 and the `anchor` rectangle.
 
 ```rust
-use mue::{prelude::*, renderer::{anchor::{Placement, anchored}, layer::{Layer, teleport}}};
+use mue::{prelude::*, renderer::{overlay::anchor::{Placement, anchored}, overlay::layer::{Layer, teleport}}};
 
 let open = signal(false);
 let trigger = NodeHandle::new();
@@ -119,7 +119,7 @@ reads `use_presence()` for `present` and `progress` to drive custom effects.
 Animations advance once per App frame; `Transition::Instant` switches
 immediately.
 
-`mue_macroquad::transition::animated(target, curve)` is the same primitive for
+`mue_macroquad::motion::transition::animated(target, curve)` is the same primitive for
 any interpolatable value: the returned property follows `target` along
 `curve`.
 
@@ -134,7 +134,7 @@ slide from their old positions to their new ones (FLIP), timed by
 
 ```rust
 use mue::prelude::*;
-use mue::renderer::{presence::PresenceAnimation, transition_group::transition_group};
+use mue::renderer::{motion::presence::PresenceAnimation, motion::transition_group::transition_group};
 use std::rc::Rc;
 
 let owner = OwnedScope::new();

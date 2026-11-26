@@ -11,7 +11,7 @@ Switch an observatory card from day to night colors while keeping the same node.
 
 ```rust,no_run
 use mue::{components::{Theme, token_set}, prelude::*};
-use mue::renderer::{color::Color, shader::solid};
+use mue::renderer::{paint::color::Color, paint::shader::solid};
 
 let theme = Theme::new();
 let day = token_set! { panel: solid(Color::from_rgba(255, 228, 173, 255)) };
@@ -43,7 +43,7 @@ theme.apply(&night);
 `register` installs the initial brush. `token!(theme, panel)` asks for a token whose type matches the `background` property. Build one App with this card. After its first frame, switch the token set in place.
 
 ```rust,no_run
-# use mue::{components::{Theme, token_set}, renderer::{color::Color, shader::solid}};
+# use mue::{components::{Theme, token_set}, renderer::{paint::color::Color, paint::shader::solid}};
 # let theme = Theme::new();
 # let night = token_set! { panel: solid(Color::BLACK) };
 theme.apply(&night);
@@ -93,7 +93,7 @@ Install a second provider to give one subtree a different title size. A sibling 
 Use `provide_foreground` when several labels should share inherited text paint. A label with an explicit color keeps that color.
 
 ```rust,no_run
-use mue::{prelude::*, renderer::{color::Color, inherit::provide_foreground}};
+use mue::{prelude::*, renderer::{paint::color::Color, inherit::provide_foreground}};
 
 let legend = provide_foreground(Color::from_rgba(27, 64, 54, 255), || {
     vstack().children((text("Ridge temperature"), text("Creek temperature")))

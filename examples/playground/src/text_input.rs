@@ -2,12 +2,12 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    node::{TextEditHandle, text_edit},
-    style::Styleable,
-    text_input::{
+    input::text_input::{
         DecimalNumber, TextEditingValue, TextInputAction, TextInputKind, TextSelection,
         byte_to_utf16, caret_rect, digits_only,
     },
+    node::{TextEditHandle, text_edit},
+    style::Styleable,
 };
 use std::rc::Rc;
 

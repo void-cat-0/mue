@@ -18,11 +18,11 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App, RenderStateGuard, Shadow,
-    color::Color as MueColor,
     font::{FamilyOwned, load_font},
     input::InputSubscriber,
     node::portal,
-    shader::SharedTexture,
+    paint::color::Color as MueColor,
+    paint::shader::SharedTexture,
     style::{Size, Styleable},
 };
 use session::{CommandQueue, GameUiCommand, MockSession, command_queue, drain};

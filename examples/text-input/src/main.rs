@@ -15,8 +15,8 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
+    input::text_input::{TextInputAction, TextInputKind, TextSelection, digits_only},
     node::TextEditHandle,
-    text_input::{TextInputAction, TextInputKind, TextSelection, digits_only},
 };
 
 fn label(text_value: &'static str) -> impl Component {
@@ -39,7 +39,7 @@ fn ui(capture: bool) -> impl Component {
     if capture {
         // Show focus, the caret, and a selection in screenshots.
         let handle = name_handle.clone();
-        mue_macroquad::runtime::set_timeout(0.05, move || {
+        mue_macroquad::app::runtime::set_timeout(0.05, move || {
             handle.focus();
             handle.set_selection(TextSelection::new(4, 12));
         });

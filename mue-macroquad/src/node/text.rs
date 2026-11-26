@@ -17,15 +17,15 @@ use mue_core::{
 use taffy::{AvailableSpace, Size};
 
 use crate::{
-    color::Color,
+    app::runtime::Runtime,
     layout::use_layout,
     math::{Matrix, Rect, vec2},
+    paint::color::Color,
+    paint::shader::Brush,
     paint::{
         current_clip_logical, current_transform, rect_visible, retained_enabled, transform_rect,
         use_background, use_paint,
     },
-    runtime::Runtime,
-    shader::Brush,
     style::Style,
 };
 use macroquad::retained::{self, RetainedMesh, RetainedVertex};
@@ -415,7 +415,7 @@ impl RetainedTextCache {
         for range in &self.visible_ranges {
             // Each range has its own model, even when it shares a mesh with the
             // previous draw. The backend reuses the open rendering pass.
-            crate::material::draw_retained_meshes_ranges(
+            crate::paint::material::draw_retained_meshes_ranges(
                 std::slice::from_ref(&self.meshes[range.mesh]),
                 &[Some(range.indices.clone())],
                 crate::math::model_matrix(position.model(range.translate_y)),

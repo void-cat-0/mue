@@ -5,7 +5,7 @@ use guillotiere::euclid::{Size2D, UnknownUnit, size2};
 use guillotiere::{AllocId, AtlasAllocator};
 use macroquad::texture::{FilterMode, Image, Texture2D};
 
-use crate::{math::Rect, shader::SharedTexture};
+use crate::{math::Rect, paint::shader::SharedTexture};
 
 /// Preferred page side. FontState clamps this to the driver limit.
 pub(crate) const DEFAULT_PAGE_SIZE: i32 = 1024;

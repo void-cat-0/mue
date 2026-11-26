@@ -4,7 +4,7 @@ pub(crate) mod play_flow;
 
 pub(crate) use details::Details;
 
-use mue_macroquad::{SceneTransition, transition::Transition};
+use mue_macroquad::{SceneTransition, motion::transition::Transition};
 
 fn scene_fade() -> SceneTransition {
     SceneTransition::crossfade(Transition::linear(0.25))

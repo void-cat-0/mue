@@ -51,10 +51,10 @@ use mue::{
     renderer::{
         CallbackResult, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
         SceneTransition, TransitionPhase, TransitionTiming,
-        color::Color,
+        paint::color::Color,
         node::{flexbox::use_container, map_keyed_prop},
-        shader::{Brush, solid},
-        transition::Transition,
+        paint::shader::{Brush, solid},
+        motion::transition::Transition,
     },
 };
 

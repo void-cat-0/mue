@@ -6,20 +6,20 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::{prelude::*, scope::OwnedScope};
 use mue_macroquad::{
-    color::Color,
-    event::{
+    app::runtime::set_timeout,
+    input::text_input::{
+        DecimalNumber, EditKind, MaxLength, TextEditingValue, TextFormatter, TextUnit, UndoHistory,
+        byte_to_utf16, digits_only, grapheme_len, utf16_to_byte, word_at,
+    },
+    input::{
         hit_test::{hit_rect, hit_test},
         pointer::notify_pointer_down,
     },
     math::{Rect, Vector},
     node::NodeHandle,
-    runtime::set_timeout,
-    shader::Brush,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt},
-    text_input::{
-        DecimalNumber, EditKind, MaxLength, TextEditingValue, TextFormatter, TextUnit, UndoHistory,
-        byte_to_utf16, digits_only, grapheme_len, utf16_to_byte, word_at,
-    },
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -264,11 +264,11 @@ fn back_stack() -> Outcome {
         let owner = OwnedScope::new();
         let flag = handled.clone();
         owner.run(|| {
-            mue_macroquad::back::use_back_handler(true, move || flag.set(true));
+            mue_macroquad::input::back::use_back_handler(true, move || flag.set(true));
         });
         expect(
             "dispatch handled",
-            mue_macroquad::back::dispatch_back(),
+            mue_macroquad::input::back::dispatch_back(),
             true,
         )?;
         expect("handler ran", handled.get(), true)?;

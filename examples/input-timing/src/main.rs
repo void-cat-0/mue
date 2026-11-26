@@ -9,11 +9,11 @@ use macroquad::{
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color as UiColor,
-    event::hit_test::hit_test,
     input::InputSubscriber,
+    input::hit_test::hit_test,
     math::Vector,
     node::{IntoNode, Node, NodeRef, flexbox},
+    paint::color::Color as UiColor,
     style::Styleable,
 };
 

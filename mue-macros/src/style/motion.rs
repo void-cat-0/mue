@@ -26,15 +26,17 @@ pub(super) fn declaration(
 }
 
 pub(super) fn transition(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
-    if let Some(value) = token(input, &quote!(#host::transition::Transition))? {
+    if let Some(value) = token(input, &quote!(#host::motion::transition::Transition))? {
         return Ok(value);
     }
-    if let Some(expr) = expression_with_token(input, &quote!(#host::transition::Transition))? {
+    if let Some(expr) =
+        expression_with_token(input, &quote!(#host::motion::transition::Transition))?
+    {
         return Ok(expr);
     }
     if input.peek(Ident) && input.fork().parse::<Ident>()? == "none" {
         input.parse::<Ident>()?;
-        return Ok(quote!(#host::transition::Transition::Instant));
+        return Ok(quote!(#host::motion::transition::Transition::Instant));
     }
     if input.peek(Ident) && input.fork().parse::<Ident>()? == "all" {
         input.parse::<Ident>()?;
@@ -113,11 +115,11 @@ pub(super) fn transition(input: ParseStream, host: &TokenStream) -> Result<Token
     );
     if curve == "spring" {
         let bounce = strength.unwrap_or(0.25);
-        Ok(quote!(#host::transition::Transition::spring(#seconds, #bounce)))
+        Ok(quote!(#host::motion::transition::Transition::spring(#seconds, #bounce)))
     } else if let Some(strength) = strength {
-        Ok(quote!(#host::transition::Transition::#function(#seconds, #strength)))
+        Ok(quote!(#host::motion::transition::Transition::#function(#seconds, #strength)))
     } else {
-        Ok(quote!(#host::transition::Transition::#function(#seconds)))
+        Ok(quote!(#host::motion::transition::Transition::#function(#seconds)))
     }
 }
 

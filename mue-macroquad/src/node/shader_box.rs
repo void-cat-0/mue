@@ -6,9 +6,9 @@ use mue_core::prelude::*;
 
 use super::{BuildNode, Node, NodeContext};
 use crate::{
-    color::Color,
     layout::use_layout,
-    material::UiMaterial,
+    paint::color::Color,
+    paint::material::UiMaterial,
     paint::{use_background, use_paint},
     style::{Style, Styleable},
 };
@@ -24,13 +24,13 @@ pub struct ShaderBoxBuilder {
 /// The material's built-in uniforms are set for each draw: `u_rect` is the
 /// node's layout rect (the same space as `v_pos` when the node is not
 /// transformed), plus `u_time`, `u_resolution`, and `u_dpi`; see
-/// [`crate::material`]. Vertex color is the node's foreground `color` with
+/// [`crate::paint::material`]. Vertex color is the node's foreground `color` with
 /// its opacity. Set other uniforms on the material from an `on_update` hook
 /// or a reactive effect. The normal background, border, and outline still
 /// draw; the shader fill draws above the background.
 ///
 /// ```no_run
-/// use mue_macroquad::{material::UiMaterial, node::shader_box, style::Styleable};
+/// use mue_macroquad::{paint::material::UiMaterial, node::shader_box, style::Styleable};
 ///
 /// let stripes = UiMaterial::new(
 ///     r#"#version 100
@@ -79,7 +79,7 @@ impl BuildNode for ShaderBoxBuilder {
                 }
                 let radii = radii.get().fit(rect);
                 let tint = match color.get_clone() {
-                    crate::shader::Brush::Solid(color) => color,
+                    crate::paint::shader::Brush::Solid(color) => color,
                     _ => Color::WHITE,
                 };
                 material.with_rect(rect, || {

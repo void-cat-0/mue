@@ -1,7 +1,7 @@
 use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
-use mue_macroquad::{event::hover::hover_capable, style::Styleable};
+use mue_macroquad::{input::hover::hover_capable, style::Styleable};
 use std::rc::Rc;
 
 const PAGE: &str = "Overview";
@@ -26,7 +26,7 @@ fn platform() -> String {
 }
 
 fn diagnostics() -> Node {
-    let viewport = mue_macroquad::viewport::use_viewport();
+    let viewport = mue_macroquad::app::viewport::use_viewport();
     let safe = use_safe_area();
     let keyboard = use_keyboard();
     let hover = hover_capable();

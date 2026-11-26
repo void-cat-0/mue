@@ -104,7 +104,7 @@ A `Directive` adds reusable hooks or styles to any builder with
 | `Haptic::new(HapticStyle::Light)` | Plays a haptic on tap (or `Haptic::on(FeedbackTrigger::Press, ..)`) |
 | `Sound::new(SoundCue::Click)` | Plays the application's UI sound on tap, press, or long press |
 
-`mue_macroquad::event::pointer::use_pointer_down_observer` observes every
+`mue_macroquad::input::pointer::use_pointer_down_observer` observes every
 press in the window; `ClickOutside` is built on it.
 
 ## Handles
@@ -147,7 +147,7 @@ let saved = hstack().children((
 
 ## Viewport and safe area
 
-`mue_macroquad::viewport` exposes the window as signals: `use_viewport()`
+`mue_macroquad::app::viewport` exposes the window as signals: `use_viewport()`
 (logical size, DPI scale, orientation), `breakpoint(thresholds)`, and
 `min_width(px)`. `safe_area()` returns insets for notches and system bars; the
 platform layer publishes them with `set_safe_area(edges)`, and they are zero on

@@ -7,7 +7,7 @@ use mue_core::{
 
 use crate::{
     node::{IntoNode, Node},
-    shader::Brush,
+    paint::shader::Brush,
 };
 
 #[derive(Clone)]

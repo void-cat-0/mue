@@ -7,7 +7,7 @@
 //!
 //! ```
 //! use mue_components::prelude::*;
-//! use mue_macroquad::event::keyboard::KeyCode;
+//! use mue_macroquad::input::keyboard::KeyCode;
 //!
 //! let _editor = flexbox()
 //!     .focusable(true)
@@ -18,11 +18,11 @@ use std::{cell::RefCell, rc::Rc};
 
 use mue_core::{prop::Prop, signal::Access};
 use mue_macroquad::{
-    event::{
+    input::feedback::{self, HapticStyle, SoundCue},
+    input::{
         keyboard::{KeyCode, KeyEvent},
         pointer::{PointerAction, use_pointer_down_observer},
     },
-    feedback::{self, HapticStyle, SoundCue},
     math::Vector,
     node::{NodeHandle, NodeRef},
     style::{Style, Styleable},

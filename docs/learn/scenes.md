@@ -114,7 +114,7 @@ Crossfade from a forest path to a sunlit clearing, then compare that switch with
 
 ```rust
 use mue::{App, Scene};
-use mue::renderer::{SceneTransition, transition::Transition};
+use mue::renderer::{SceneTransition, motion::transition::Transition};
 
 fn reveal_clearing(app: &mut App, clearing: impl Scene + 'static) {
     app.replace_scene(clearing)
@@ -157,7 +157,7 @@ A cover uses rising opacity before the switch and falling opacity afterward. In 
 
 ```rust
 use mue::macroquad::prelude::{Color, draw_rectangle};
-use mue::renderer::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition};
+use mue::renderer::{SceneTransition, TransitionPhase, TransitionTiming, motion::transition::Transition};
 
 fn mist_cover() -> SceneTransition {
     SceneTransition::overlay(

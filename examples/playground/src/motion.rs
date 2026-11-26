@@ -2,11 +2,11 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    presence::{PresenceAnimation, presence},
-    shader::Brush,
+    motion::presence::{PresenceAnimation, presence},
+    motion::transition::Transition,
+    motion::transition_group::transition_group,
+    paint::shader::Brush,
     style::{Size, Styleable, Transform, TransformOp},
-    transition::Transition,
-    transition_group::transition_group,
 };
 use std::rc::Rc;
 
@@ -197,7 +197,7 @@ fn list_card() -> Node {
                     flexbox().style(mue_macroquad::style! {
                         width: {u(14.)}; height: {u(14.)};
                         border-radius: 9999px;
-                        background: {mue_macroquad::color::Color::from_rgba(120 + tone / 2, 140, 255 - tone / 2, 255)};
+                        background: {mue_macroquad::paint::color::Color::from_rgba(120 + tone / 2, 140, 255 - tone / 2, 255)};
                     }),
                     text(format!("Item #{}", item.id)).style(mue_macroquad::style! {
                         font-size: {f(14.)}; line-height: {u(20.)};

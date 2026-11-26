@@ -70,7 +70,7 @@ pub(super) fn declaration(
             setter("backdrop_blur", value)
         }
         "cursor" => {
-            let ty = quote!(#host::cursor::Cursor);
+            let ty = quote!(#host::input::cursor::Cursor);
             let value = if let Some(value) = token(input, &ty)? {
                 value
             } else if let Some(expr) = expression_with_token(input, &ty)? {

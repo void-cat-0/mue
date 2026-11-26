@@ -7,10 +7,10 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color as UiColor,
-    shader::Brush,
+    motion::transition::Transition,
+    paint::color::Color as UiColor,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt, percent, vh, vw},
-    transition::Transition,
 };
 
 const ACTIVE: UiColor = UiColor::from_rgba(70, 95, 130, 255);

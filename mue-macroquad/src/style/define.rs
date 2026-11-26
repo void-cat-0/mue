@@ -83,7 +83,7 @@ macro_rules! define_style {
                 $($(#[$hook_doc])* pub $hook_name: CallbackList<$hook_ty>,)*
                 pub(crate) children: Option<ChildrenPlan>,
                 pub(crate) hover_owners: Vec<Rc<HoverOwner>>,
-                pub(crate) focus_owners: Vec<Rc<crate::focus::FocusOwner>>,
+                pub(crate) focus_owners: Vec<Rc<crate::input::focus::FocusOwner>>,
                 pub(crate) node_handles: Vec<crate::node::NodeHandle>,
             }
 
@@ -171,22 +171,22 @@ macro_rules! define_style {
             impl Styleable for &mut Style { fn style_mut(&mut self) -> &mut Style { &mut **self } }
 
             impl Style {
-                pub(crate) fn bind_explicit_transitions(&mut self, transition: Prop<crate::transition::Transition>) {
+                pub(crate) fn bind_explicit_transitions(&mut self, transition: Prop<crate::motion::transition::Transition>) {
                     $(if let Some(value) = self.props.take::<$ty>(StyleKey::$name as u16) {
-                        self.[<put_ $name>](crate::transition::bind_property!($name, value, Some(transition)));
+                        self.[<put_ $name>](crate::motion::transition::bind_property!($name, value, Some(transition)));
                     })*
                     $(
                         if let Some(value) = self.props.take::<$rect_ty>(StyleKey::[<$rect_name _left>] as u16) {
-                            self.[<put_ $rect_name _left>](crate::transition::bind_property!([<$rect_name _left>], value, Some(transition)));
+                            self.[<put_ $rect_name _left>](crate::motion::transition::bind_property!([<$rect_name _left>], value, Some(transition)));
                         }
                         if let Some(value) = self.props.take::<$rect_ty>(StyleKey::[<$rect_name _right>] as u16) {
-                            self.[<put_ $rect_name _right>](crate::transition::bind_property!([<$rect_name _right>], value, Some(transition)));
+                            self.[<put_ $rect_name _right>](crate::motion::transition::bind_property!([<$rect_name _right>], value, Some(transition)));
                         }
                         if let Some(value) = self.props.take::<$rect_ty>(StyleKey::[<$rect_name _top>] as u16) {
-                            self.[<put_ $rect_name _top>](crate::transition::bind_property!([<$rect_name _top>], value, Some(transition)));
+                            self.[<put_ $rect_name _top>](crate::motion::transition::bind_property!([<$rect_name _top>], value, Some(transition)));
                         }
                         if let Some(value) = self.props.take::<$rect_ty>(StyleKey::[<$rect_name _bottom>] as u16) {
-                            self.[<put_ $rect_name _bottom>](crate::transition::bind_property!([<$rect_name _bottom>], value, Some(transition)));
+                            self.[<put_ $rect_name _bottom>](crate::motion::transition::bind_property!([<$rect_name _bottom>], value, Some(transition)));
                         }
                     )*
                 }
