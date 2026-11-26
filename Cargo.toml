@@ -33,3 +33,11 @@ mue-i18n = { path = "mue-i18n" }
 
 [profile.release]
 debug = true
+
+# Text input and IME support live in these forks (sibling checkouts of
+# void-cat-0/miniquad and void-cat-0/macroquad, branch `text-input`).
+[patch."https://github.com/void-cat-0/miniquad"]
+miniquad = { path = "../miniquad" }
+
+[patch."https://github.com/void-cat-0/macroquad"]
+macroquad = { path = "../macroquad" }

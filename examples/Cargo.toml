@@ -184,3 +184,10 @@ test = false
 name = "foundation"
 path = "foundation/src/main.rs"
 doc = false
+
+# See the workspace Cargo.toml: local forks with text input support.
+[patch."https://github.com/void-cat-0/miniquad"]
+miniquad = { path = "../../miniquad" }
+
+[patch."https://github.com/void-cat-0/macroquad"]
+macroquad = { path = "../../macroquad" }
