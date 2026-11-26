@@ -192,6 +192,12 @@ pub trait StyleableExt: Styleable {
         })
     }
 
+    /// Bind `handle` to this node once it is built (a template ref).
+    fn node_handle(mut self, handle: crate::node::NodeHandle) -> Self {
+        self.style_mut().node_handles.push(handle);
+        self
+    }
+
     /// Configure styles from this node's focus state.
     ///
     /// The callback runs once now with live signals for "focused" and "focus

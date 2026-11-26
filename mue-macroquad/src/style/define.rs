@@ -84,6 +84,7 @@ macro_rules! define_style {
                 pub(crate) children: Option<ChildrenPlan>,
                 pub(crate) hover_owners: Vec<Rc<HoverOwner>>,
                 pub(crate) focus_owners: Vec<Rc<crate::focus::FocusOwner>>,
+                pub(crate) node_handles: Vec<crate::node::NodeHandle>,
             }
 
             /// Fluent styles accepting either static properties or reactive signals.
@@ -203,6 +204,7 @@ macro_rules! define_style {
                     if self.children.is_none() { self.children = default.children.take(); }
                     self.append_hover_owners(mem::take(&mut default.hover_owners));
                     for owner in mem::take(&mut default.focus_owners) { if !self.focus_owners.iter().any(|o| Rc::ptr_eq(o, &owner)) { self.focus_owners.push(owner); } }
+                    self.node_handles.append(&mut default.node_handles);
                     // Release rejected inputs only after the complete merge, in the same
                     // field order as dropping an owned Style. In particular, a rejected
                     // child plan must be gone before installing the resulting style.
@@ -214,6 +216,7 @@ macro_rules! define_style {
                     drop(self.children.take());
                     drop(mem::take(&mut self.hover_owners));
                     drop(mem::take(&mut self.focus_owners));
+                    self.node_handles.clear();
                 }
                 $(define_style!(@accessor $name, $ty, $($default)?);)*
                 $(

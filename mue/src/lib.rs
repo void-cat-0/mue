@@ -53,7 +53,9 @@ pub mod prelude {
     pub use crate::renderer::{
         cursor::Cursor,
         focus::FocusScope,
-        node::{Component, IntoNode, Node, NodeContext, flexbox, path, svg, text},
+        node::{
+            Component, IntoNode, Node, NodeContext, NodeHandle, NodeRef, flexbox, path, svg, text,
+        },
         path::{PathData, StrokeStyle},
         style::{Style, Styleable, StyleableExt},
         svg::SvgDocument,

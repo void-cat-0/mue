@@ -70,6 +70,7 @@ pub(crate) struct NodeInner {
     pub(crate) clip_sector: Option<Prop<Sector>>,
     pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
     pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
+    node_handles: Vec<NodeHandle>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
     pub(crate) matrix_transform: Prop<Matrix>,
@@ -148,6 +149,7 @@ impl NodeInner {
             clip_sector: None,
             focus: None,
             cursor: None,
+            node_handles: Vec::new(),
             child_offset: None,
             center_on_layout_origin: false,
             matrix_transform: Prop::Static(Matrix::IDENTITY),
@@ -320,6 +322,64 @@ impl NodeRef {
     }
 }
 
+/// A slot that receives a node's [`NodeRef`] once the node is built (Vue's
+/// template ref). Bind it with [`StyleableExt::node_handle`],
+/// then read the node or call helpers such as [`NodeHandle::focus`].
+#[derive(Clone, Copy)]
+pub struct NodeHandle(Signal<Option<NodeRef>>);
+
+impl NodeHandle {
+    /// Create an empty handle in the current scope.
+    pub fn new() -> Self {
+        Self(signal(None))
+    }
+
+    /// The bound node while it is alive. Tracked.
+    pub fn get(&self) -> Option<NodeRef> {
+        self.0.get().filter(NodeRef::is_live)
+    }
+
+    pub fn get_untracked(&self) -> Option<NodeRef> {
+        self.0.get_untracked().filter(NodeRef::is_live)
+    }
+
+    /// The handle as a read-only signal of the last bound node.
+    pub fn signal(&self) -> ReadSignal<Option<NodeRef>> {
+        *self.0
+    }
+
+    /// The bound node's published bounds.
+    pub fn rect(&self) -> Option<Rect> {
+        self.get_untracked()?.rect()?.try_get_untracked()
+    }
+
+    /// Focus the bound node. Returns false when unbound or not focusable.
+    pub fn focus(&self) -> bool {
+        self.get_untracked().is_some_and(|node| node.focus())
+    }
+
+    /// Focus the bound node or its first focusable descendant.
+    pub fn focus_within(&self) -> bool {
+        self.get_untracked().is_some_and(crate::focus::focus_within)
+    }
+
+    pub fn blur(&self) {
+        if let Some(node) = self.get_untracked() {
+            node.blur();
+        }
+    }
+
+    pub(crate) fn bind(&self, node: Option<NodeRef>) {
+        self.0.set(node);
+    }
+}
+
+impl Default for NodeHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The node's resolved logical-pixel font size, shared by measurement and paint.
 pub fn use_font_size() -> ReadSignal<f32> {
     NodeInner::with_mut(|node| *node.computed_font_size)
@@ -471,6 +531,10 @@ impl Node {
                 NodeInner::with_mut(|node| node.clip_sector = Some(clip_sector));
             }
             let focus_mount = bind_focus(style);
+            let handles = std::mem::take(&mut style.node_handles);
+            if !handles.is_empty() {
+                NodeInner::with_mut(|node| node.node_handles = handles);
+            }
             let cursor = style.take_cursor();
             if !matches!(cursor, Prop::Static(crate::cursor::Cursor::Auto)) {
                 NodeInner::with_mut(|node| node.cursor = Some(cursor));
@@ -490,6 +554,16 @@ impl Node {
                     .with_borrow_mut(|stack| stack.pop().expect("node being finished is missing"));
                 nodes.insert(*node)
             });
+            let handles = Runtime::with(|rt| {
+                rt.nodes
+                    .borrow()
+                    .get(id)
+                    .map(|node| node.node_handles.clone())
+                    .unwrap_or_default()
+            });
+            for handle in handles {
+                handle.bind(Some(NodeRef::from_id(id)));
+            }
             if let Some((auto_focus, contain)) = focus_mount {
                 crate::focus::mounted(id, auto_focus, contain);
             }
