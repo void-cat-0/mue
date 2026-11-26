@@ -190,6 +190,11 @@ name = "text-input"
 path = "text-input/src/main.rs"
 doc = false
 
+[[example]]
+name = "mobile"
+path = "mobile/src/main.rs"
+doc = false
+
 # See the workspace Cargo.toml: local forks with text input support.
 [patch."https://github.com/void-cat-0/miniquad"]
 miniquad = { path = "../../miniquad" }
