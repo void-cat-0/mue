@@ -35,8 +35,8 @@
 //! is separate: it does not consume or filter the batch delivered to a Scene.
 //! Stack operations from [`SceneContext`] are deferred to safe frame boundaries.
 //!
-//! Optional draw-only [Scene transitions](scene_transition) can animate those
-//! deferred operations. [`transition::Transition`] is also the curve type used
+//! Optional draw-only [Scene transitions](app::scene_transition) can animate those
+//! deferred operations. [`motion::transition::Transition`] is also the curve type used
 //! by reactive style values; these property animations and Scene drawing effects
 //! share curves, but have distinct scheduling and resource lifetimes.
 //!
@@ -57,49 +57,36 @@
 //!
 //! [macroquad]: https://docs.rs/macroquad
 
-mod app;
-pub mod clip;
-pub mod color;
-mod error;
-pub mod event;
+pub mod app;
 pub mod font;
-pub mod gesture;
 pub mod hook;
 pub mod inherit;
 pub mod input;
 pub mod layout;
-pub mod material;
 pub mod math;
+pub mod motion;
 pub mod node;
+pub mod overlay;
 pub mod paint;
-pub mod render;
-pub mod runtime;
-pub mod scene;
-pub mod scene_transition;
-pub mod shader;
-pub mod shadow;
 pub mod style;
-pub mod texture;
-pub mod transition;
-mod viewport;
 
 pub use app::App;
-pub use clip::Sector;
-pub use error::{
+pub use app::error::{
     AppError, BoxedError, CallbackError, CallbackResult, Result, SceneError, TransitionError,
 };
-pub use material::{UiMaterial, UniformValue, with_material};
-pub use render::RenderStateGuard;
-pub use scene::{
+pub use app::scene::{
     RootInput, Scene, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRequest, SceneResult,
     SceneRoot,
 };
-pub use scene_transition::{
+pub use app::scene_transition::{
     ScenePictures, SceneTransition, TransitionFrame, TransitionPhase, TransitionTiming,
 };
-pub use shader::SharedTexture;
-pub use shadow::{Shadow, ShadowCache};
-pub use texture::{SafeTexture, flush_pending_texture_deletions};
+pub use paint::clip::Sector;
+pub use paint::material::{UiMaterial, UniformValue, with_material};
+pub use paint::render::RenderStateGuard;
+pub use paint::shader::SharedTexture;
+pub use paint::shadow::{BoxShadow, BoxShadows, ShadowCache};
+pub use paint::texture::{SafeTexture, flush_pending_texture_deletions};
 
 /// Install a callback for waking a blocking host event loop when a task is woken.
 pub fn set_task_wake_callback(callback: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {

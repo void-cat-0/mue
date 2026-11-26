@@ -1,11 +1,8 @@
-use super::responsive;
+use super::controls::*;
 use mue_components::*;
 use std::sync::Arc;
 
-use mue_macroquad::{
-    font::fontdb,
-    style::{Styleable, vh},
-};
+use mue_macroquad::{font::fontdb, style::Styleable};
 
 const FONTS: &[(&str, &[u8])] = &[
     (
@@ -100,26 +97,31 @@ pub fn database() -> fontdb::Database {
 }
 
 pub fn licenses() -> Node {
-    stack()
-        .style(mue_macroquad::style! {
-        width: 100%;
-        min-width: 0px;
-        gap: {vh(3.)};
-        })
-        .children(
-            NOTICES
-                .iter()
-                .map(|notice| {
-                    text(*notice)
-                        .style(mue_macroquad::style! {
+    let titles = [
+        "Notice",
+        "Noto Sans, Serif, and Mono",
+        "Noto Sans CJK",
+        "Noto Sans Arabic",
+        "Noto Sans Symbols 2",
+    ];
+    page_body(
+        "The playground bundles these fonts so every platform renders the same text. Their licenses follow.",
+        NOTICES
+            .iter()
+            .zip(titles)
+            .map(|(notice, title)| {
+                card(
+                    title,
+                    "",
+                    text(*notice).style(mue_macroquad::style! {
                         width: 100%;
-                        font-size: {responsive::font(14.)};
-                        line-height: {responsive::ui(21.)};
-                        flex: none;
-                        })
-                        .into_node()
-                })
-                .collect::<Vec<_>>(),
-        )
-        .into_node()
+                        font-size: {f(12.)};
+                        line-height: {u(18.)};
+                        font-family: monospace;
+                        color: {muted()};
+                    }),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
 }

@@ -20,6 +20,9 @@
 .mue-demo-preview.mue-playback { background: #eaf0fc; }
 .mue-demo-preview.mue-style-preview { background: #ebf2fa; }
 .mue-demo-preview.mue-sky { background: #23364a; }
+.mue-demo-preview.mue-focus { background: #f4efe6; }
+.mue-demo-preview.mue-focus-dark { background: #181614; }
+.mue-demo-preview.mue-focus-card { background: #fffaf3; }
 .mue-demo-preview > :is(p, .mue-motion, .mue-still) {
     position: absolute;
     inset: 0;

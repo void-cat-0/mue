@@ -1,120 +1,134 @@
-# Asynchronous work
+# Background work
 
 [Learn contents][learn-index]
 
-Keep the frame loop responsive while a forecast request runs. Start by drawing all three result states, then choose where the real work should run.
+Focus forgets its history when you close it. In this chapter you load the
+history from a file when the app starts and save it after each session. Files
+can be slow, and a frame that waits for one would freeze the window, so the
+reading and writing happen in the background while the UI keeps drawing.
 
-## Render pending, ready, and failed results
+## Load once, show the state
+
+An `AsyncResource` runs a job and exposes its progress as a signal:
+`Loading` while it runs, then `Ready` with the job's `Result`.
+`new_blocking` runs a blocking job, such as reading a file, on a worker thread:
 
 <div class="mue-demo">
 <div class="mue-demo-code">
 
-```rust,no_run
-use mue::core::{
-    prelude::{AsyncResource, AsyncState},
-    task::sleep,
-};
-use mue::prelude::*;
-use std::{rc::Rc, time::Duration};
+```rust
+use mue::{core::task::{AsyncResource, AsyncState}, prelude::*};
+use std::rc::Rc;
 
-let owner = OwnedScope::new();
-let mut forecast = AsyncResource::<u32, String>::new(async {
-    sleep(Duration::from_secs(1)).await;
-    Ok(18) // Stand-in for an async forecast request.
-});
-let caption = owner.run(|| forecast.state().map(|state| Rc::<str>::from(match state {
-    AsyncState::Loading => "Checking forecast…".to_owned(),
-    AsyncState::Ready(Ok(temp)) => format!("Forecast   {temp} °C"),
-    AsyncState::Ready(Err(error)) => format!("Forecast unavailable ({error})"),
-})));
-let view = text(caption).style(style! { font-size: 24px; color: #183c2e; });
+fn load_history() -> Result<Vec<u32>, String> {
+    let text = std::fs::read_to_string("focus-history.txt").map_err(|e| e.to_string())?;
+    Ok(text.lines().filter_map(|line| line.trim().parse().ok()).collect())
+}
+
+#[component]
+fn history_status() -> impl Component {
+    let history = AsyncResource::new_blocking(load_history);
+    let state = history.state();
+    // The closure owns the resource, so the job lives as long as the label.
+    let label = state.map(move |state| {
+        let _ = &history;
+        Rc::<str>::from(match state {
+            AsyncState::Loading => "Loading your history…".to_owned(),
+            AsyncState::Ready(Ok(minutes)) => format!(
+                "{} sessions, {} minutes in total",
+                minutes.len(),
+                minutes.iter().sum::<u32>()
+            ),
+            AsyncState::Ready(Err(_)) => "No history yet".to_owned(),
+        })
+    });
+    text(label).style(style! { font-size: 18px; color: #2d2a26; })
+}
 ```
 
 </div>
-<figure class="mue-demo-preview mue-preview-pair">
+<figure class="mue-demo-preview mue-focus">
 
-![Checking forecast while the timer is pending][shot-forecast-loading]
-
-![Forecast at 18 degrees after completion][shot-forecast-ready]
+![The text "3 sessions, 75 minutes in total"][shot-guide-tasks]
 
 </figure>
 </div>
 
-Pass `view` to `App::new` and run the usual frame loop. Keep `forecast` and `owner` alive while the view uses `caption`. The resource owns the operation and result. The scope owns the caption binding. Change `Ok(18)` to `Err("offline".into())` to try the error state. The `sleep` future waits without occupying the UI thread. Keep ticking `App::frame()` so the timer can wake the task and the resource can publish the result.
+The label first reads "Loading your history…", and changes as soon as the file
+has been read; the window keeps drawing in between. Dropping a resource cancels
+its job, so keep it somewhere that lives as long as you need the result; here
+the label's closure owns it. The result comes back on
+the UI thread, so updating signals from it is safe. A missing file is just an
+`Err` that the view shows as "No history yet".
 
-## Refresh the existing resource
+## Save without waiting
 
-When settings change, replace the resource's pending operation. Keep the same resource so the view can keep its state binding. If the previous request finishes later, its cancelled publisher cannot overwrite the new result.
+Saving works the same way. Keep the resource in the component and start a new
+job with `reload_blocking` each time a session ends; the state goes back to
+`Loading` and then to the new result:
 
-```rust,no_run
-# use mue::core::prelude::AsyncResource;
-# let mut forecast = AsyncResource::<u32, String>::new(async { Ok(18) });
-forecast.reload_with(async { Ok(21) });
-```
-
-Try refreshing while the one-second timer is still running. The label can show the replacement result as soon as the App polls it.
-
-## Choose where work runs
-
-| Need | Use |
-| --- | --- |
-| Update a view from a future | `AsyncResource::new` and `state()` |
-| Keep or await a task handle | `spawn` |
-| Read a file or decode bytes with a blocking API | `spawn_blocking` or `AsyncResource::new_blocking` |
-| Build a texture from loaded bytes | Do that step on the UI thread after the worker returns |
-
-`App::frame` polls foreground tasks and timers. A host without an App can drive them with `tick` and `tick_timeouts`. Sleep and interval need those ticks to advance. Use the host's runtime for I/O that depends on it and await its result on the foreground.
-
-## Handle task lifetimes
-
-- Keep a `Task` handle to await its output. Dropping it requests cancellation. Use `detach()` to let it run and discard the result, or `detach_and_report` to report a business error.
-- Plain tasks run outside the reactive scope and effect tracker. Capture owned values or live handles that have an owner. Use `try_set` on a direct signal if its owner might disappear before publication.
-- To give a future scoped resources, use `spawn(scope_future(future))`. The operation has its own owner and can look up parent context while the parent lives. Calling `owner.run(|| async { ... })` scopes construction of the future only.
-- Use `reload_with` or `reload_blocking` to replace a resource's operation. The resource returns to `Loading` and accepts only the replacement publisher's output.
-
-## Take blocking work off the frame loop
-
-`spawn_blocking` starts one OS thread per call. Send it owned input and return owned data. Use a host pool for frequent jobs. A worker cannot read signals, access reactive context, or use GPU state. Dropping its handle discards the result while the worker continues to completion. A worker panic propagates to the code awaiting its handle.
-
-The previous forecast example uses a timer. To read a real file, move its path into a blocking closure and keep the result mapping on the UI thread. Mount `view` before requesting a reload and keep both owners alive.
-
-```rust,no_run
-use std::path::PathBuf;
+```rust
 use mue::{core::task::{AsyncResource, AsyncState}, prelude::*};
+use std::rc::Rc;
 
-let path = PathBuf::from("release.txt");
-let mut file = AsyncResource::new_blocking(move || {
-    std::fs::read_to_string(path).map_err(|error| error.to_string())
-});
-let owner = OwnedScope::new();
-let summary = owner.run(|| file.state().map(|state| match state {
-    AsyncState::Loading => "Opening file…".into(),
-    AsyncState::Ready(Ok(contents)) => format!("{} lines", contents.lines().count()),
-    AsyncState::Ready(Err(error)) => format!("Open failed: {error}"),
-}));
-let view = text(summary);
-
-// In the host, when a different file is selected:
-let selected = PathBuf::from("next-release.txt");
-file.reload_blocking(move || {
-    std::fs::read_to_string(selected).map_err(|error| error.to_string())
-});
+#[component]
+fn save_button(minutes: u32) -> impl Component {
+    let mut save = AsyncResource::<(), String>::new_blocking(|| Ok(()));
+    let status = save.state().map(|state| {
+        Rc::<str>::from(match state {
+            AsyncState::Loading => "Saving…",
+            AsyncState::Ready(Ok(())) => "Saved",
+            AsyncState::Ready(Err(_)) => "Could not save",
+        })
+    });
+    let save = std::cell::RefCell::new(save);
+    hstack().gap(12.).style(style! { align-items: center; }).children((
+        button("Save session").on_activate(move || {
+            let line = format!("{}\n", minutes.get());
+            save.borrow_mut().reload_blocking(move || {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("focus-history.txt")
+                    .map_err(|e| e.to_string())?;
+                file.write_all(line.as_bytes()).map_err(|e| e.to_string())
+            });
+        }),
+        text(status).style(style! { font-size: 14px; color: #8a8178; }),
+    ))
+}
 ```
 
-Load a file that exists, then reload with a missing path. The same label follows both requests because `reload_blocking` keeps the state signal. For a complete editor that also writes the file, see the [release checklist project][release-checklist-guide].
+Starting a new job replaces the previous one; if an older job finishes later,
+its result is ignored. The button's handler owns the resource, so when the
+component goes away the resource goes with it and late results are dropped.
 
-See [task execution and ownership][tasks-reference] for timer policies, awaiting and joining, executor shutdown, and manual driving.
+## Async code and timers
 
-[task-api]: https://github.com/void-cat-0/mue/blob/main/mue-core/src/task.rs
+`AsyncResource::new` takes a future instead of a closure, for code that awaits,
+such as a network request. Inside async code, `mue::core::task::sleep` waits
+without blocking the frame. For small delays in the UI, `set_timeout(seconds,
+action)` runs an action later, and `use_interval`, which you used in chapter 1,
+repeats one.
 
-[shot-forecast-loading]: ../images/forecast-loading.png
-[shot-forecast-ready]: ../images/forecast-ready.png
+## What you learned
 
+- `AsyncResource` runs work in the background and reports `Loading` and
+  `Ready` through a signal.
+- `new_blocking` and `reload_blocking` move blocking work such as file access to
+  a worker thread.
+- A newer job replaces an older one, and results never arrive after their
+  component is gone.
 
-**Previous** [Input routing][scene-input-guide] · **Next** [Localized interfaces][i18n-guide]
+The [task reference][tasks-reference] covers cancellation, operation scopes, and
+worker threads.
+
+**Previous** [Keyboard and text input][scene-input-guide] · **Next** [Localization][i18n-guide]
+
+[shot-guide-tasks]: ../images/guide-tasks.png
 
 [learn-index]: index.md
 [scene-input-guide]: input.md
 [i18n-guide]: i18n.md
-[release-checklist-guide]: ../example-app.md
 [tasks-reference]: ../reference/tasks.md

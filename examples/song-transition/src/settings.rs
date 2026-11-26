@@ -5,7 +5,7 @@ use mue_core::{
     scope::OwnedScope,
     signal::{Access, ReadSignal, Signal, signal},
 };
-use mue_macroquad::color::Color;
+use mue_macroquad::paint::color::Color;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Theme {

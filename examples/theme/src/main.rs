@@ -10,9 +10,9 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::{FontSize, Size, prelude::*};
 use mue_macroquad::{
     App,
-    color::Color,
     inherit::provide_foreground,
-    shader::{Brush, solid},
+    paint::color::Color,
+    paint::shader::{Brush, solid},
     style::{Styleable, StyleableExt, vh, vw},
 };
 use std::rc::Rc;

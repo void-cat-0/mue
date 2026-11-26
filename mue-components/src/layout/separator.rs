@@ -2,7 +2,7 @@ use mue_core::prop::PropValue;
 use mue_macroquad::node::flexbox::use_container;
 use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
-    color::Color,
+    paint::color::Color,
     style::{Size, Style, Styleable, StyleableExt},
 };
 

@@ -26,7 +26,7 @@ use std::rc::Rc;
 use mue::{
     App,
     prelude::*,
-    renderer::{color::Color, shader::solid},
+    renderer::{paint::color::Color, paint::shader::solid},
 };
 
 #[derive(Clone, PartialEq)]
@@ -97,7 +97,7 @@ use mue::{
     components::{Theme, token_set},
     core::Size,
     prelude::*,
-    renderer::{color::Color, shader::{Brush, solid}},
+    renderer::{paint::color::Color, paint::shader::{Brush, solid}},
 };
 use std::rc::Rc;
 
@@ -237,7 +237,7 @@ A node reference's hover query does not enable tracking or keep a destroyed node
 For text foreground inheritance, use the renderer's explicit subtree helper:
 
 ```rust,no_run
-use mue::{prelude::*, renderer::{color::Color, inherit::provide_foreground}};
+use mue::{prelude::*, renderer::{paint::color::Color, inherit::provide_foreground}};
 
 let subtree = provide_foreground(Color::BLACK, || {
     stack().children((text("Inherited color"), text("Another label")))

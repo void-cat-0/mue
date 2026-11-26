@@ -19,8 +19,8 @@ Import `mue::{App, prelude::*}` to build UI. Use `mue::macroquad` for the host w
 | --- | --- |
 | `mue` | Application entry point for the renderer, reactive core, components, and authoring macros. Enable `i18n` for Fluent localization. |
 | `mue-core` | Renderer-independent signals, effects, scopes, properties, and foreground tasks. |
-| `mue-macroquad` | Macroquad nodes, styles, input, rendering, App, and Scene runtime. |
-| `mue-components` | Layout, typography, graphics, and optional application token components. |
+| `mue-macroquad` | Macroquad nodes, styles, input and focus, rendering (borders, paths, SVG, offscreen layers, shaders), overlay layers, App, and Scene runtime. |
+| `mue-components` | Layout (including grid), typography, graphics and icons, controls, overlays, component conventions, and optional application token components. |
 | `mue-macros` | `#[component]`, `#[node]`, and `style!` procedural macros. |
 | `mue-i18n` | Optional Fluent catalogs and reactive translations. |
 
@@ -46,6 +46,9 @@ Run an example from the standalone examples package with Cargo, for example:
 
 ```sh
 cargo run --manifest-path examples/Cargo.toml --example basics
+cargo run --manifest-path examples/Cargo.toml --example foundation
+cargo run --manifest-path examples/Cargo.toml --example text-input
+cargo run --manifest-path examples/Cargo.toml --example mobile
 cargo run --manifest-path examples/Cargo.toml --example scenes
 cargo run --manifest-path examples/Cargo.toml --example scene-flow
 cargo run --manifest-path examples/Cargo.toml --example scene-transitions

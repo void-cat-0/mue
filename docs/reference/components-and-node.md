@@ -12,14 +12,16 @@
 
 The component crate owns reusable behavior.
 
-- layout: `stack`, `wrap`, `center`, `container`, `scroll_area`, and `pages`;
+- layout: `stack`, `wrap`, `center`, `container`, `grid`, `simple_grid`, `safe_area`, `scroll_area`, and `pages`;
 - application-level push/pop flows use [Scenes][scenes-guide]; the former navigation stack has been removed.
 - controls: `button`;
 - overlay: `overlay_host`;
-- graphics: `image`, `shape`, and `circle`;
+- graphics: `image`, `icon`/`icon_named`, and the renderer's `path`, `svg`, `shader_box`, and `shape` nodes;
+- layers and effects (re-exported from the renderer): `teleport`, `anchored`, `presence`, and `offscreen`;
+- state and behavior: `Controllable`, `provide_part`/`use_part`, composables such as `use_disclosure`, and directives such as `Hotkey`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 
-`flexbox`, `text`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.
+`flexbox`, `text`, `path`, `svg`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.
 
 ## Builder parameters and construction
 
@@ -27,7 +29,7 @@ Both `#[component]` and `#[node]` generate styleable builders. Calling a generat
 
 Consuming the builder with `IntoNode::into_node` constructs its node synchronously, once; `App::new` performs that conversion for its root. Parameters written as ordinary value types receive `Prop<T>` values inside the body.
 
-Required parameters form the public constructor, optional `#[default]` parameters have setters, and `#[model]` parameters receive writable `Signal<T>` values.
+Required parameters form the public constructor, optional `#[default]` parameters have setters, and `#[model]` parameters receive writable `Signal<T>` values. `#[slot]` parameters (`Slot`, `ScopedSlot<T>`) take views or templates, and `#[event]` parameters (`Callback<T>`) take handler closures; see [component conventions][conventions-reference].
 
 ```rust
 use std::rc::Rc;
@@ -133,13 +135,17 @@ App owns frame scheduling; the [Scene API][scenes-guide] can submit multiple roo
 
 ## Modal controls
 
-`overlay_host(open, content)` renders a full-screen modal layer. It is hidden
-when `open` is false, captures pointer input while open, and keeps the content
-mounted while hidden. Content taps are swallowed; a backdrop tap only dismisses
-when `dismissible(true)` is set.
+`overlay_host(open, content)` renders a full-screen modal layer, teleported
+into the `Modal` layer of the nearest layer host, so it covers the window
+wherever it is declared. It fades in and out, captures pointer input while
+open, and keeps the content mounted while hidden. Focus moves into the content
+when it opens, Tab stays inside it, and focus returns when it closes. Content
+taps are swallowed; a backdrop tap or Escape only dismisses when
+`dismissible(true)` is set. See [layers, overlays, and anchoring][layers-reference]
+for the building blocks.
 
 ```rust,no_run
-use mue::{components::overlay_host, prelude::*, renderer::Shadow};
+use mue::{components::overlay_host, prelude::*};
 
 let open = signal(false);
 overlay_host(
@@ -153,7 +159,7 @@ overlay_host(
             gap: 12px;
             align-items: center;
         })
-        .shadow(Shadow::new(18., 16.))
+        .style(style! { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); })
         .children((
             text("Paused"),
             button("Resume")
@@ -173,3 +179,5 @@ overlay_host(
 [scene-input-guide]: ../learn/input.md
 
 [guide-reference]: index.md
+[layers-reference]: layers-and-overlays.md
+[conventions-reference]: component-conventions.md

@@ -4,10 +4,11 @@ use std::rc::Rc;
 
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    event::pointer::PointerAction,
+    input::cursor::Cursor,
+    input::{keyboard::KeyCode, pointer::PointerAction},
     node::{BuildNode, IntoChildren, Node, NodeContext, flexbox::use_container, text},
-    shader::Brush,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Size, Style, Styleable, StyleableExt},
 };
 
@@ -66,7 +67,10 @@ fn foreground_color(disabled: bool) -> Color {
 /// A text button with secondary visual weight by default.
 ///
 /// Use [`ButtonBuilder::primary`] or [`ButtonBuilder::variant`] to select its
-/// visual weight. A disabled or loading button ignores activation. Its label,
+/// visual weight. A disabled or loading button ignores activation. The button
+/// is focusable, shows a focus ring for keyboard focus, and activates on Enter
+/// or Space while focused. Its hit area is at least 44 × 44 px even when it is
+/// drawn smaller. Its label,
 /// disabled state, and loading state accept reactive properties. Builder hooks
 /// and style settings remain part of the same node when consumed.
 ///
@@ -171,7 +175,15 @@ impl BuildNode for ButtonBuilder {
         });
 
         let mut style = style.use_pressed(pressed);
-        style.provide_defaults(Style::new().background(background).opacity(opacity));
+        style.provide_defaults(
+            Style::new()
+                .background(background)
+                .opacity(opacity)
+                .focusable(true)
+                .cursor(Cursor::Pointer)
+                .min_hit_size(44.)
+                .focus_ring(2., Color::from_rgba(120, 170, 255, 255), 2.),
+        );
         ctx.push_style(style);
 
         let defaults = Style::new()
@@ -192,12 +204,29 @@ impl BuildNode for ButtonBuilder {
                     PointerAction::Up => hovered.set(false),
                     _ => {}
                 });
-            style.on_tap.append(move |_| {
+            let action = std::rc::Rc::new(std::cell::RefCell::new(action.take()));
+            let activate = move || {
                 if disabled.try_get().unwrap_or(false) || loading.try_get().unwrap_or(false) {
                     return;
                 }
-                if let Some(action) = action.as_mut() {
+                if let Some(action) = action.borrow_mut().as_mut() {
                     action();
+                }
+            };
+            style.on_tap.append({
+                let activate = activate.clone();
+                move |_| activate()
+            });
+            // Keyboard activation while focused.
+            style.on_key_down.append(move |event| {
+                if !event.repeat
+                    && matches!(
+                        event.key,
+                        KeyCode::Enter | KeyCode::KpEnter | KeyCode::Space
+                    )
+                {
+                    event.stop_propagation();
+                    activate();
                 }
             });
 

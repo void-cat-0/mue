@@ -2,18 +2,26 @@
 
 [Learn contents][learn-index]
 
-Build a playback control in three passes. Open a window, update its state from a button, then use the same state to drive a second part of the view.
+In this chapter you open a window, show a countdown, and make a button that
+starts and pauses it. By the end you will know the three things every mue app
+is made of: a view built from small pieces, state that the view reads, and a
+loop that draws frames.
 
-## Open a window
+## Create the project
 
-Run `cargo new playback-control`. Add Mue to `Cargo.toml` and use `mue::macroquad` in the application. That import uses the same Macroquad fork as the renderer.
+Make a new binary crate and add mue:
 
 ```toml
 [dependencies]
 mue = { git = "https://github.com/void-cat-0/mue", branch = "main" }
 ```
 
-Paste this into `src/main.rs` and run `cargo run`.
+mue draws with Macroquad. Use the copy that mue re-exports (`mue::macroquad`)
+so your app and the renderer always agree on the version.
+
+## Show something
+
+Replace `src/main.rs` with this and run `cargo run`:
 
 <div class="mue-demo">
 <div class="mue-demo-code">
@@ -21,17 +29,16 @@ Paste this into `src/main.rs` and run `cargo run`.
 ```rust,no_run
 use mue::{App, macroquad, prelude::*};
 
-#[macroquad::main("Playback control")]
+#[macroquad::main("Focus")]
 async fn main() {
-    let mut app = App::new(center()
-        .style(style! {
-            width: 100%; height: 100%;
-            background: #eaf0fc;
-        })
-        .children(text("Preview paused").style(style! {
-            font-size: 28px; color: #172c56;
-        })));
+    let view = center()
+        .style(style! { width: 100%; height: 100%; background: #f4efe6; })
+        .children(text("25:00").style(style! {
+            font-size: 64px;
+            color: #2d2a26;
+        }));
 
+    let mut app = App::new(view);
     loop {
         app.frame();
         macroquad::window::next_frame().await;
@@ -40,78 +47,128 @@ async fn main() {
 ```
 
 </div>
-<figure class="mue-demo-preview mue-playback">
+<figure class="mue-demo-preview mue-focus">
 
-![Preview paused centered on a pale blue canvas][shot-playback]
+![The text 25:00 centered on a warm beige window][shot-guide-window]
 
 </figure>
 </div>
 
-`center()` is the root builder. Its two percentage sizes refer to the window, so resizing the window keeps the label centered. Change the font size to `40px` and resize the window to see how the label and its parent use different sizes.
+A view is a tree of **builders**. `center()` is a box that centers its
+children, and `text(...)` is a label. Text is white unless you set its `color`,
+which is why every label in this guide sets one. You configure a builder with methods such
+as `.style(...)` and `.children(...)`. The `style!` macro reads like CSS:
+`width: 100%` means the full width of the parent, which for the root is the
+window.
 
-Construct `App` once. It retains the built node tree across frames. Each call to `frame()` processes input and tasks, prepares layout, and draws. `next_frame().await` hands control back to Macroquad.
+`App` owns the view. Create it once, then call `app.frame()` every frame: it
+handles input, lays out the tree, and draws it. `next_frame().await` lets
+Macroquad show the result and wait for the next frame.
 
-## Handle a button press
+Try resizing the window: the text stays in the middle, because the root box
+follows the window size.
 
-Add `transport()` above `main` and replace the argument to `App::new` with `transport()`. Press the button twice. The first press changes **Play** to **Pause**. The second reverses the change.
+## Make it interactive
+
+A countdown needs something that changes. In mue, changing values live in
+**signals**. Move the view into a component and add a Start button:
 
 ```rust
 use mue::prelude::*;
 
 #[component]
-fn transport() -> impl Component {
-    let playing = signal(false);
-    let action = playing.pick("Pause", "Play");
-    center().style(style! {
-        width: 100%; height: 100%; background: #eaf0fc;
-    }).children(button(action).on_activate(move || {
-        playing.update(|value| *value = !*value);
-    }))
+fn timer() -> impl Component {
+    let running = signal(false);
+
+    vstack().gap(16.).style(style! { align-items: center; }).children((
+        text("25:00").style(style! { font-size: 64px; color: #2d2a26; }),
+        button(running.pick("Pause", "Start"))
+            .on_activate(move || running.update(|on| *on = !*on)),
+    ))
 }
 ```
 
-The component creates `playing` when Mue builds the node. `pick` creates a reactive property. The button keeps that property and can read the new value after activation. A Rust `if playing.get()` in the component body chooses a label once, during construction. Use `if` inside `computed` or `map` when the choice must follow future writes.
+In `main`, pass `center().children(timer())` to `App::new` (keep the style from
+before).
 
-## Drive two bindings from one signal
+Three things happen here:
 
-Keep the signal and the outer `center` from the previous step. Define a second property and pass a column of two children to `center().children(...)`.
+- `signal(false)` creates a value that can change later.
+- `running.pick("Pause", "Start")` creates a label that *follows* the signal:
+  "Pause" while it is true, "Start" while it is false.
+- `on_activate` runs when the button is clicked, tapped, or pressed with Enter
+  or Space while focused. It flips the signal, and the label updates by itself.
+
+`#[component]` turns the function into a builder you can style and place like
+any other. The function body runs **once**, when the view is built. That is why
+you use `pick` (or `map`, below) instead of an `if`: an `if running.get()` in
+the body would choose a label once and never change it.
+
+## Count down
+
+Now let the timer run. Keep the remaining time in a second signal and subtract
+a second while the timer runs:
 
 <div class="mue-demo">
 <div class="mue-demo-code">
 
 ```rust
-# use mue::prelude::*;
-# #[component]
-# fn example() -> impl Component {
-# let playing = signal(false);
-# let action = playing.pick("Pause", "Play");
-let status = playing.pick("Preview playing", "Preview paused");
-let controls = vstack().gap(16.).children((
-    text(status).style(style! { font-size: 28px; color: #172c56; }),
-    button(action).on_activate(move || {
-        playing.update(|value| *value = !*value);
-    }),
-));
-# controls
-# }
+use mue::{components::use_interval, prelude::*};
+use std::rc::Rc;
+
+#[component]
+fn timer() -> impl Component {
+    let running = signal(false);
+    let remaining = signal(25 * 60_u32);
+
+    use_interval(1., move || {
+        if running.get() && remaining.get() > 0 {
+            remaining.update(|seconds| *seconds -= 1);
+        }
+    });
+
+    let clock = remaining.map(|seconds| {
+        Rc::<str>::from(format!("{:02}:{:02}", seconds / 60, seconds % 60))
+    });
+
+    vstack().gap(16.).style(style! { align-items: center; }).children((
+        text(clock).style(style! { font-size: 64px; color: #2d2a26; }),
+        button(running.pick("Pause", "Start"))
+            .primary(true)
+            .on_activate(move || running.update(|on| *on = !*on)),
+    ))
+}
 ```
 
 </div>
-<figure class="mue-demo-preview mue-playback">
+<figure class="mue-demo-preview mue-focus">
 
-![The playing status above the Pause button after activation][shot-playback-playing]
+![The timer showing 24:57 above a blue Pause button][shot-guide-timer]
 
 </figure>
 </div>
 
-Both labels follow the same state. To drive a real audio player, pass its current playback state to the view and use activation to request a change. Try mounting two `transport()` instances first. Each instance has its own signal. The next chapter moves state into a parent and renders a changing list.
+`use_interval(1., tick)` calls `tick` every second for as long as the component
+exists. `remaining.map(...)` turns the number of seconds into the text
+`mm:ss`; like `pick`, it updates whenever the signal changes.
 
+Press **Start** and watch the clock count down. Press **Pause** and it stops.
 
-[shot-playback]: ../images/playback.png
-[shot-playback-playing]: ../images/playback-playing.png
+## What you learned
 
+- A view is a tree of builders configured with methods and `style!`.
+- Signals hold values that change; `map` and `pick` derive values that follow
+  them.
+- A component's body runs once. Anything that should update later must be a
+  signal or derived from one.
+- `App::frame()` does a whole frame: input, layout, and drawing.
 
-**Previous** [Learn][learn-index] · **Next** [Reactive state and children][basics-guide]
+In the next chapter the timer remembers the sessions you finish.
+
+**Previous** [Learn][learn-index] · **Next** [State and lists][basics-guide]
+
+[shot-guide-window]: ../images/guide-window.png
+[shot-guide-timer]: ../images/guide-timer.png
 
 [learn-index]: index.md
 [basics-guide]: basics.md

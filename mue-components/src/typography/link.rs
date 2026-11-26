@@ -1,7 +1,7 @@
 use super::{document::Document, text::render_text};
 use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
-    color::Color,
+    paint::color::Color,
     style::{Style, Styleable},
 };
 use std::rc::Rc;

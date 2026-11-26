@@ -4,11 +4,11 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color,
     math::{Rect, Vector},
+    motion::transition::Transition,
     paint::Shapes,
-    shader::SharedTexture,
-    transition::Transition,
+    paint::color::Color,
+    paint::shader::SharedTexture,
 };
 
 fn main() {
@@ -32,9 +32,9 @@ async fn run() {
     )
     .into();
     let geometry = Shapes::build(|paint| {
-        paint.fill_rounded_rect(
-            Rect::new(8., 10., 80., 60.),
-            12.,
+        paint.fill(
+            &PathData::rounded_rect(Rect::new(8., 10., 80., 60.), 12.),
+            FillRule::NonZero,
             Color::from_rgba(116, 91, 196, 255),
         );
     });
@@ -97,7 +97,7 @@ async fn run() {
                         padding: 20px 8px;
                     }).children((
                         card,
-                        circle().style(style! { width: 76px; height: 76px; background: #ef925a; }),
+                        path(PathData::circle(Vector::ZERO, 1.)).style(style! { width: 76px; height: 76px; color: #ef925a; }),
                         shape(geometry).style(style! { width: 96px; height: 80px; }),
                         image(texture).object_fit(ObjectFit::Cover).style(style! {
                             width: 110px; height: 100px;

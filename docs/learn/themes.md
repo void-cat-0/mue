@@ -1,116 +1,153 @@
-# Shared appearance
+# Themes
 
 [Learn contents][learn-index]
 
-Switch an observatory card from day to night colors while keeping the same node.
+Colors are now spread across every component of Focus. In this chapter you
+collect them into a **theme**: a set of named values that components look up.
+Then you add a dark mode that switches the whole app at once, without
+rebuilding anything.
 
-## Register a palette and bind the card
+## Name your values
+
+A `TokenSet` maps names to values of one type. Register it on a `Theme`, and
+refer to a name with `token!` inside `style!`:
 
 <div class="mue-demo">
 <div class="mue-demo-code">
 
-```rust,no_run
+```rust
 use mue::{components::{Theme, token_set}, prelude::*};
-use mue::renderer::{color::Color, shader::solid};
+use mue::renderer::paint::{color::Color, shader::solid};
 
 let theme = Theme::new();
-let day = token_set! { panel: solid(Color::from_rgba(255, 228, 173, 255)) };
-let night = token_set! { panel: solid(Color::from_rgba(191, 203, 238, 255)) };
-theme.register(&day);
+let light = token_set! {
+    canvas: solid(Color::from_rgba(244, 239, 230, 255)),
+    card: solid(Color::from_rgba(255, 250, 243, 255)),
+    ink: solid(Color::from_rgba(45, 42, 38, 255)),
+};
+theme.register(&light);
 
-let card = flexbox().style(style! {
-    padding: 16px 24px;
-    border-radius: 12px;
-    background: token!(theme, panel);
-}).children(text("Observatory").style(style! {
-    font-size: 24px;
-    color: #27314c;
-}));
-// After building the view, change the palette in place.
-theme.apply(&night);
+let card = center()
+    .style(style! {
+        width: 280px;
+        padding: 24px;
+        border-radius: 20px;
+        background: token!(theme, card);
+    })
+    .children(text("25:00").style(style! {
+        font-size: 56px;
+        color: token!(theme, ink);
+    }));
 ```
 
 </div>
-<figure class="mue-demo-preview mue-preview-pair">
+<figure class="mue-demo-preview mue-focus">
 
-![The observatory card uses the day palette][shot-observatory-day]
-
-![The same card uses the night palette][shot-observatory-night]
+![A light card with dark 25:00 text][shot-guide-theme-light]
 
 </figure>
 </div>
 
-`register` installs the initial brush. `token!(theme, panel)` asks for a token whose type matches the `background` property. Build one App with this card. After its first frame, switch the token set in place.
+Each `token!(theme, name)` is a live handle to the value, not a copy.
 
-```rust,no_run
-# use mue::{components::{Theme, token_set}, renderer::{color::Color, shader::solid}};
+## Switch the whole app
+
+To change the theme, `apply` another set with the same names. Every handle
+updates in place, so all the components that use the tokens repaint on the
+next frame:
+
+<div class="mue-demo">
+<div class="mue-demo-code">
+
+```rust
+# use mue::{components::{Theme, token_set}, renderer::paint::{color::Color, shader::solid}};
 # let theme = Theme::new();
-# let night = token_set! { panel: solid(Color::BLACK) };
-theme.apply(&night);
+let dark = token_set! {
+    canvas: solid(Color::from_rgba(24, 22, 20, 255)),
+    card: solid(Color::from_rgba(38, 35, 32, 255)),
+    ink: solid(Color::from_rgba(240, 233, 222, 255)),
+};
+theme.apply(&dark);
 ```
 
-Try changing `night` and applying it again. If you read the brush with `theme.get::<Brush>("panel").get_clone()` at setup, you pass a snapshot to the builder. Keep the property itself to see the updated brush.
+</div>
+<figure class="mue-demo-preview mue-focus-dark">
 
-| Task | API |
-| --- | --- |
-| Read a token with an explicit type | `theme.get::<Brush>("panel")` |
-| Read from the nearest theme | Install it with `provide_theme`, then use `token!(panel)` in `style!` |
-| Use a dotted key | `token!("card.panel")` |
-| Change several types | Apply each typed token set in turn |
+![The same card in dark colors with light text][shot-guide-theme-dark]
 
-A key belongs to a value type, so a brush and a font size can use the same name. Register a key before reading it. Resolve a scoped token when building the view and capture the resulting property in any deferred `map` or `computed` callback.
+</figure>
+</div>
 
-## Install context for a subtree
+`apply` only changes names the theme already knows, so register the full light
+set first. A token can hold any comparable type: brushes and colors, numbers
+for radii and spacing, or font sizes.
 
-You can pass a palette or spacing struct into a component like any other Rust value. For values used deep in a subtree, call `provide` from the parent component body, then `inject` in the consumer. Inside a custom `#[node]`, provide context before `ctx.finish(...)` builds the children.
+## Share the theme with every component
 
-- Read with `get()` or `get_clone()` for a snapshot in ordinary setup code.
-- Pass a signal or `Prop` to a style setter for a live binding. Derive a value with `map` or `computed` in the scope where it should live.
-- Keep an owning node or `OwnedScope` alive while its handles are in use. Provision and injection look up values through scope ancestry. Plain tasks poll outside that context. See [Foreground tasks][tasks-guide].
+Passing `theme` to every component would be tedious. Install it once for the
+app, or provide it to one part of the view, and look tokens up by name with
+`token!("name")`:
 
-Install a named theme when several descendants need typed tokens. Pass the child *builder* into the provider's scope so the consumer resolves the token while Mue builds its node.
-
-```rust,no_run
-use mue::{components::{Theme, provide_theme, token_set}, core::FontSize, prelude::*};
+```rust
+use mue::{components::{Theme, provide_theme, token_set}, prelude::*};
+use mue::renderer::paint::{color::Color, shader::solid};
 use std::rc::Rc;
 
 #[component]
-fn section_title() -> impl Component {
-    text("Downloads").style(style! { font-size: token!(title); })
+fn session_label() -> impl Component {
+    text("Deep work").style(style! { color: token!("ink"); font-size: 18px; })
 }
 
-fn download_panel() -> impl IntoNode {
+fn focus_app() -> impl IntoNode {
     let theme = Rc::new(Theme::new());
-    theme.register(&token_set! { title: FontSize::Px(28.) });
-    provide_theme(theme, section_title)
+    theme.register(&token_set! { ink: solid(Color::from_rgba(45, 42, 38, 255)) });
+    provide_theme(theme, session_label)
 }
 ```
 
-Install a second provider to give one subtree a different title size. A sibling outside that subtree resolves tokens from its own nearest provider.
+`provide_theme` makes the theme available to everything built inside it.
+`Theme::install(&theme)` does the same for the whole app; call it at the start
+of your root view. A component can also read a token in code with
+`Theme::current()` and `theme.get::<T>("name")`.
 
-### Inherit foreground paint
+## Follow the system
 
-Use `provide_foreground` when several labels should share inherited text paint. A label with an explicit color keeps that color.
+`use_color_mode()` holds the user's preference (light, dark, or follow the
+system) and the scheme that results. Apply the matching set whenever the scheme
+changes:
 
-```rust,no_run
-use mue::{prelude::*, renderer::{color::Color, inherit::provide_foreground}};
+```rust
+use mue::{components::{ColorScheme, Theme, TokenSet, use_color_mode}, prelude::*};
+use mue::renderer::paint::shader::Brush;
+use std::rc::Rc;
 
-let legend = provide_foreground(Color::from_rgba(27, 64, 54, 255), || {
-    vstack().children((text("Ridge temperature"), text("Creek temperature")))
-});
+fn follow_scheme(theme: Rc<Theme>, light: TokenSet<Brush>, dark: TokenSet<Brush>) {
+    let color = use_color_mode();
+    mue::core::effect::watch(color.scheme, move |scheme| {
+        theme.apply(if scheme.get() == ColorScheme::Dark { &dark } else { &light });
+    });
+}
 ```
 
-See [token, context, and scope behavior][themes-reference] for token registration, typed lookup, scope ownership, and asynchronous boundaries.
+Call `color.toggle()` from a button to switch between light and dark, or set
+`color.mode` to follow the system again.
 
+## What you learned
 
-[shot-observatory-day]: ../images/observatory-day.png
-[shot-observatory-night]: ../images/observatory-night.png
+- A `TokenSet` names values; a `Theme` holds the live handles.
+- `token!` binds a style to a token, and `apply` switches every user at once.
+- `provide_theme` and `Theme::install` share a theme without passing it around.
+- `use_color_mode` connects the theme to light and dark mode.
 
+The [theme reference][themes-reference] covers typed lookups, snapshots, and
+nested themes.
 
-**Previous** [Reusable views and custom nodes][components-guide] · **Next** [Screen navigation][scenes-guide]
+**Previous** [Components][components-guide] · **Next** [Screens][scenes-guide]
+
+[shot-guide-theme-light]: ../images/guide-theme-light.png
+[shot-guide-theme-dark]: ../images/guide-theme-dark.png
 
 [learn-index]: index.md
 [components-guide]: components.md
 [scenes-guide]: scenes.md
-[tasks-guide]: tasks.md
 [themes-reference]: ../reference/themes-and-tokens.md

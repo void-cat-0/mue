@@ -7,10 +7,10 @@ use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color as UiColor,
-    event::pointer::{PointerAction, PointerId},
+    input::pointer::{PointerAction, PointerId},
     layout::use_layout,
     node::{BuildNode, Node, NodeContext},
+    paint::color::Color as UiColor,
     style::{Style, Styleable},
 };
 

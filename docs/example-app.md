@@ -5,10 +5,10 @@ Build a desktop editor for a release checklist in a plain text file. You will ed
 | Step | What you implement | Course chapter |
 | --- | --- | --- |
 | 1 | Window project and file format | [Your first window][getting-started-guide] |
-| 2 | Shared theme and message catalog | [Shared appearance][themes-guide] · [Localized interfaces][i18n-guide] |
-| 3 | Keyed rows, editor controls, and animated progress | [Reactive state and children][basics-guide] · [Layout, paint, and motion][style-guide] · [Reusable views and custom nodes][components-guide] |
-| 4 | Scene ownership, shortcuts, and a preferences screen | [Screen navigation][scenes-guide] · [Input routing][scene-input-guide] |
-| 5 | Background loads and saves | [Asynchronous work][tasks-guide] |
+| 2 | Shared theme and message catalog | [Themes][themes-guide] · [Localization][i18n-guide] |
+| 3 | Keyed rows, editor controls, and animated progress | [State and lists][basics-guide] · [Layout, paint, and motion][style-guide] · [Components][components-guide] |
+| 4 | Scene ownership, shortcuts, and a preferences screen | [Screens][scenes-guide] · [Keyboard and text input][scene-input-guide] |
+| 5 | Background loads and saves | [Background work][tasks-guide] |
 
 Copy the Rust blocks in order into one `src/main.rs`. The next section adds the two Fluent files and the checklist data.
 
@@ -51,10 +51,10 @@ use mue::{
     renderer::{
         CallbackResult, SceneContext, SceneEvent, SceneFrame, SceneRender, SceneRoot,
         SceneTransition, TransitionPhase, TransitionTiming,
-        color::Color,
+        paint::color::Color,
         node::{flexbox::use_container, map_keyed_prop},
-        shader::{Brush, solid},
-        transition::Transition,
+        paint::shader::{Brush, solid},
+        motion::transition::Transition,
     },
 };
 

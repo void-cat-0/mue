@@ -10,12 +10,12 @@ use macroquad::prelude::*;
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, Sector, Shadow, UiMaterial,
-    color::Color as MueColor,
+    App, BoxShadows, Sector, UiMaterial,
     math::{Matrix, Rect as MueRect, vec2},
     node::{BuildNode, Node, NodeContext, flexbox, flexbox::use_container, use_rect},
+    paint::color::Color as MueColor,
+    paint::shader::SharedTexture,
     paint::{Shapes, use_paint},
-    shader::SharedTexture,
     style::{Size, Style, Styleable, StyleableExt, Transform, TransformOp},
 };
 
@@ -168,7 +168,11 @@ fn ui() -> impl Component {
     let retained_shapes = Shapes::build(|p| {
         for y in 0..30 {
             for x in 0..40 {
-                p.fill_rect(MueRect::new(x as f32 * 2., y as f32 * 2., 2., 2.), YELLOW);
+                p.fill(
+                    &PathData::rect(MueRect::new(x as f32 * 2., y as f32 * 2., 2., 2.)),
+                    FillRule::NonZero,
+                    YELLOW,
+                );
             }
         }
     });
@@ -225,7 +229,7 @@ fn ui() -> impl Component {
                         .background(PANEL)
                         .radius(Size::Px(16.)),
                 )
-                .shadow(Shadow::new(10., 16.)),
+                .box_shadow(BoxShadows::elevation(8.)),
             flexbox()
                 .style(
                     Style::new()

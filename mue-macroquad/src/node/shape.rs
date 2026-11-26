@@ -80,7 +80,7 @@ pub fn shape(ctx: NodeContext, shapes: Rc<Shapes>) -> Node {
                     {
                         return;
                     }
-                    crate::material::draw_retained_meshes(
+                    crate::paint::material::draw_retained_meshes(
                         &cache.meshes,
                         crate::math::model_matrix(model),
                         1.0,

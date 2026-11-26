@@ -9,10 +9,10 @@ use macroquad::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color,
-    shader::Brush,
+    motion::transition::Transition,
+    paint::color::Color,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt, percent, vh, vw},
-    transition::Transition,
 };
 
 const TRANSITION: f32 = 0.28;

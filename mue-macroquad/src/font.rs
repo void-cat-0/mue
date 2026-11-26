@@ -42,7 +42,7 @@ use std::path::Path;
 
 use cosmic_text::Family;
 
-use crate::runtime::Runtime;
+use crate::app::runtime::Runtime;
 
 pub use crate::node::atlas::GlyphAtlasStats;
 

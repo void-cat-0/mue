@@ -13,8 +13,8 @@ use mue::{
     },
     prelude::*,
     renderer::{
-        color::Color,
-        shader::{Brush, solid},
+        paint::color::Color,
+        paint::shader::{Brush, solid},
     },
 };
 use std::rc::Rc;

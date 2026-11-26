@@ -7,9 +7,9 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color,
+    motion::transition::Transition,
+    paint::color::Color,
     style::{Styleable, StyleableExt, vh, vw},
-    transition::Transition,
 };
 
 fn page(index: usize) -> Node {

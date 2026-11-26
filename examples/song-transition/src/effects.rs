@@ -1,6 +1,8 @@
 //! The effect owns only an artwork asset and the geometry needed for its two phases.
 use crate::artwork::{self, Anchor, Artwork, Surface, ease_out_quart};
-use mue_macroquad::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition};
+use mue_macroquad::{
+    SceneTransition, TransitionPhase, TransitionTiming, motion::transition::Transition,
+};
 use std::{cell::Cell, rc::Rc};
 
 /// A narrowly shared return anchor. Library refreshes it after normal layout;

@@ -8,8 +8,8 @@ use macroquad::prelude::{Conf, Texture2D, clear_background, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color,
-    shader::{Brush, ColorStop, SharedTexture, linear_gradient, radial_gradient},
+    paint::color::Color,
+    paint::shader::{Brush, ColorStop, SharedTexture, linear_gradient, radial_gradient},
     style::{Size, Styleable, StyleableExt},
 };
 

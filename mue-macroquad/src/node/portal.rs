@@ -5,8 +5,8 @@ use crate::{
     layout::use_layout,
     math::Rect,
     node::{Node, NodeContext},
+    paint::shader::SharedTexture,
     paint::use_paint,
-    shader::SharedTexture,
 };
 
 /// The normalized UV rect used to draw a render-target texture.

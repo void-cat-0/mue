@@ -5,7 +5,7 @@ use mue_core::{prop::Prop, scope::inject, signal::Access};
 use mue_i18n::tl;
 use mue_macroquad::{
     node::{BuildNode, Node, NodeContext},
-    shader::Brush,
+    paint::shader::Brush,
     style::{Style, Styleable},
 };
 use std::rc::Rc;

@@ -1,5 +1,5 @@
-pub mod circle;
+pub mod icon;
 pub mod image;
 
-pub use circle::*;
+pub use icon::*;
 pub use image::*;

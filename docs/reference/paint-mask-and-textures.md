@@ -4,38 +4,47 @@
 
 - [Choose when to build geometry](#choose-when-to-build-geometry)
 - [Background paint and shadows](#background-paint-and-shadows)
+- [Vector paths and SVG](#vector-paths-and-svg)
+- [Offscreen layers and backdrop blur](#offscreen-layers-and-backdrop-blur)
+- [Custom shaders](#custom-shaders)
 - [Textures](#textures)
 
 ## Choose when to build geometry
 
 | Entry point | Use |
 | --- | --- |
-| `use_background(style, rect)` | Install the built-in background and shadow consumers on a terminal node. |
+| `use_background(style, rect)` | Install the built-in shadow, background, border, and outline consumers on a terminal node. |
 | `use_paint(style).build(...)` | Build CPU geometry from tracked dependencies. Draw the resulting shapes in a render hook. |
 | `use_paint(style).draw(...)` | Build and submit transient geometry in the current render callback. |
 | `Shapes::build(...)` | Own geometry independently of a node's style bindings. |
 
-A node's tree rendering applies its transform to the subtree. Build geometry in the supplied layout coordinates and let `use_paint` handle effective opacity. The following node caches a rectangle and invalidates it when its layout rect changes.
+A node's tree rendering applies its transform to the subtree. Build geometry in the supplied layout coordinates and let `use_paint` handle effective opacity. `ShapesBuilder` tessellates [`PathData`](#vector-paths-and-svg) with `fill(path, rule, shader)` and `stroke(path, stroke_style, shader)`, and draws textured quads with `draw_texture`. The following node caches a rounded track and invalidates it when its layout rect changes.
 
 ```rust,no_run
-use mue::{prelude::*, renderer::{color::Color, layout::use_layout, paint::use_paint}};
+use mue::{prelude::*, renderer::{paint::color::Color, layout::use_layout, paint::use_paint, paint::path::FillRule}};
 
 #[node]
 fn meter_track(ctx: NodeContext) -> Node {
     ctx.finish(style! { width: 100%; height: 6px; }, |style| {
         let rect = use_layout(style).rect;
         let geometry = use_paint(style).build(move |shapes| {
-            shapes.fill_rect(rect.get(), Color::from_rgba(60, 97, 145, 255));
+            let track = PathData::rounded_rect(rect.get(), 3.);
+            shapes.fill(&track, FillRule::NonZero, Color::from_rgba(60, 97, 145, 255));
         });
         style.on_render.append(move |_| geometry.get_clone().draw());
     })
 }
 ```
 
+`Layout` also publishes the resolved `border` and `padding` widths as `ReadSignal<Edges>`, so a custom node can draw inside its content box with `rect.get().deflate(border.get()).deflate(padding.get())`.
+
 ## Background paint and shadows
 
 `use_background` caches CPU `Shapes` through `Paint::build`, rebuilding when its
-tracked rect, brush, radius or paint state changes. Cached geometry still uses
+tracked rect, brush, corner radii, border widths, or paint state changes. The
+drop shadow, background, and border draw before the node's own render hooks; the
+outline is a separate cache drawn after its children and outside the node's own
+clip (`clip_radius`, scroll clips), so focus rings stay visible. Cached geometry still uses
 immediate submission and batching; no per-background GPU buffers are created.
 Permanently transparent solid backgrounds do not create a cache, but may still
 draw shadows. The reactive cache is eager: changing dependencies can rebuild
@@ -43,36 +52,61 @@ hidden retained nodes too. Paint-building callbacks and their property producers
 should be pure geometry/value computations, not recursively draw or build nodes
 while the shared tessellator is borrowed.
 
-### Shadow declarations
+Filled shapes have antialiased edges: rounded backgrounds, borders,
+outlines, backdrop shapes, and vector path fills get a strip one device pixel
+wide along their outline that fades to transparent. The strip is ordinary
+geometry, so antialiased shapes still batch with everything else and need no
+multisampling. Straight axis-aligned rectangles have no fringe, and strokes are
+not antialiased yet.
 
-`Style::shadow(Shadow::new(elevation, radius))` draws a drop shadow behind the
-background; use the same radius as `border-radius`. The shadow follows the
-node transform (rotation and scale). Shadows are drawn by `use_background`, so
-custom nodes must call `use_container` or `use_background`. Shadow geometry is a
-stack-built quad with fixed indices, submitted on the immediate path without
-temporary `Shapes` or geometry `Vec`s. Material uniform snapshots and batch-buffer
-growth may still allocate. Shadow-mask admission defaults to `ShadowCache::Auto`:
+`corner-shape` (CSS Borders 4) changes the curve inside each corner's radius
+box: `round` (the default), `squircle`, `bevel` (a straight cut), `scoop`
+(concave), `notch`, `square`, or `superellipse(K)` for any curve in between
+(K = 1 is round, 2 is a squircle, 0 a bevel, negative values are concave). It
+applies to the background, border, outline, and backdrop blur together; overflow
+clipping and box shadows still use round corners.
 
 ```rust
-use mue::{prelude::*, renderer::{Shadow, ShadowCache}};
+use mue::prelude::*;
 
-let auto = flexbox().shadow(Shadow::new(18., 16.)); // Auto when unset
-
-let disabled = flexbox()
-    .shadow(Shadow::new(18., 16.))
-    .shadow_cache(false); // always analytic (Disabled)
-
-let enabled = flexbox()
-    .shadow(Shadow::new(18., 16.))
-    .shadow_cache_policy(ShadowCache::Enabled); // bypass the Auto admission heuristic
+let squircle = flexbox().style(style! { border-radius: 24px; corner-shape: squircle; });
+let ticket = flexbox().style(style! { border-radius: 12px; corner-shape: scoop; });
+let tag = flexbox().style(style! { border-radius: 10px; corner-shape: superellipse(-0.5); });
 ```
 
-The existing `.shadow_cache(true/false)` API still accepts bool, `Prop<bool>` and
-bool signals; true means Enabled, false means Disabled. Use `.shadow_cache_policy`
-with `ShadowCache::{Auto, Enabled, Disabled}` or a reactive policy signal. These
-setters write the same property; the last setter wins. Declared/take accessors now
-return `Prop<ShadowCache>` rather than bool. The fluent API does not add a CSS
-`shadow-cache` or `box-shadow` declaration to `style!`.
+### Box shadows
+
+`box-shadow` works as in CSS: each layer is the border box moved by an
+offset, grown by a spread, and blurred, with the node's corner radius (per-corner
+radii use their average). Several layers stack, and the first draws on top.
+Like CSS outer shadows, a shadow never shows through the node, so translucent
+panels stay clean. Shadows follow the node transform and add paint around the
+node without changing its layout bounds. They are drawn by `use_background`, so
+custom nodes must call `use_container` or `use_background`.
+
+```rust
+use mue::{prelude::*, renderer::{BoxShadow, BoxShadows, ShadowCache, paint::color::Color}};
+
+// In a declaration: x, y, blur, optional spread, and a color.
+let card = flexbox().style(style! {
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.25);
+});
+
+// From code: one shadow, a list, or a preset that grows with elevation.
+let chip = flexbox().box_shadow(BoxShadow::new(0., 2., 6., Color::from_rgba(0, 0, 0, 90)));
+let menu = flexbox().box_shadow(BoxShadows::elevation(10.));
+
+// The blur integral can be baked into a shared mask texture (native OpenGL).
+let fixed = flexbox()
+    .box_shadow(BoxShadows::elevation(16.))
+    .shadow_cache_policy(ShadowCache::Enabled);
+```
+
+Blurred layers are analytic by default; stable, large shadows may be baked into a
+shared, bounded mask pool. `.shadow_cache(true/false)` and
+`.shadow_cache_policy(ShadowCache::{Auto, Enabled, Disabled})` choose the
+admission policy (Auto when unset). Each layer keeps its own cache state.
 
 <figure class="mue-chart">
 
@@ -165,10 +199,129 @@ angular boundary; feather only affects drawing. Import `Sector` from
 `button(label)` defaults to the secondary variant. Use `primary(true)` or
 `variant(ButtonVariant::Ghost)` for other weights, `disabled(...)` and
 `loading(...)` with reactive values, and `on_activate(...)` for the action.
-The current overlay host is a single layer: stacking, enter/exit animation, and
-back priority are not implemented yet. IconButton and keyboard focus are also
-pending. Button colors are fixed for now; replacing them with application tokens
+`overlay_host` draws in the `Modal` layer and fades in and out; priority
+between several open overlays and back-button handling are not implemented
+yet. IconButton is also pending. Button colors are fixed for now; replacing them with application tokens
 is a follow-up.
+
+## Vector paths and SVG
+
+`mue_macroquad::paint::path::PathData` is an immutable, cheaply cloned path with cached
+bounds. Build one with `PathData::parse` (SVG path data with every command,
+relative forms, and compact numbers), the geometry constructors `rect`,
+`rounded_rect`, `circle`, `ellipse`, `line`, `polyline`, and `polygon`, or
+`PathData::from(lyon_path)`. `transformed(matrix)` applies an affine matrix.
+Equality is identity, so a newly parsed path always repaints.
+
+The `path(data)` node fits a path into its content box with `PathFit`
+(`Contain` by default, also `Cover`, `Fill`, and `None`). Its view box defaults to
+the path bounds; set `.view_box(rect)` to keep a fixed coordinate space, as
+icons do. Without `.fill(..)` or `.stroke(..)` the path is filled with the
+foreground `color`; `.stroke_current_color()` strokes with it instead. Stroke
+widths (`StrokeStyle`, `.stroke_width`) are in view-box units and scale with the
+fit. When width or height is `auto`, the node measures to the view box size.
+
+```rust
+use mue::{prelude::*, renderer::math::Rect};
+
+let check = path(PathData::parse("M4 12l5 5L20 6").unwrap())
+    .view_box(Rect::new(0., 0., 24., 24.))
+    .stroke_current_color()
+    .stroke_style(StrokeStyle::round(2.))
+    .style(style! { width: 24px; height: 24px; color: #7fd1a8; });
+```
+
+`SvgDocument::parse` reads a small SVG subset: `svg` (`viewBox`, `width`,
+`height`), `g`, `path`, `rect` (with `rx`/`ry`), `circle`, `ellipse`, `line`,
+`polyline`, and `polygon`; `fill`, `stroke`, `stroke-width`, `stroke-linecap`,
+`stroke-linejoin`, `stroke-miterlimit`, `fill-rule`, `opacity`, `fill-opacity`,
+and `stroke-opacity`, also inside `style="..."`; and `transform` lists. Text,
+gradients, `use`, masks, filters, and CSS selectors are ignored: a
+`url(#gradient)` paint uses its fallback color if one follows it, otherwise
+nothing; `inherit` and unknown paints keep the inherited paint. The `svg(doc)`
+node draws a document with the same fitting and measuring rules as `path`;
+`currentColor` follows the node's foreground `color`.
+
+## Offscreen layers and backdrop blur
+
+`mue_macroquad::paint::offscreen::offscreen()` is a flex container whose subtree is
+rendered into a window-sized render target and composited once. Its `opacity`
+applies to the composited result (true group opacity: overlapping children do
+not show through each other), and `filter(..)` adds whole-layer effects:
+
+| `Filter` | Effect |
+| --- | --- |
+| `Blur(px)` | Gaussian-like blur; large radii run at half or quarter resolution |
+| `Grayscale(amount)` | 0 keeps colors, 1 is fully gray |
+| `Brightness(factor)` | Multiplies color |
+| `Custom(Rc<UiMaterial>)` | Composite with your fragment shader, which samples `Texture` at `v_uv` and receives `u_opacity` |
+
+Content keeps its screen position; ancestor transforms and clips still apply.
+`filters(prop)` replaces the list reactively.
+
+`backdrop_blur(px)` (`backdrop-filter: blur(12px)` in `style!`) blurs what was
+drawn behind a node, inside the nearest offscreen ancestor, before the node's
+background draws on top, following its corner radii (frosted glass). A layer
+host, and therefore every `App::new` root, becomes that ancestor automatically
+while at least one backdrop-blurred node exists. Give the root an opaque
+background so there is something to sample.
+
+```rust
+use mue::{prelude::*, renderer::paint::offscreen::{Filter, offscreen}};
+
+let disabled_group = offscreen().opacity(0.6).filter(Filter::Grayscale(1.));
+let glass = flexbox().style(style! {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    backdrop-filter: blur(12px);
+});
+```
+
+Each active layer costs a full-window render target (pooled) and one composite;
+blur adds two passes. Offscreen rendering uses OpenGL; on other backends the
+subtree draws directly and backdrop blur draws nothing. Content is drawn into a
+transparent target with the default blending, so alpha is reconstructed when
+compositing; one level of translucency is exact, stacked translucency inside
+one layer is approximate.
+
+## Custom shaders
+
+`UiMaterial::new(fragment, uniforms, textures)` builds a material from a GLSL
+fragment shader that can read `v_pos` (window logical position), `v_uv`, and
+`v_color`. Every material also declares built-in uniforms, filled by
+`UiMaterial::with` and `with_rect`:
+
+| Uniform | Value |
+| --- | --- |
+| `float u_time` | Host time in seconds |
+| `vec2 u_resolution` | Window size in logical pixels |
+| `float u_dpi` | Physical pixels per logical pixel |
+| `vec4 u_rect` | The drawn rectangle (`x, y, w, h`) |
+
+`shader_box(material)` is a node that fills its border box, with its corner
+radii, using the material. `u_rect` is the node's layout rect and the vertex
+color is the node's foreground `color`. Set other uniforms from an `on_update`
+hook or an effect.
+
+```rust,no_run
+use mue::{prelude::*, renderer::{UiMaterial, node::shader_box}};
+
+let stripes = UiMaterial::new(
+    r#"#version 100
+    precision mediump float;
+    varying highp vec2 v_pos;
+    varying lowp vec4 v_color;
+    uniform float u_time;
+    void main() {
+        float band = step(mod(v_pos.x * 0.8 + v_pos.y * 0.6 - u_time * 12.0, 14.0), 8.0);
+        gl_FragColor = vec4(v_color.rgb, v_color.a * 0.1 * band);
+    }"#,
+    Vec::new(),
+    Vec::new(),
+)
+.unwrap();
+let background = shader_box(stripes).style(style! { width: 100%; height: 100%; color: #ffffff; });
+```
 
 ## Textures
 

@@ -17,12 +17,12 @@ use macroquad::prelude::*;
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, RenderStateGuard, Shadow,
-    color::Color as MueColor,
+    App, BoxShadows, RenderStateGuard,
     font::{FamilyOwned, load_font},
     input::InputSubscriber,
     node::portal,
-    shader::SharedTexture,
+    paint::color::Color as MueColor,
+    paint::shader::SharedTexture,
     style::{Size, Styleable},
 };
 use session::{CommandQueue, GameUiCommand, MockSession, command_queue, drain};
@@ -270,7 +270,7 @@ fn ui(
                         gap: 12px;
                         align-items: center;
                     })
-                    .shadow(Shadow::new(18., 16.))
+                    .box_shadow(BoxShadows::elevation(12.))
                     .shadow_cache(true)
                     .children((
                         heading(title).style(mue_macroquad::style! {

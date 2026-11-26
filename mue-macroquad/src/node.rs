@@ -7,14 +7,22 @@ pub mod atlas;
 pub mod children;
 pub mod flexbox;
 pub mod portal;
+pub mod shader_box;
 pub mod shape;
+pub mod slot;
 pub mod text;
+pub mod text_edit;
+pub mod vector;
 pub use atlas::GlyphAtlasStats;
 pub use children::*;
 pub use flexbox::{FlexboxBuilder, flexbox};
 pub use portal::portal;
+pub use shader_box::{ShaderBoxBuilder, shader_box};
 pub use shape::{ShapeBuilder, shape};
+pub use slot::{Callback, ScopedSlot, Slot};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
+pub use text_edit::{TextEditBuilder, TextEditHandle, text_edit};
+pub use vector::{PathBuilder, SvgBuilder, path, svg};
 
 use std::{cell::RefCell, marker::PhantomData, ops::Deref, rc::Rc};
 
@@ -27,13 +35,13 @@ use mue_core::{
 use slotmap::{Key, new_key_type};
 
 use crate::{
-    clip::Sector,
-    event::hit_test::HitTestFn,
-    gesture::GestureId,
+    app::runtime::Runtime,
     hook::NodeHooks,
+    input::gesture::GestureId,
+    input::hit_test::HitTestFn,
     layout::OwnedLayout,
     math::{Matrix, Rect, Vector},
-    runtime::Runtime,
+    paint::clip::Sector,
     style::{
         FontSize, FontSizeExt, SizeExt, Style, Styleable, StyleableExt, Transform, TransformOrigin,
     },
@@ -66,6 +74,15 @@ pub(crate) struct NodeInner {
     pub(crate) clip: Option<ReadSignal<Rect>>,
     pub(crate) clip_radius: Option<Prop<f32>>,
     pub(crate) clip_sector: Option<Prop<Sector>>,
+    pub(crate) focus: Option<Box<crate::input::focus::FocusSlot>>,
+    pub(crate) cursor: Option<Prop<crate::input::cursor::Cursor>>,
+    /// `(hit_slop, min_hit_size)` when either is declared.
+    pub(crate) hit_area: Option<(Prop<f32>, Prop<f32>)>,
+    pub(crate) z_index: Option<Prop<i32>>,
+    pub(crate) offscreen: Option<Rc<crate::paint::offscreen::OffscreenState>>,
+    /// Wrapper nodes (layer hosts) that must not become the `rem` root.
+    pub(crate) font_root_transparent: bool,
+    node_handles: Vec<NodeHandle>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
     pub(crate) matrix_transform: Prop<Matrix>,
@@ -142,6 +159,13 @@ impl NodeInner {
             clip: None,
             clip_radius: None,
             clip_sector: None,
+            focus: None,
+            cursor: None,
+            hit_area: None,
+            z_index: None,
+            offscreen: None,
+            font_root_transparent: false,
+            node_handles: Vec::new(),
             child_offset: None,
             center_on_layout_origin: false,
             matrix_transform: Prop::Static(Matrix::IDENTITY),
@@ -177,6 +201,12 @@ impl NodeInner {
 pub struct NodeRef {
     pub(crate) id: NodeId,
     _thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl std::fmt::Debug for NodeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NodeRef({:?})", self.id.data())
+    }
 }
 
 impl NodeRef {
@@ -244,57 +274,169 @@ impl NodeRef {
     }
 
     fn render_inner(&self) {
-        Runtime::with(|rt| {
-            let transform = rt.node(self.id).transform();
-            let transform = transform.resolve();
-            crate::paint::with_transform(transform, || {
-                rt.invoke_hook(self.id, |hooks| &mut hooks.render, &());
-
-                let (clip, clip_radius, clip_sector, layout_rect, children) = {
-                    let node = rt.node(self.id);
-                    (
-                        node.clip,
-                        node.clip_radius,
-                        node.clip_sector,
-                        *node.layout.rect,
-                        *node.children,
-                    )
-                };
-                let clip = clip.map(|rect| rect.get());
-                let draw = || {
-                    let draw_children = || {
-                        if !children.is_null() {
-                            for child in children.get_clone().iter() {
-                                child.render_inner();
-                            }
-                        }
-                        rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &());
-                    };
-                    if let Some(sector) = clip_sector {
-                        let sector = sector.try_get().unwrap_or_default();
-                        if sector.is_visible() {
-                            crate::clip::with_clip_sector(layout_rect.get(), sector, draw_children);
-                            return;
-                        }
-                    }
-                    if let Some(radius) = clip_radius {
-                        let radius = radius.try_get().unwrap_or(0.);
-                        if radius > 0. {
-                            crate::clip::with_clip_radius(layout_rect.get(), radius, draw_children);
-                        } else {
-                            draw_children();
-                        }
-                    } else {
-                        draw_children();
-                    }
-                };
-                if let Some(clip) = clip {
-                    crate::paint::with_clip(clip, draw);
-                } else {
-                    draw();
-                }
-            });
+        // Keep the per-level call chain short: debug builds recurse once per
+        // tree level and the main thread's stack is small on some platforms.
+        let Some((transform, offscreen, layout_id)) = Runtime::with(|rt| {
+            let nodes = rt.nodes.borrow();
+            let node = nodes.get(self.id)?;
+            Some((node.transform(), node.offscreen.clone(), node.layout_id))
+        }) else {
+            return;
+        };
+        if layout_id.is_some_and(layout_hidden) {
+            return;
+        }
+        let transform = transform.resolve();
+        crate::paint::with_transform(transform, || match &offscreen {
+            Some(state) => crate::paint::offscreen::render(state, || self.render_content()),
+            None => self.render_content(),
         });
+    }
+
+    /// Draw this node and its subtree under its clips, then its post-clip hooks.
+    fn render_content(&self) {
+        Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.render, &()));
+        let Some((clip, clip_radius, clip_sector, layout_rect)) = Runtime::with(|rt| {
+            let nodes = rt.nodes.borrow();
+            let node = nodes.get(self.id)?;
+            Some((
+                node.clip,
+                node.clip_radius,
+                node.clip_sector,
+                *node.layout.rect,
+            ))
+        }) else {
+            return;
+        };
+        let clip = clip.map(|rect| rect.get());
+        let sector = clip_sector
+            .map(|sector| sector.try_get().unwrap_or_default())
+            .filter(|sector| sector.is_visible());
+        let radius = clip_radius
+            .map(|radius| radius.try_get().unwrap_or(0.))
+            .filter(|radius| *radius > 0.);
+        let clipped = || {
+            if let Some(sector) = sector {
+                crate::paint::clip::with_clip_sector(layout_rect.get(), sector, || {
+                    self.render_children()
+                });
+            } else if let Some(radius) = radius {
+                crate::paint::clip::with_clip_radius(layout_rect.get(), radius, || {
+                    self.render_children()
+                });
+            } else {
+                self.render_children();
+            }
+        };
+        match clip {
+            Some(clip) => crate::paint::with_clip(clip, clipped),
+            None => clipped(),
+        }
+        // Outlines and other decorations that must not be clipped by the node itself.
+        Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.after_clip, &()));
+    }
+
+    fn render_children(&self) {
+        let children =
+            Runtime::with(|rt| rt.nodes.borrow().get(self.id).map(|node| *node.children));
+        if let Some(children) = children.filter(|children| !children.is_null()) {
+            for child in paint_order(children.get_clone()).iter() {
+                child.render_inner();
+            }
+        }
+        Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &()));
+    }
+}
+
+/// Whether a layout node is `display: none`: its subtree has zero-size
+/// layouts and must neither draw (text would wrap per character) nor hit.
+pub(crate) fn layout_hidden(id: taffy::NodeId) -> bool {
+    crate::layout::with_taffy(|taffy| {
+        taffy
+            .style(id)
+            .is_ok_and(|style| style.display == taffy::Display::None)
+    })
+}
+
+/// Children in paint order: stable-sorted by `z_index` when any is non-zero.
+pub(crate) fn paint_order(children: Rc<[NodeRef]>) -> Rc<[NodeRef]> {
+    let keys: Option<Vec<i32>> = Runtime::with(|rt| {
+        let nodes = rt.nodes.borrow();
+        let keys: Vec<i32> = children
+            .iter()
+            .map(|child| {
+                nodes
+                    .get(child.id)
+                    .and_then(|node| node.z_index.as_ref())
+                    .map_or(0, |z| z.get())
+            })
+            .collect();
+        keys.iter().any(|z| *z != 0).then_some(keys)
+    });
+    let Some(keys) = keys else {
+        return children;
+    };
+    let mut order: Vec<usize> = (0..children.len()).collect();
+    order.sort_by_key(|&index| keys[index]);
+    order.into_iter().map(|index| children[index]).collect()
+}
+
+/// A slot that receives a node's [`NodeRef`] once the node is built (Vue's
+/// template ref). Bind it with [`StyleableExt::node_handle`],
+/// then read the node or call helpers such as [`NodeHandle::focus`].
+#[derive(Clone, Copy)]
+pub struct NodeHandle(Signal<Option<NodeRef>>);
+
+impl NodeHandle {
+    /// Create an empty handle in the current scope.
+    pub fn new() -> Self {
+        Self(signal(None))
+    }
+
+    /// The bound node while it is alive. Tracked.
+    pub fn get(&self) -> Option<NodeRef> {
+        self.0.get().filter(NodeRef::is_live)
+    }
+
+    pub fn get_untracked(&self) -> Option<NodeRef> {
+        self.0.get_untracked().filter(NodeRef::is_live)
+    }
+
+    /// The handle as a read-only signal of the last bound node.
+    pub fn signal(&self) -> ReadSignal<Option<NodeRef>> {
+        *self.0
+    }
+
+    /// The bound node's published bounds.
+    pub fn rect(&self) -> Option<Rect> {
+        self.get_untracked()?.rect()?.try_get_untracked()
+    }
+
+    /// Focus the bound node. Returns false when unbound or not focusable.
+    pub fn focus(&self) -> bool {
+        self.get_untracked().is_some_and(|node| node.focus())
+    }
+
+    /// Focus the bound node or its first focusable descendant.
+    pub fn focus_within(&self) -> bool {
+        self.get_untracked()
+            .is_some_and(crate::input::focus::focus_within)
+    }
+
+    pub fn blur(&self) {
+        if let Some(node) = self.get_untracked() {
+            node.blur();
+        }
+    }
+
+    pub(crate) fn bind(&self, node: Option<NodeRef>) {
+        self.0.set(node);
+    }
+}
+
+impl Default for NodeHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -309,9 +451,14 @@ impl NodeRef {
             let state = Runtime::with(|rt| {
                 let nodes = rt.nodes.borrow();
                 let node = nodes.get(node.id)?;
-                Some((node.font_size, node.computed_font_size, *node.children))
+                Some((
+                    node.font_size,
+                    node.computed_font_size,
+                    *node.children,
+                    node.font_root_transparent,
+                ))
             });
-            let Some((declaration, computed, children)) = state else {
+            let Some((declaration, computed, children, transparent)) = state else {
                 return false;
             };
             let size = declaration.map_or(parent, |value| {
@@ -323,9 +470,14 @@ impl NodeRef {
             if changed {
                 computed.set(size);
             }
-            let root = root.unwrap_or(size);
+            // A transparent wrapper leaves the `rem` root to its first child.
+            let root = if transparent && root.is_none() {
+                None
+            } else {
+                Some(root.unwrap_or(size))
+            };
             for child in children.get_clone().iter() {
-                changed |= visit(*child, size, Some(root));
+                changed |= visit(*child, size, root);
             }
             changed
         }
@@ -413,7 +565,7 @@ impl Node {
             let mut node = NodeInner::new(scope, children);
             node.owned_scopes.push(owner);
             CONTEXT.with_borrow_mut(|stack| stack.push(Box::new(node)));
-            crate::transition::bind_style(style);
+            crate::motion::transition::bind_style(style);
             crate::paint::bind_node_style(style);
             let font_size = style.declared_font_size();
             let matrix = style.take_matrix_transform();
@@ -448,10 +600,31 @@ impl Node {
             if !matches!(clip_sector, Prop::Static(sector) if !sector.is_visible()) {
                 NodeInner::with_mut(|node| node.clip_sector = Some(clip_sector));
             }
+            let focus_mount = bind_focus(style);
+            let z_index = style.take_z_index();
+            if !matches!(z_index, Prop::Static(0)) {
+                NodeInner::with_mut(|node| node.z_index = Some(z_index));
+            }
+            let handles = std::mem::take(&mut style.node_handles);
+            if !handles.is_empty() {
+                NodeInner::with_mut(|node| node.node_handles = handles);
+            }
+            let cursor = style.take_cursor();
+            if !matches!(cursor, Prop::Static(crate::input::cursor::Cursor::Auto)) {
+                NodeInner::with_mut(|node| node.cursor = Some(cursor));
+            }
+            let hit_slop = style.take_hit_slop();
+            let min_hit_size = style.take_min_hit_size();
+            if !matches!((&hit_slop, &min_hit_size), (Prop::Static(a), Prop::Static(b)) if *a <= 0. && *b <= 0.)
+            {
+                NodeInner::with_mut(|node| node.hit_area = Some((hit_slop, min_hit_size)));
+            }
             NodeInner::with_mut(|node| {
                 let after_children = std::mem::take(&mut node.hooks.after_children);
+                let after_clip = std::mem::take(&mut node.hooks.after_clip);
                 node.hooks = style.build_hooks();
                 node.hooks.after_children = after_children;
+                node.hooks.after_clip = after_clip;
                 append_hooks(node, style);
             });
             // Acquire arena access before removing the node from its stack.
@@ -461,13 +634,64 @@ impl Node {
                     .with_borrow_mut(|stack| stack.pop().expect("node being finished is missing"));
                 nodes.insert(*node)
             });
+            let handles = Runtime::with(|rt| {
+                rt.nodes
+                    .borrow()
+                    .get(id)
+                    .map(|node| node.node_handles.clone())
+                    .unwrap_or_default()
+            });
+            for handle in handles {
+                handle.bind(Some(NodeRef::from_id(id)));
+            }
+            if let Some((auto_focus, contain)) = focus_mount {
+                crate::input::focus::mounted(id, auto_focus, contain);
+            }
             Self(NodeRef::from_id(id).owned())
         })
     }
 }
 
+/// Move focus declarations into the node. Returns `(auto_focus, contain)` when
+/// the node needs mount-time focus handling.
+fn bind_focus(style: &mut Style) -> Option<(bool, bool)> {
+    use crate::input::focus::{FocusScope, FocusSlot};
+    let declared = style.declared_focusable().is_some()
+        || style.declared_tab_index().is_some()
+        || style.declared_focus_scope().is_some()
+        || !style.focus_owners.is_empty();
+    let auto_focus = style.take_auto_focus().get_untracked();
+    if !declared {
+        return auto_focus.then_some((true, false));
+    }
+    let slot = FocusSlot {
+        focusable: style.take_focusable(),
+        tab_index: style.take_tab_index(),
+        scope: style.take_focus_scope(),
+        owners: std::mem::take(&mut style.focus_owners),
+        return_to: Rc::default(),
+    };
+    let contain = slot.scope.get_untracked() == FocusScope::Contain;
+    NodeInner::with_mut(|node| match &mut node.focus {
+        // `use_focus` in the body may have created a slot already.
+        Some(existing) => {
+            // Keep every owner: styles may already be bound to each one.
+            let mut owners = std::mem::take(&mut existing.owners);
+            owners.extend(slot.owners);
+            let return_to = existing.return_to.clone();
+            **existing = FocusSlot {
+                owners,
+                return_to,
+                ..slot
+            };
+        }
+        None => node.focus = Some(Box::new(slot)),
+    });
+    Some((auto_focus, contain))
+}
+
 fn append_hooks(node: &mut NodeInner, style: &mut Style) {
-    use crate::gesture;
+    use crate::input::gesture;
 
     Runtime::with(|rt| {
         let mut gestures = rt.gestures.borrow_mut();
@@ -587,17 +811,76 @@ pub fn on_after_children(hook: impl FnMut(&()) + 'static) {
     NodeInner::with_mut(|node| node.hooks.after_children.append(hook));
 }
 
-pub fn add_gesture(gesture: impl crate::gesture::Gesture + 'static) {
+/// Draw after the node's subtree and outside the node's own clip (but inside
+/// its ancestors' clips and its transform), as outlines do.
+pub fn on_after_clip(hook: impl FnMut(&()) + 'static) {
+    NodeInner::with_mut(|node| node.hooks.after_clip.append(hook));
+}
+
+pub fn add_gesture(gesture: impl crate::input::gesture::Gesture + 'static) {
     let id = Runtime::with(|rt| rt.gestures.borrow_mut().insert(Some(Box::new(gesture))));
     NodeInner::with_mut(|node| node.gestures.push(id));
 }
 
 impl NodeRef {
+    /// Whether the node is still alive.
+    pub fn is_live(&self) -> bool {
+        Runtime::try_with(|rt| rt.nodes.borrow().contains_key(self.id)).unwrap_or(false)
+    }
+
+    /// The node's absolute logical-pixel bounds, published by layout preparation.
+    /// `None` for disposed nodes and nodes without layout.
+    pub fn rect(&self) -> Option<ReadSignal<Rect>> {
+        Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .map(|node| *node.layout.rect)
+                .filter(|rect| !rect.is_null())
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// The node's resolved font size in logical pixels, after layout preparation.
+    pub fn font_size(&self) -> Option<f32> {
+        Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .and_then(|node| node.computed_font_size.try_get_untracked())
+        })
+        .ok()
+        .flatten()
+    }
+
     pub fn layout_id(&self) -> Option<taffy::NodeId> {
         Runtime::with(|rt| rt.node(self.id).layout_id)
     }
 
     pub fn children(&self) -> Children {
         Runtime::with(|rt| *rt.node(self.id).children)
+    }
+
+    /// Whether `other` is this node or one of its descendants (untracked).
+    pub fn contains(&self, other: NodeRef) -> bool {
+        if *self == other {
+            return true;
+        }
+        let children = Runtime::try_with(|rt| {
+            rt.nodes
+                .borrow()
+                .get(self.id)
+                .map(|node| *node.children)
+                .filter(|children| !children.is_null())
+        })
+        .ok()
+        .flatten();
+        children.is_some_and(|children| {
+            children
+                .get_clone_untracked()
+                .iter()
+                .any(|child| child.contains(other))
+        })
     }
 }

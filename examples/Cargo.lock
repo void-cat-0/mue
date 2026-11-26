@@ -736,7 +736,7 @@ dependencies = [
 [[package]]
 name = "macroquad"
 version = "0.4.16"
-source = "git+https://github.com/void-cat-0/macroquad#3b4d99b5dd15e1ff7ea9b4a585a910ff13f029a5"
+source = "git+https://github.com/void-cat-0/macroquad?branch=text-input#ad04f586d1ca107b70a31f5ef67b6ee11dc0e7d3"
 dependencies = [
  "fontdue",
  "glam 0.27.0",
@@ -749,7 +749,7 @@ dependencies = [
 [[package]]
 name = "macroquad_macro"
 version = "0.1.8"
-source = "git+https://github.com/void-cat-0/macroquad#3b4d99b5dd15e1ff7ea9b4a585a910ff13f029a5"
+source = "git+https://github.com/void-cat-0/macroquad?branch=text-input#ad04f586d1ca107b70a31f5ef67b6ee11dc0e7d3"
 
 [[package]]
 name = "malloc_buf"
@@ -778,7 +778,7 @@ dependencies = [
 [[package]]
 name = "miniquad"
 version = "0.4.10"
-source = "git+https://github.com/void-cat-0/miniquad#afaa49cc7b20fe065b93e402bc0b540a788fa2e9"
+source = "git+https://github.com/void-cat-0/miniquad?branch=text-input#31eb0904e86fb9c47151d92b03fbde9b6989b091"
 dependencies = [
  "hms-opengtx-binding",
  "jni",
@@ -908,10 +908,12 @@ dependencies = [
  "mue-macros",
  "ordered-float",
  "paste",
+ "roxmltree",
  "slotmap",
  "smallvec",
  "taffy",
  "thiserror 2.0.21",
+ "unicode-segmentation",
 ]
 
 [[package]]

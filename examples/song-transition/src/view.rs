@@ -23,7 +23,7 @@ use mue_macroquad::{
     layout::use_layout,
     math::{Rect, Vector},
     node::{IntoNode, Node, NodeRef},
-    shader::Brush,
+    paint::shader::Brush,
     style::{Style, Styleable, StyleableExt},
 };
 use std::{cell::Cell, rc::Rc};

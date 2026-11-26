@@ -1,21 +1,30 @@
 //! Modal overlay host.
 
+use std::{cell::RefCell, rc::Rc};
+
 use mue_core::prelude::*;
 use mue_macroquad::{
-    color::Color,
-    node::{
-        BuildNode, IntoChildren, IntoNode, Node, NodeContext, flexbox, flexbox::use_container,
-        show_if,
-    },
+    input::focus::FocusScope,
+    input::keyboard::KeyCode,
+    motion::presence::{PresenceAnimation, presence},
+    motion::transition::Transition,
+    node::{BuildNode, IntoNode, Node, NodeContext, flexbox},
+    overlay::layer::{Layer, teleport},
+    paint::color::Color,
     style::{Size, Style, Styleable, StyleableExt},
 };
-use taffy::Display;
 
 /// A full-screen modal layer with a backdrop and a centered content node.
 ///
-/// The host is hidden when closed, captures pointer input while open, and
-/// keeps the content mounted while hidden. Use dismissible/on_dismiss for a
-/// backdrop tap; content taps are swallowed so they do not dismiss the modal.
+/// The overlay is teleported into [`Layer::Modal`] of the nearest layer host
+/// (the App root has one), so it covers the whole window wherever it is
+/// declared. It fades in and out, captures pointer input while open, and keeps
+/// the content mounted while hidden. Keyboard focus moves into the content
+/// when it opens, Tab stays inside it, and focus returns when it closes. Use
+/// `dismissible`/`on_dismiss` for a backdrop tap, Escape, or back (the
+/// Android back button, [`back_swipe`](fn@crate::back_swipe)); content taps are
+/// swallowed so they do not dismiss the modal. Builder styles apply to the
+/// backdrop layer.
 pub struct OverlayHostBuilder {
     open: Prop<bool>,
     content: Node,
@@ -63,7 +72,7 @@ impl Styleable for OverlayHostBuilder {
 }
 
 impl BuildNode for OverlayHostBuilder {
-    fn build(self, mut ctx: NodeContext) -> Node {
+    fn build(self, ctx: NodeContext) -> Node {
         let Self {
             open,
             content,
@@ -72,48 +81,50 @@ impl BuildNode for OverlayHostBuilder {
             dismissible,
             on_dismiss,
         } = self;
-
-        let display = computed(move |_| {
-            if open.try_get().unwrap_or(false) {
-                Display::Flex
-            } else {
-                Display::None
+        type Action = Option<Box<dyn FnMut()>>;
+        let dismiss: Rc<RefCell<Action>> = Rc::new(RefCell::new(on_dismiss));
+        let fire = move || {
+            if dismissible && let Some(action) = dismiss.borrow_mut().as_mut() {
+                action();
             }
-        });
-        let style = style.display(display);
-        ctx.push_style(style);
-
-        let defaults = Style::new()
+        };
+        let mut content = Some(content);
+        // Back (the Android back button, an edge swipe) closes it too.
+        if dismissible {
+            mue_macroquad::input::back::use_back_handler(open, fire.clone());
+        }
+        teleport(Layer::Modal, move || {
+            let on_escape = fire.clone();
+            let on_backdrop = fire.clone();
+            presence(open, move || {
+                let content = content.take().expect("kept mounted, built once");
+                flexbox()
+                    .focus_scope(FocusScope::Contain)
+                    .auto_focus(true)
+                    .on_tap(|_| {})
+                    .on_key_down({
+                        let on_escape = on_escape.clone();
+                        move |event| {
+                            if event.key == KeyCode::Escape {
+                                event.stop_propagation();
+                                on_escape();
+                            }
+                        }
+                    })
+                    .children(content)
+            })
+            .keep_mounted(true)
+            .animation(PresenceAnimation::fade())
+            .transition(Transition::ease_out(0.16))
+            .style(style)
             .absolute()
             .inset((Size::Px(0.),))
             .items_center()
-            .justify_center();
-
-        ctx.finish(defaults, move |style| {
-            let mut layer = flexbox()
-                .style(
-                    Style::new()
-                        .absolute()
-                        .inset((Size::Px(0.),))
-                        .items_center()
-                        .justify_center()
-                        .background(backdrop),
-                )
-                .on_pointer_event(|_| {});
-
-            if dismissible {
-                let mut on_dismiss = on_dismiss;
-                layer = layer.on_activate(move || {
-                    if let Some(action) = on_dismiss.as_mut() {
-                        action();
-                    }
-                });
-            }
-
-            let content = flexbox().on_tap(|_| {}).children(content).into_node();
-            let layer = layer.children(content).into_node();
-            mue_macroquad::node::set_children(show_if(open, layer).into_children());
-            use_container(style);
+            .justify_center()
+            .background(backdrop)
+            .on_pointer_event(|_| {})
+            .on_activate(on_backdrop)
         })
+        .build(ctx)
     }
 }

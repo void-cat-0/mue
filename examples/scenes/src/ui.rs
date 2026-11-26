@@ -2,7 +2,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use mue_components::prelude::*;
-use mue_macroquad::color::Color;
+use mue_macroquad::paint::color::Color;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) enum GameAction {

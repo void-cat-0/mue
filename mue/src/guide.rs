@@ -47,6 +47,17 @@ pub mod reference {
         illustrated
     );
     guide!(style_syntax, "../../docs/reference/style.md");
+    guide!(focus_keyboard, "../../docs/reference/focus-and-keyboard.md");
+    guide!(text_input, "../../docs/reference/text-input.md");
+    guide!(touch_mobile, "../../docs/reference/mobile.md");
+    guide!(
+        layers_overlays,
+        "../../docs/reference/layers-and-overlays.md"
+    );
+    guide!(
+        component_conventions,
+        "../../docs/reference/component-conventions.md"
+    );
     guide!(scene_runtime, "../../docs/reference/scene.md", illustrated);
     guide!(theme_store, "../../docs/reference/themes-and-tokens.md");
     guide!(executor, "../../docs/reference/tasks.md");

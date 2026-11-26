@@ -18,6 +18,11 @@
 [state-reference]: mod@crate::guide::reference::reactive_runtime
 [paint-reference]: mod@crate::guide::reference::rendering
 [style-reference]: mod@crate::guide::reference::style_syntax
+[focus-reference]: mod@crate::guide::reference::focus_keyboard
+[text-input-reference]: mod@crate::guide::reference::text_input
+[mobile-reference]: mod@crate::guide::reference::touch_mobile
+[layers-reference]: mod@crate::guide::reference::layers_overlays
+[conventions-reference]: mod@crate::guide::reference::component_conventions
 [scenes-reference]: mod@crate::guide::reference::scene_runtime
 [scene-input-reference]: mod@crate::guide::reference::scene_runtime#input
 [scene-transitions-reference]: mod@crate::guide::reference::scene_runtime#scene-transitions

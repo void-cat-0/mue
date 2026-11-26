@@ -39,7 +39,7 @@ User pause and Scene lifecycle pause remain distinct. `Pause` stops the session 
 Only Details/PlayFlow stack changes request an animation:
 
 ```rust
-use mue_macroquad::{SceneTransition, transition::Transition};
+use mue_macroquad::{SceneTransition, motion::transition::Transition};
 
 ctx.push(play_flow)
     .transition(SceneTransition::crossfade(Transition::linear(0.25)));

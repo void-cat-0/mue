@@ -15,10 +15,10 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App,
-    color::Color as MueColor,
     font::{FamilyOwned, load_font},
     node::portal,
-    shader::SharedTexture,
+    paint::color::Color as MueColor,
+    paint::shader::SharedTexture,
 };
 
 const WIDTH: u32 = 640;

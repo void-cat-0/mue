@@ -1,18 +1,30 @@
-//! An interactive exercise of node options. Run with `cargo run --manifest-path examples/Cargo.toml --example playground`.
+//! An interactive tour and test bench for mue on every platform.
+//!
+//! Each page demonstrates one area, shows live readouts of what the platform
+//! reports, and ends with a checklist of what to verify by hand. The Overview
+//! page summarizes the device and the checklist results; Self tests runs
+//! automated checks on the device itself.
+//!
+//! Run with `cargo run --manifest-path examples/Cargo.toml --example playground`.
 use mue_components::*;
 mod assets;
 mod controls;
+mod feedback;
 mod fonts;
 mod graphics;
 #[path = "../../shared/halftone.rs"]
 mod halftone;
-mod input;
 mod layout;
 mod motion;
+mod overlays;
+mod overview;
+mod pointer;
 #[path = "../../shared/responsive.rs"]
 mod responsive;
 mod scrolling;
+mod selftest;
 mod styles;
+mod text_input;
 mod theming;
 mod typography;
 use controls::*;
@@ -21,39 +33,63 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App,
     font::{self, fontdb},
-    style::{Styleable, vh, vw},
+    paint::shader::Brush,
+    style::{Styleable, StyleableExt},
 };
+use std::rc::Rc;
 
-const PAGES: [&str; 10] = [
-    "Layout",
-    "Typography",
-    "Graphics",
-    "Motion",
-    "Scrolling",
-    "Input",
-    "Map gestures",
-    "Theme",
-    "Style declarations",
-    "Font licenses",
+/// Every page: its title and the section of the navigation it belongs to.
+const PAGES: [(&str, &str); 14] = [
+    ("Overview", "Start"),
+    ("Self tests", "Start"),
+    ("Layout", "Rendering"),
+    ("Typography", "Rendering"),
+    ("Graphics", "Rendering"),
+    ("Motion", "Rendering"),
+    ("Text input", "Input"),
+    ("Pointer & gestures", "Input"),
+    ("Scrolling", "Input"),
+    ("Overlays & focus", "Input"),
+    ("Feedback & directives", "Input"),
+    ("Theme & media", "App"),
+    ("Style declarations", "App"),
+    ("Font licenses", "App"),
 ];
+
+thread_local! {
+    static FPS: Signal<u32> = Scope::null().run(|| signal(0));
+    static SELECTED: Signal<usize> = Scope::null().run(|| signal(0));
+}
+
+/// Frames per second, averaged over half a second.
+pub fn fps() -> ReadSignal<u32> {
+    FPS.with(|fps| **fps)
+}
+
+/// Open a page by index.
+pub fn open_page(index: usize) {
+    SELECTED.with(|selected| selected.set(index.min(PAGES.len() - 1)));
+}
 
 fn destination(index: usize) -> Node {
     let content = match index {
-        0 => layout::page(),
-        1 => typography::page(),
-        2 => graphics::page(),
-        3 => motion::page(),
-        4 => scrolling::page(),
-        5 => input::page(),
-        6 => input::map_page(),
-        7 => theming::page(),
-        8 => styles::page(),
+        0 => overview::page(),
+        1 => selftest::page(),
+        2 => layout::page(),
+        3 => typography::page(),
+        4 => graphics::page(),
+        5 => motion::page(),
+        6 => text_input::page(),
+        7 => pointer::page(),
+        8 => scrolling::page(),
+        9 => overlays::page(),
+        10 => feedback::page(),
+        11 => theming::page(),
+        12 => styles::page(),
         _ => fonts::licenses(),
     };
     scroll_area()
-        .style(mue_macroquad::style! {
-        width: 100%; height: 100%;
-        })
+        .style(mue_macroquad::style! { width: 100%; height: 100%; })
         .options(ScrollOptions {
             touch: true,
             ..Default::default()
@@ -61,15 +97,19 @@ fn destination(index: usize) -> Node {
         .children(
             container()
                 .style(mue_macroquad::style! {
-                max-width: 100%;
-                min-width: 0px;
-                padding: {(vw(3.), vh(3.))};
-                gap: {vh(2.5)};
+                    width: 100%;
+                    max-width: {u(960.)};
+                    min-width: 0px;
+                    padding: {(u(20.), u(20.))};
+                    gap: {u(8.)};
+                    // Components without their own size (buttons, inputs) inherit this.
+                    font-size: {f(15.)};
                 })
                 .children((
-                    heading(PAGES[index]).style(mue_macroquad::style! {
-                    font-size: {responsive::font(30.)};
-                    line-height: {responsive::ui(40.)};
+                    heading(PAGES[index].0).style(mue_macroquad::style! {
+                        font-size: {f(26.)};
+                        line-height: {u(34.)};
+                        color: {foreground()};
                     }),
                     content,
                 )),
@@ -91,9 +131,6 @@ pub extern "C" fn quad_main() {
 
 pub async fn run() {
     responsive::sync();
-    let selected = signal(0usize);
-    let fps = signal(0u32);
-    let zoom = responsive::zoom();
     // Font parsing is CPU-heavy. Build the database on a blocking thread and
     // keep a text-free loading screen until it is ready.
     let mut font_db = Some(AsyncResource::<fontdb::Database, String>::new_blocking(
@@ -117,7 +154,7 @@ pub async fn run() {
             if let Some(db) = ready {
                 font::initialize("zh-CN", db)
                     .expect("initialize bundled fonts before creating text");
-                real_app = Some(App::new(build_ui(selected, fps, zoom)));
+                real_app = Some(App::new(build_ui()));
                 loading_app = None;
                 font_db = None;
             }
@@ -131,130 +168,251 @@ pub async fn run() {
         frames += 1;
         let now = get_time();
         let elapsed = now - sampled_at;
-        // Average over half a second so the readout stays readable.
         if elapsed >= 0.5 {
-            fps.set((frames as f64 / elapsed).round() as u32);
+            FPS.with(|fps| fps.set((frames as f64 / elapsed).round() as u32));
             frames = 0;
             sampled_at = now;
         }
     }
 }
 
-fn build_ui(selected: Signal<usize>, fps: Signal<u32>, zoom: ReadSignal<f32>) -> Node {
+/// One navigation entry.
+fn nav_item(index: usize, selected: Signal<usize>, compact: bool) -> Node {
+    let active = selected.map(move |page| page == index);
+    link_overlay()
+        .style(mue_macroquad::style! {
+            flex: none;
+            padding: {(u(12.), u(7.))};
+            min-height: {u(34.)};
+            border-radius: {u(8.)};
+            background: {active.pick(Brush::Solid(BLUE), Brush::Solid(mue_macroquad::paint::color::Color::TRANSPARENT))};
+            align-items: center;
+            flex-direction: row;
+            transition: 120ms ease-out;
+        })
+        .style(if compact {
+            mue_macroquad::style! {}
+        } else {
+            mue_macroquad::style! { width: 100%; }
+        })
+        .on_activate(move || selected.set(index))
+        .children(text(PAGES[index].0).style(mue_macroquad::style! {
+            font-size: {f(14.)};
+            line-height: {u(20.)};
+            color: {active.pick(Brush::Solid(mue_macroquad::paint::color::Color::from_rgba(19, 23, 32, 255)), foreground())};
+            text-wrap: {false};
+        }))
+        .into_node()
+}
+
+/// The sidebar for wide windows, grouped by section.
+fn sidebar(selected: Signal<usize>) -> Node {
+    let mut children: Vec<Node> = Vec::new();
+    let mut section = "";
+    for (index, (_, group)) in PAGES.iter().enumerate() {
+        if *group != section {
+            section = group;
+            children.push(
+                text(*group)
+                    .style(mue_macroquad::style! {
+                        padding: {(u(12.), u(4.))};
+                        margin-top: {u(10.)};
+                        font-size: {f(11.)};
+                        line-height: {u(16.)};
+                        font-weight: 700;
+                        color: {muted()};
+                    })
+                    .into_node(),
+            );
+        }
+        children.push(nav_item(index, selected, false));
+    }
+    scroll_area()
+        .style(mue_macroquad::style! {
+            width: {u(200.)};
+            height: 100%;
+            flex: none;
+            background: {panel_brush()};
+            border-right-width: 1px;
+            border-color: {border()};
+        })
+        .content_style(mue_macroquad::style! {
+            padding: {(u(8.), u(8.))};
+            gap: {u(2.)};
+        })
+        .children(children)
+        .into_node()
+}
+
+/// Horizontally scrolling tabs for narrow windows.
+fn tab_strip(selected: Signal<usize>) -> Node {
+    scroll_area()
+        .axis(ScrollAxis::Horizontal)
+        .style(mue_macroquad::style! {
+            width: 100%;
+            height: {u(50.)};
+            flex: none;
+            background: {panel_brush()};
+        })
+        .options(ScrollOptions {
+            scrollbars: false,
+            axis: ScrollAxis::Horizontal,
+            ..Default::default()
+        })
+        .content_style(mue_macroquad::style! {
+            gap: {u(4.)};
+            padding: {(u(8.), u(0.))};
+            align-items: center;
+        })
+        .children(
+            (0..PAGES.len())
+                .map(|index| nav_item(index, selected, true))
+                .collect::<Vec<_>>(),
+        )
+        .into_node()
+}
+
+fn top_bar(selected: Signal<usize>) -> Node {
+    let zoom = responsive::zoom();
+    let color = use_color_mode();
+    hstack()
+        .style(mue_macroquad::style! {
+            width: 100%;
+            flex: none;
+            padding: {(u(16.), u(8.))};
+            gap: {u(8.)};
+            align-items: center;
+            background: {panel_brush()};
+            border-bottom-width: 1px;
+            border-color: {border()};
+        })
+        .children((
+            text("mue playground").style(mue_macroquad::style! {
+                font-size: {f(15.)};
+                line-height: {u(22.)};
+                font-weight: 700;
+                color: {foreground()};
+                text-wrap: {false};
+            }),
+            text(selected.map(|index| Rc::<str>::from(format!("{} / {}", index + 1, PAGES.len()))))
+                .style(mue_macroquad::style! {
+                    flex: 1; min-width: 0px;
+                    font-size: {f(13.)};
+                    line-height: {u(20.)};
+                    color: {muted()};
+                }),
+            text(fps().map(|fps| Rc::<str>::from(format!("{fps} FPS")))).style(
+                mue_macroquad::style! {
+                    font-size: {f(13.)};
+                    line-height: {u(20.)};
+                    font-family: monospace;
+                    color: {muted()};
+                    text-wrap: {false};
+                },
+            ),
+            chip("‹", false, move || {
+                selected.update(|index| *index = index.saturating_sub(1))
+            }),
+            chip("›", false, move || {
+                selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1))
+            }),
+            chip(
+                zoom.map(|zoom| Rc::<str>::from(format!("Zoom {:.0}%", zoom * 100.))),
+                false,
+                responsive::cycle_zoom,
+            ),
+            chip(
+                color.scheme.map(|scheme| {
+                    Rc::<str>::from(match scheme {
+                        ColorScheme::Dark => "Dark",
+                        ColorScheme::Light => "Light",
+                    })
+                }),
+                false,
+                move || color.toggle(),
+            ),
+        ))
+        .into_node()
+}
+
+/// The whole UI. It is built lazily inside `App::new`, after the App's layer
+/// host exists, so teleported overlays find it and cover the whole window.
+fn build_ui() -> impl IntoNode + 'static {
     mue_macroquad::inherit::provide_foreground(foreground(), || {
         Theme::install(&theme());
-        let (transition, transition_control) = choice(
-            "Transition",
-            vec![
-                ("Slide", PagesTransition::Slide),
-                ("Vertical", PagesTransition::SlideVertical),
-                ("None", PagesTransition::None),
-            ],
-        );
-        let page_view = keyed(transition, move |value| {
-            pages(selected, (0..PAGES.len()).map(destination))
-                .page_transition(*value)
-                .transition_curve(SPRING)
-                .into_node()
+        let selected = SELECTED.with(|selected| *selected);
+        // Tabs replace the sidebar when it would leave the page less than
+        // 560 design units (narrow phones, or a high zoom setting).
+        let viewport = mue_macroquad::app::viewport::use_viewport();
+        let zoom = responsive::zoom();
+        let compact = computed(move |_| {
+            let viewport = viewport.get();
+            let scale = (viewport.width.min(viewport.height) / 480.).max(0.75) * zoom.get();
+            viewport.width / scale < 760.
+        });
+        // The app follows use_color_mode (light, dark, or the system scheme).
+        let color = use_color_mode();
+        watch(color.scheme, |scheme| {
+            set_dark(scheme.get() == ColorScheme::Dark)
+        });
+        let page_view = pages(selected, (0..PAGES.len()).map(destination))
+            .page_transition(PagesTransition::Slide)
+            .transition_curve(SPRING)
+            .into_node();
+        // Back steps to the previous page before the app closes.
+        mue_macroquad::input::back::use_back_handler(selected.map(|index| index > 0), move || {
+            selected.update(|index| *index = index.saturating_sub(1))
         });
         stack()
             .style(mue_macroquad::style! {
-            width: 100%; height: 100%;
-            font-size: {responsive::root_font()};
-            transition: 180ms ease-in-out;
-            gap: 0px;
-            background: {background()};
+                width: 100%; height: 100%;
+                font-size: {responsive::root_font()};
+                gap: 0px;
+                background: {background()};
             })
             .children((
-                scroll_area()
-                    .axis(ScrollAxis::Horizontal)
+                top_bar(selected),
+                tab_strip(selected).show_if(compact),
+                hstack()
                     .style(mue_macroquad::style! {
-                    width: 100%;
-                    height: {responsive::ui(56.)};
-                    flex: none;
-                    background: {panel_brush()};
-                    })
-                    .options(ScrollOptions {
-                        scrollbars: false,
-                        axis: ScrollAxis::Horizontal,
-                        ..Default::default()
-                    })
-                    .content_style(mue_macroquad::style! {
-                        gap: {vw(1.)};
-                        padding-left: {vw(2.)};
-                        padding-right: {vw(2.)};
-                        align-items: center;
-                    })
-                    .children(
-                        PAGES
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, title)| tab_button(title, selected, i))
-                            .collect::<Vec<_>>(),
-                    ),
-                separator(),
-                flexbox()
-                    .style(mue_macroquad::style! {
-                    width: 100%;
-                    flex: 1;
-                    min-width: 0px;
-                    min-height: 0px;
-                    })
-                    .children(page_view),
-                wrap()
-                    .style(mue_macroquad::style! {
-                    width: 100%;
-                    flex: none;
-                    padding: {(vw(2.), vh(1.25))};
-                    gap: {vw(1.)};
+                        width: 100%;
+                        flex: 1;
+                        min-width: 0px;
+                        min-height: 0px;
+                        gap: 0px;
+                        align-items: stretch;
                     })
                     .children((
-                        demo_button("Previous", move || {
-                            selected.update(|index| *index = index.saturating_sub(1));
-                        }),
-                        demo_button("Next", move || {
-                            selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1));
-                        }),
-                        demo_button(
-                            computed(move |_| format!("Scale {:.0}%", zoom.get() * 100.)),
-                            responsive::cycle_zoom,
-                        ),
-                        text(selected.map(|index| format!("Page {} / {}", index + 1, PAGES.len())))
+                        sidebar(selected).show_if(compact.map(|compact| !compact)),
+                        flexbox()
                             .style(mue_macroquad::style! {
-                            font-size: {responsive::font(16.)};
-                            line-height: {responsive::ui(24.)};
-                            flex: 1;
-                            }),
-                        text(fps.map(|fps| format!("{fps} FPS"))).style(mue_macroquad::style! {
-                        font-size: {responsive::font(16.)};
-                        line-height: {responsive::ui(24.)};
-                        min-width: 0px;
-                        flex: none;
-                        text-wrap: {false};
-                        }),
-                        transition_control,
+                                flex: 1;
+                                min-width: 0px;
+                                min-height: 0px;
+                                height: 100%;
+                            })
+                            .children(page_view),
                     )),
             ))
             .into_node()
     })
-    .into_node()
 }
 
 fn loading_screen() -> Node {
     stack()
         .style(mue_macroquad::style! {
-        width: 100%; height: 100%;
-        background: {background()};
-        align-items: center;
-        justify-content: center;
+            width: 100%; height: 100%;
+            background: {background()};
+            align-items: center;
+            justify-content: center;
         })
         .children(
             flexbox()
                 .style(mue_macroquad::style! {
-                width: 48px;
-                height: 48px;
-                border-radius: 24px;
-                background: {panel_brush()};
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 24px;
+                    background: {panel_brush()};
                 })
                 .into_node(),
         )

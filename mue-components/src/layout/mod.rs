@@ -56,23 +56,31 @@
 //! polls, see [`scope_future`](mue_core::scope::scope_future).
 
 pub mod aspect_ratio;
+pub mod back_swipe;
 pub mod center;
 pub mod container;
 pub mod div;
 pub mod float;
+pub mod grid;
 pub mod pages;
+pub mod safe_area;
 pub mod scroll_area;
 pub mod separator;
 pub mod stack;
+pub mod swipe_actions;
 pub mod wrap;
 
 pub use aspect_ratio::*;
+pub use back_swipe::*;
 pub use center::*;
 pub use container::*;
 pub use div::*;
 pub use float::*;
+pub use grid::*;
 pub use pages::*;
+pub use safe_area::*;
 pub use scroll_area::*;
 pub use separator::*;
 pub use stack::*;
+pub use swipe_actions::*;
 pub use wrap::*;

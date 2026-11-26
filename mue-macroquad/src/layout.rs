@@ -3,7 +3,12 @@ use std::mem;
 use mue_core::prelude::*;
 use taffy::{AvailableSpace, Size, TaffyTree};
 
-use crate::{math::Rect, node::NodeInner, runtime::Runtime, style::Style};
+use crate::{
+    app::runtime::Runtime,
+    math::{Edges, Rect},
+    node::NodeInner,
+    style::Style,
+};
 
 /// Compute intrinsic content size within Taffy's known dimensions and constraints.
 ///
@@ -38,6 +43,10 @@ where
 pub struct Layout {
     pub layout_id: taffy::NodeId,
     pub rect: ReadSignal<Rect>,
+    /// Resolved border widths, published with `rect`.
+    pub border: ReadSignal<Edges>,
+    /// Resolved padding widths, published with `rect`.
+    pub padding: ReadSignal<Edges>,
     scope: Scope,
 }
 
@@ -116,12 +125,16 @@ pub(crate) fn take_measure(
 
 pub(crate) struct OwnedLayout {
     pub rect: Signal<Rect>,
+    pub border: Signal<Edges>,
+    pub padding: Signal<Edges>,
 }
 
 impl Default for OwnedLayout {
     fn default() -> Self {
         Self {
             rect: Signal::null(),
+            border: Signal::null(),
+            padding: Signal::null(),
         }
     }
 }
@@ -149,6 +162,8 @@ fn bind_layout(style: ReadSignal<taffy::Style>) -> Layout {
 
         node.layout = OwnedLayout {
             rect: signal(Rect::default()),
+            border: signal(Edges::ZERO),
+            padding: signal(Edges::ZERO),
         };
 
         let children = *node.children;
@@ -171,6 +186,8 @@ fn bind_layout(style: ReadSignal<taffy::Style>) -> Layout {
         Layout {
             layout_id,
             rect: *node.layout.rect,
+            border: *node.layout.border,
+            padding: *node.layout.padding,
             scope: node.scope,
         }
     })

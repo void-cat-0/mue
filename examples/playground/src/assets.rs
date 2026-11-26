@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use macroquad::texture::{Image, Texture2D};
 use mue_core::prelude::*;
-use mue_macroquad::shader::SharedTexture;
+use mue_macroquad::paint::shader::SharedTexture;
 
 /// Decode an image on a blocking thread and upload it to a texture on the UI thread.
 ///

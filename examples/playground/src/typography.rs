@@ -1,38 +1,50 @@
-use super::{controls::*, responsive};
+use super::controls::*;
 use cosmic_text::{Align, FamilyOwned, Weight};
 use mue_components::*;
-use mue_macroquad::style::{Styleable, vh, vw};
+use mue_macroquad::style::{Styleable, StyleableExt};
 
-pub fn page() -> Node {
-    let (wrap_mode, a) = choice(
+const PAGE: &str = "Typography";
+
+const SAMPLE: &str = "The quick brown fox jumps over the lazy dog. 敏捷的棕色狐狸跳过了懒狗。 supercalifragilisticexpialidocious\nA second paragraph shows paragraph spacing, line limits, and ellipsis on long text that keeps going.";
+
+fn layout_card() -> Node {
+    let (wrap_mode, wrap_control) = segmented(
         "Wrap",
         vec![
-            ("WordOrGlyph", TextWrap::WordOrGlyph),
+            ("Word or glyph", TextWrap::WordOrGlyph),
             ("Word", TextWrap::Word),
             ("Glyph", TextWrap::Glyph),
         ],
     );
-    let (overflow, b) = choice(
+    let (overflow, overflow_control) = segmented(
         "Overflow",
         vec![
             ("Visible", TextOverflow::Visible),
             ("Clip", TextOverflow::Clip),
-            ("End", TextOverflow::EllipsisEnd),
-            ("Middle", TextOverflow::EllipsisMiddle),
-            ("Start", TextOverflow::EllipsisStart),
+            ("… end", TextOverflow::EllipsisEnd),
+            ("… middle", TextOverflow::EllipsisMiddle),
+            ("… start", TextOverflow::EllipsisStart),
         ],
     );
-    let (align, c) = choice(
+    let (lines, lines_control) = segmented(
+        "Max lines",
+        vec![
+            ("All", None),
+            ("1", Some(1usize)),
+            ("2", Some(2)),
+            ("3", Some(3)),
+        ],
+    );
+    let (align, align_control) = segmented(
         "Align",
         vec![
             ("Left", Some(Align::Left)),
             ("Center", Some(Align::Center)),
             ("Right", Some(Align::Right)),
-            ("Justified", Some(Align::Justified)),
-            ("End", Some(Align::End)),
+            ("Justify", Some(Align::Justified)),
         ],
     );
-    let (vertical, d) = choice(
+    let (vertical, vertical_control) = segmented(
         "Vertical",
         vec![
             ("Top", TextVerticalAlign::Top),
@@ -40,7 +52,7 @@ pub fn page() -> Node {
             ("Bottom", TextVerticalAlign::Bottom),
         ],
     );
-    let (family, e) = choice(
+    let (family, family_control) = segmented(
         "Family",
         vec![
             ("Sans", FamilyOwned::SansSerif),
@@ -48,142 +60,232 @@ pub fn page() -> Node {
             ("Mono", FamilyOwned::Monospace),
         ],
     );
-    let (limit, f) = choice(
-        "Lines",
-        vec![("All", None), ("1", Some(1usize)), ("3", Some(3usize))],
-    );
-    let (size, g) = toggle("Size");
-    let (leading, h) = toggle("Line height");
-    let (spacing, i) = toggle("Letter spacing");
-    let (paragraphs, j) = toggle("Paragraph spacing");
-    let (italic, k) = toggle("Italic");
-    let (bold, l) = toggle("Bold");
-    let (underline, m) = toggle("Underline");
-    let (strike, n) = toggle("Strike");
-    let (nowrap, o) = toggle("No wrap");
-    let (level, p) = choice(
-        "Heading",
-        vec![
-            ("H1", HeadingLevel::H1),
-            ("H2", HeadingLevel::H2),
-            ("H3", HeadingLevel::H3),
-            ("H4", HeadingLevel::H4),
-            ("H5", HeadingLevel::H5),
-            ("H6", HeadingLevel::H6),
-        ],
-    );
-    let (marker, q) = choice(
-        "List",
+    let (size, size_control) = segmented("Size", vec![("15", 15.), ("20", 20.), ("28", 28.)]);
+    let (bold, bold_control) = switch("Bold", false);
+    let (italic, italic_control) = switch("Italic", false);
+    let (underline, underline_control) = switch("Underline", false);
+    let (strike, strike_control) = switch("Strikethrough", false);
+    let (spacing, spacing_control) = switch("Letter spacing", false);
+    let (paragraphs, paragraph_control) = switch("Paragraph spacing", false);
+    card(
+        "Text layout",
+        "One paragraph rendered with every text option. The box has a fixed height so overflow and vertical alignment are visible.",
+        (
+            wrap_control,
+            overflow_control,
+            lines_control,
+            align_control,
+            vertical_control,
+            family_control,
+            size_control,
+            row((bold_control, italic_control, underline_control)),
+            row((strike_control, spacing_control, paragraph_control)),
+            text(SAMPLE)
+                .style(mue_macroquad::style! {
+                    width: 100%; min-width: 0px;
+                    height: {u(190.)};
+                    padding: {(u(12.),)};
+                    border-radius: {u(10.)};
+                    background: {raised()};
+                    color: {foreground()};
+                    text-wrap-mode: {wrap_mode};
+                    text-max-lines: {lines};
+                    text-align: {align};
+                    text-vertical-align: {vertical};
+                    font-family: {family};
+                    font-italic: {italic};
+                    text-underline: {underline};
+                    text-strikethrough: {strike};
+                    font-weight: {bold.select(Weight::BOLD, Weight::NORMAL)};
+                    font-size: {size.map(|size| mue_macroquad::style::FontSize::Rem(size / 32.))};
+                    line-height: 1.45;
+                    letter-spacing: {super::responsive::ui(spacing.select(2., 0.))};
+                    paragraph-spacing: {super::responsive::ui(paragraphs.select(14., 0.))};
+                })
+                .text_overflow(overflow),
+        ),
+    )
+}
+
+fn scripts_card() -> Node {
+    let sample = |label: &'static str, content: &'static str, rtl: bool| {
+        hstack()
+            .style(mue_macroquad::style! {
+                width: 100%; min-width: 0px;
+                gap: {u(12.)};
+                padding: {(u(10.), u(6.))};
+                border-radius: {u(8.)};
+                background: {raised()};
+                align-items: center;
+            })
+            .children((
+                text(label).style(mue_macroquad::style! {
+                    flex: none; width: {u(84.)};
+                    font-size: {f(12.)}; line-height: {u(18.)};
+                    color: {muted()};
+                }),
+                text(content).style(if rtl {
+                    mue_macroquad::style! {
+                        flex: 1; min-width: 0px;
+                        font-size: {f(18.)}; line-height: {u(28.)};
+                        text-align: right;
+                        color: {foreground()};
+                    }
+                } else {
+                    mue_macroquad::style! {
+                        flex: 1; min-width: 0px;
+                        font-size: {f(18.)}; line-height: {u(28.)};
+                        color: {foreground()};
+                    }
+                }),
+            ))
+            .into_node()
+    };
+    card(
+        "Scripts and font fallback",
+        "Bundled Noto fonts cover these scripts. Missing glyphs show as boxes; check that none appear.",
+        stack()
+            .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(6.)}; })
+            .children((
+                sample(
+                    "Latin",
+                    "Sphinx of black quartz, judge my vow. 0123456789",
+                    false,
+                ),
+                sample(
+                    "Greek, Cyrillic",
+                    "Ζεύς · Съешь же ещё этих мягких булок",
+                    false,
+                ),
+                sample("Chinese", "你好，世界。排版、换行与标点。", false),
+                sample("Japanese", "いろはにほへと カタカナ 漢字", false),
+                sample("Korean", "다람쥐 헌 쳇바퀴에 타고파", false),
+                sample(
+                    "Arabic (RTL)",
+                    "مرحبا بالعالم — سطر من اليمين إلى اليسار",
+                    true,
+                ),
+                sample("Mixed bidi", "Price: 42 درهم (about ¥80) today", false),
+                sample("Symbols", "← → ↑ ↓ ✓ ✗ ★ ♪ ⌘ ⌥ ∞ ≠ ≤ ≥", false),
+            )),
+    )
+}
+
+fn headings_card() -> Node {
+    let level = |level: HeadingLevel, name: &'static str, size: f32| {
+        heading(name).level(level).style(mue_macroquad::style! {
+            font-size: {f(size)};
+            line-height: {u(size * 1.3)};
+            color: {foreground()};
+        })
+    };
+    card(
+        "Headings",
+        "Six levels from the heading component.",
+        stack()
+            .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(4.)}; })
+            .children((
+                level(HeadingLevel::H1, "Heading 1", 32.),
+                level(HeadingLevel::H2, "Heading 2", 26.),
+                level(HeadingLevel::H3, "Heading 3", 22.),
+                level(HeadingLevel::H4, "Heading 4", 18.),
+                level(HeadingLevel::H5, "Heading 5", 15.),
+                level(HeadingLevel::H6, "Heading 6", 13.),
+            )),
+    )
+}
+
+fn rich_card() -> Node {
+    let (marker, marker_control) = segmented(
+        "List marker",
         vec![
             ("Bullet", ListMarker::Bullet),
-            ("Ordered", ListMarker::Ordered(3)),
+            ("Ordered", ListMarker::Ordered(1)),
             ("None", ListMarker::None),
         ],
     );
-    let (tabs, r) = choice("Tabs", vec![("4", 4u16), ("2", 2), ("8", 8)]);
-    // Mirror heading defaults here because HeadingLevel::scale is private.
-    let heading_scale = level.map(|level| match level {
-        HeadingLevel::H1 => 1.8,
-        HeadingLevel::H2 => 1.45,
-        HeadingLevel::H3 => 1.2,
-        HeadingLevel::H4 => 1.,
-        HeadingLevel::H5 => 0.85,
-        HeadingLevel::H6 => 0.75,
-    });
-    stack().style(mue_macroquad::style! {
-width: 100%;
-min-width: 0px;
-gap: {vh(2.75)};
-}).children((
-        controls(vec![a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r]),
-        text("مرحبا بالعالم — هذا سطر عربي لاختبار الكتابة من اليمين إلى اليسار")
-            .style(mue_macroquad::style! {
-                width: 100%;
-                min-width: 0px;
-                padding: {(vw(2.), vh(1.5))};
-                background: {panel_brush()};
-                text-align: right;
-                font-size: {responsive::font(20.)};
-                line-height: {responsive::ui(32.)};
-            }),
-        text("The quick brown fox jumps over the lazy dog. 你好，世界。 مرحبا بالعالم.\nA second paragraph with supercalifragilisticexpialidocious and room for a little more text.")
-            .style(mue_macroquad::style! {
-width: 100%;
-min-width: 0px;
-height: {vh(32.5)};
-min-height: {responsive::ui(leading.select(144., 102.))};
-padding: {(vw(2.), vh(2.))};
-background: {panel_brush()};
-transition: {SPRING};
-text-wrap-mode: {wrap_mode};
-}).text_overflow(overflow).style(mue_macroquad::style! {
-text-max-lines: {limit};
-text-align: {align};
-text-vertical-align: {vertical};
-font-family: {family};
-font-italic: {italic};
-text-underline: {underline};
-text-strikethrough: {strike};
-text-wrap: {nowrap.map(|v| !v)};
-font-weight: {bold.select(Weight::BOLD, Weight::NORMAL)};
-font-size: {responsive::font(size.select(30.,20.))};
-line-height: {responsive::ui(leading.select(48.,34.))};
-letter-spacing: {responsive::ui(spacing.select(2.,0.))};
-paragraph-spacing: {responsive::ui(paragraphs.select(24.,0.))};
-}),
-        heading("Six heading levels").level(level)
-            .style(mue_macroquad::style! {
-font-size: {responsive::font(heading_scale.map(|scale| 32. * scale))};
-line-height: {responsive::ui(heading_scale.map(|scale| 44. * scale))};
-}),
-        wrap().style(mue_macroquad::style! {
-width: 100%;
-gap: {vw(1.)};
-}).children((code("let answer = 42;").style(mue_macroquad::style! {
-font-size: {responsive::font(32.)};
-line-height: {responsive::ui(44.)};
-padding: {(responsive::ui(6.), responsive::ui(2.))};
-border-radius: {responsive::ui(4.)};
-}), em("Emphasis").style(mue_macroquad::style! {
-font-size: {responsive::font(20.)};
-line-height: {responsive::ui(30.)};
-}))),
-        blockquote("Somewhere, something incredible is waiting to be known.").style(mue_macroquad::style! {
-font-size: {responsive::font(22.)};
-line-height: {responsive::ui(32.)};
-padding-left: {responsive::ui(18.)};
-}),
-        code_block("fn main() {\n\tprintln!(\"hello\");\n}").tab_width(tabs).style(mue_macroquad::style! {
-font-size: {responsive::font(18.)};
-line-height: {responsive::ui(28.)};
-padding: {(responsive::ui(16.),)};
-border-radius: {responsive::ui(6.)};
-}),
-        list().marker(marker).style(mue_macroquad::style! {
-gap: {responsive::ui(8.)};
-font-size: {responsive::font(18.)};
-line-height: {responsive::ui(28.)};
-}).children((text("One").style(mue_macroquad::style! {
-font-size: {responsive::font(18.)};
-line-height: {responsive::ui(28.)};
-}), text("Two").style(mue_macroquad::style! {
-font-size: {responsive::font(18.)};
-line-height: {responsive::ui(28.)};
-}), list_item().children(text("Three").style(mue_macroquad::style! {
-font-size: {responsive::font(18.)};
-line-height: {responsive::ui(28.)};
-})))),
-        document(Document::blocks([Document::heading("Document", HeadingLevel::H3),
-            Document::rich([Span::new("Rich "), Span::new("spans").bold(), Span::new(" + "), Span::new("code").monospace()]),
-            Document::list([Document::plain("First"), Document::em("Second")], ListMarker::Ordered(1))]))
-            .style(mue_macroquad::style! {
-font-size: {responsive::font(20.)};
-line-height: {responsive::ui(30.)};
-paragraph-spacing: {responsive::ui(paragraphs.select(12.,0.))};
-}),
-        markdown("### Markdown\n\n**Bold**, *italic*, `code`, [link](https://example.com).\n\n> A quote.").style(mue_macroquad::style! {
-font-size: {responsive::font(20.)};
-line-height: {responsive::ui(30.)};
-}),
-    )).into_node()
+    let (tabs, tabs_control) = segmented("Tab width", vec![("4", 4u16), ("2", 2), ("8", 8)]);
+    let body = || {
+        mue_macroquad::style! {
+            font-size: {f(15.)}; line-height: {u(22.)};
+            color: {foreground()};
+        }
+    };
+    card(
+        "Rich text",
+        "Inline code and emphasis, quotes, code blocks, lists, structured documents, and Markdown.",
+        (
+            row((
+                code("let answer = 42;").style(mue_macroquad::style! {
+                    font-size: {f(14.)}; line-height: {u(22.)};
+                    padding: {(u(6.), u(2.))};
+                    border-radius: {u(4.)};
+                }),
+                em("Emphasis").style(body()),
+                link("A link").style(body()).on_activate(|| log_event("link activated")),
+            )),
+            blockquote("Somewhere, something incredible is waiting to be known.").style(
+                mue_macroquad::style! {
+                    font-size: {f(16.)}; line-height: {u(24.)};
+                    padding-left: {u(14.)};
+                    color: {foreground()};
+                },
+            ),
+            tabs_control,
+            code_block("fn main() {\n\tlet greeting = \"hello\";\n\tprintln!(\"{greeting}\");\n}")
+                .tab_width(tabs)
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    font-size: {f(14.)}; line-height: {u(21.)};
+                    padding: {(u(12.),)};
+                    border-radius: {u(6.)};
+                }),
+            marker_control,
+            list().marker(marker).style(mue_macroquad::style! {
+                gap: {u(4.)};
+                font-size: {f(15.)}; line-height: {u(22.)};
+            }).children((
+                text("First item").style(body()),
+                text("Second item").style(body()),
+                list_item().children(text("Third item").style(body())),
+            )),
+            document(Document::blocks([
+                Document::heading("Document", HeadingLevel::H4),
+                Document::rich([
+                    Span::new("Rich "),
+                    Span::new("spans").bold(),
+                    Span::new(" with "),
+                    Span::new("code").monospace(),
+                ]),
+                Document::list(
+                    [Document::plain("Plain"), Document::em("Emphasized")],
+                    ListMarker::Ordered(1),
+                ),
+            ]))
+            .style(body()),
+            markdown("#### Markdown\n\n**Bold**, *italic*, `code`, and [a link](https://example.com).\n\n> A quote.\n\n- one\n- two")
+                .style(body()),
+        ),
+    )
+}
+
+pub fn page() -> Node {
+    page_body(
+        "Text layout options, script coverage, headings, and rich text.",
+        (
+            layout_card(),
+            scripts_card(),
+            headings_card(),
+            rich_card(),
+            checklist(
+                PAGE,
+                &[
+                    "Every script renders without missing-glyph boxes",
+                    "Arabic is right-to-left and the mixed line keeps its order",
+                    "Ellipsis modes shorten the text at the right place",
+                    "Bold, italic, underline, and strikethrough render",
+                ],
+            ),
+        ),
+    )
 }

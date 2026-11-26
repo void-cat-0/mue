@@ -14,7 +14,7 @@
 
 `App::with_scene(scene)` starts a retained Scene stack with one active top. A Scene retains its Node trees, gameplay state and resources, submits layout roots, and chooses the order of custom drawing and UI.
 
-Only the top receives Scene events and participates in update/layout/render and Node updates; covered instances remain owned but are not automatically drawn behind it. `App::new(root)` remains the Node-only convenience entry point and uses the same scheduler.
+Only the top receives Scene events and participates in update/layout/render and Node updates; covered instances remain owned but are not automatically drawn behind it. `App::new(root)` remains the Node-only convenience entry point and uses the same scheduler; it wraps the root in a `layer_host` so teleports, overlays, and popovers work. A custom Scene builds each root that should host overlays as `layer_host(view).into_node()` (see [layers][layers-reference]).
 
 ```rust,no_run
 use mue::{
@@ -381,7 +381,7 @@ Scene transitions are optional presentation attached to a deferred Scene request
 `push`, `pop`, `pop_with_result`, `replace` and `exit` return a `SceneRequest` configuration handle. Host-side `push_scene`, `pop_scene`, `pop_scene_with_result`, `replace_scene` and `reset_scene` do the same.
 
 ```rust
-use mue::{Scene, renderer::{SceneContext, SceneTransition, transition::Transition}};
+use mue::{Scene, renderer::{SceneContext, SceneTransition, motion::transition::Transition}};
 
 struct Details;
 impl Scene for Details {}
@@ -461,7 +461,7 @@ Never-entered sources and fault/exit recovery also commit instantaneously withou
 ```rust
 use mue::{
     macroquad::prelude::{DrawTextureParams, WHITE, draw_texture_ex, vec2},
-    renderer::{SceneTransition, transition::Transition},
+    renderer::{SceneTransition, motion::transition::Transition},
 };
 
 fn slide() -> SceneTransition {
@@ -514,7 +514,7 @@ Changing the selected QuadGl material alone does not apply its mask. Metal compo
 ```rust
 use mue::{
     macroquad::prelude::{Color, draw_rectangle},
-    renderer::{SceneTransition, TransitionPhase, TransitionTiming, transition::Transition},
+    renderer::{SceneTransition, TransitionPhase, TransitionTiming, motion::transition::Transition},
 };
 
 fn black_cover() -> SceneTransition {
@@ -591,3 +591,4 @@ Both examples use Scene-local state and separate modules for effects and views.
 [i18n-guide]: ../learn/i18n.md
 
 [guide-reference]: index.md
+[layers-reference]: layers-and-overlays.md

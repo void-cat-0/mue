@@ -12,7 +12,7 @@ use mue_core::{
 use mue_i18n::tl;
 use mue_macroquad::{
     node::{IntoNode, Node, NodeRef},
-    shader::Brush,
+    paint::shader::Brush,
     style::{Styleable, StyleableExt},
 };
 use std::{cell::Cell, rc::Rc};
