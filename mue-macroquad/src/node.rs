@@ -74,6 +74,8 @@ pub(crate) struct NodeInner {
     pub(crate) clip_sector: Option<Prop<Sector>>,
     pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
     pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
+    /// `(hit_slop, min_hit_size)` when either is declared.
+    pub(crate) hit_area: Option<(Prop<f32>, Prop<f32>)>,
     pub(crate) z_index: Option<Prop<i32>>,
     pub(crate) offscreen: Option<Rc<crate::offscreen::OffscreenState>>,
     /// Wrapper nodes (layer hosts) that must not become the `rem` root.
@@ -157,6 +159,7 @@ impl NodeInner {
             clip_sector: None,
             focus: None,
             cursor: None,
+            hit_area: None,
             z_index: None,
             offscreen: None,
             font_root_transparent: false,
@@ -589,6 +592,12 @@ impl Node {
             let cursor = style.take_cursor();
             if !matches!(cursor, Prop::Static(crate::cursor::Cursor::Auto)) {
                 NodeInner::with_mut(|node| node.cursor = Some(cursor));
+            }
+            let hit_slop = style.take_hit_slop();
+            let min_hit_size = style.take_min_hit_size();
+            if !matches!((&hit_slop, &min_hit_size), (Prop::Static(a), Prop::Static(b)) if *a <= 0. && *b <= 0.)
+            {
+                NodeInner::with_mut(|node| node.hit_area = Some((hit_slop, min_hit_size)));
             }
             NodeInner::with_mut(|node| {
                 let after_children = std::mem::take(&mut node.hooks.after_children);

@@ -164,6 +164,22 @@ pub(super) fn declaration(
                 quote!(#value)
             }
         }),
+        "hit-slop" | "min-hit-size" => setter(method, {
+            if let Some(value) = token(input, &quote!(f32))? {
+                value
+            } else if let Some(expr) = expression_with_token(input, &quote!(f32))? {
+                expr
+            } else {
+                let (value, unit, at) = number(input)?;
+                if !(unit.is_empty() || unit == "px") || value < 0. {
+                    return Err(syn::Error::new(
+                        at,
+                        format!("{name} expects a nonnegative px length"),
+                    ));
+                }
+                quote!(#value)
+            }
+        }),
         "aspect-ratio" => {
             let value = if let Some(value) = token(input, &quote!(Option<f32>))? {
                 value

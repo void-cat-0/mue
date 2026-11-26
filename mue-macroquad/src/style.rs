@@ -198,6 +198,12 @@ define_style! {
     z_index: i32 = 0;
     /// Mouse cursor while hovering this node. `Auto` defers to ancestors.
     cursor: crate::cursor::Cursor = crate::cursor::Cursor::Auto;
+    /// Extra pointer-hit distance around the border box, in logical pixels,
+    /// without changing layout or paint (Android's `TouchDelegate`).
+    hit_slop: f32 = 0.;
+    /// Grow the hit area symmetrically to at least this width and height, in
+    /// logical pixels; 44 keeps small controls easy to touch.
+    min_hit_size: f32 = 0.;
 
     @rects {
         margin: taffy::Rect<Size> = Size::Px(0.);

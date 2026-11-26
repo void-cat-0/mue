@@ -69,7 +69,8 @@ fn foreground_color(disabled: bool) -> Color {
 /// Use [`ButtonBuilder::primary`] or [`ButtonBuilder::variant`] to select its
 /// visual weight. A disabled or loading button ignores activation. The button
 /// is focusable, shows a focus ring for keyboard focus, and activates on Enter
-/// or Space while focused. Its label,
+/// or Space while focused. Its hit area is at least 44 × 44 px even when it is
+/// drawn smaller. Its label,
 /// disabled state, and loading state accept reactive properties. Builder hooks
 /// and style settings remain part of the same node when consumed.
 ///
@@ -180,6 +181,7 @@ impl BuildNode for ButtonBuilder {
                 .opacity(opacity)
                 .focusable(true)
                 .cursor(Cursor::Pointer)
+                .min_hit_size(44.)
                 .focus_ring(2., Color::from_rgba(120, 170, 255, 255), 2.),
         );
         ctx.push_style(style);

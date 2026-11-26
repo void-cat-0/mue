@@ -58,8 +58,18 @@ let panel = flexbox().style(style! {
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `clip`, `scroll` |
 | `flex-grow`, `flex-shrink` | Nonnegative number or `{f32}` binding |
 | `z-index` | An integer or `{i32}`; higher siblings paint and hit-test on top ([layers][layers-reference]) |
+| `hit-slop`, `min-hit-size` | A nonnegative `px` length or `{f32}`; grow the pointer hit area without changing layout or paint |
 
 `border-box` includes padding and borders in the declared size. `content-box` adds those edges to it. An absolute child leaves the parent flow. A relative child keeps its slot. `overflow` takes one keyword for both axes or two in x/y order. For a scroll gesture and scrollbar, use `scroll_area`.
+
+`hit-slop: 8px` accepts pointer hits up to 8 px outside the border box. `min-hit-size: 44px` grows the hit area symmetrically to at least 44 × 44 px, the usual minimum touch target, while the control keeps its visual size. Overlapping hit areas resolve in paint order (the topmost sibling wins); a rounded or sector clip still bounds the node's own shape inside its box.
+
+```rust
+use mue::prelude::*;
+
+let close = flexbox().style(style! { width: 20px; height: 20px; min-hit-size: 44px; });
+let chip = flexbox().style(style! { padding: 4px 8px; hit-slop: 8px; });
+```
 
 On a flex container, `justify-content` uses the main axis and `align-items` uses the cross axis. `align-content` distributes flex lines when the container wraps and has room on the cross axis. `align-self` overrides item alignment for one child. The current block and flex modes accept `justify-items` and `justify-self` but do not use them for placement. `display: none` omits a box from layout. For retained conditional children, see the [reactive runtime reference][state-reference].
 

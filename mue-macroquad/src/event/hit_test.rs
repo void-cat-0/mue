@@ -4,7 +4,7 @@ use indexmap::IndexSet;
 use mue_core::signal::Access;
 
 use crate::{
-    math::Vector,
+    math::{Rect, Vector},
     node::{NodeInner, NodeRef},
     runtime::Runtime,
 };
@@ -82,6 +82,22 @@ pub fn hit_test_into(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> 
     visit(node, pos, result)
 }
 
+/// The rectangle that accepts pointer hits for a node: its border box grown
+/// by `hit_slop` and then to at least `min_hit_size` on each axis.
+pub fn hit_rect(rect: Rect, slop: f32, min_size: f32) -> Rect {
+    let mut hit = rect.outset(slop.max(0.));
+    let min_size = min_size.max(0.);
+    if hit.w < min_size {
+        hit.x -= (min_size - hit.w) / 2.;
+        hit.w = min_size;
+    }
+    if hit.h < min_size {
+        hit.y -= (min_size - hit.h) / 2.;
+        hit.h = min_size;
+    }
+    hit
+}
+
 fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
     let snapshot = Runtime::with(|rt| {
         let nodes = rt.nodes.borrow();
@@ -94,9 +110,14 @@ fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
             n.clip_sector,
             *n.children,
             n.hit_test.clone(),
+            n.hit_area
+                .as_ref()
+                .map(|(slop, size)| (slop.get_untracked(), size.get_untracked())),
         ))
     });
-    let Some((transform, rect, clip, clip_radius, clip_sector, children, custom)) = snapshot else {
+    let Some((transform, rect, clip, clip_radius, clip_sector, children, custom, hit_area)) =
+        snapshot
+    else {
         return false;
     };
     let transform = transform.resolve();
@@ -107,15 +128,21 @@ fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
     if !pos.is_finite() || clip.is_some_and(|rect| !rect.get_untracked().contains(&pos)) {
         return false;
     }
-    if !rect.is_null()
-        && !crate::clip::contains_point(
-            rect.get_untracked(),
-            clip_radius.and_then(|radius| radius.try_get_untracked()),
-            clip_sector.and_then(|sector| sector.try_get_untracked()),
-            pos,
-        )
-    {
-        return false;
+    let mut in_slop = false;
+    if !rect.is_null() {
+        let bounds = rect.get_untracked();
+        in_slop = !bounds.contains(&pos)
+            && hit_area.is_some_and(|(slop, size)| hit_rect(bounds, slop, size).contains(&pos));
+        if !in_slop
+            && !crate::clip::contains_point(
+                bounds,
+                clip_radius.and_then(|radius| radius.try_get_untracked()),
+                clip_sector.and_then(|sector| sector.try_get_untracked()),
+                pos,
+            )
+        {
+            return false;
+        }
     }
     let children = if children.is_null() {
         Rc::from([])
@@ -136,7 +163,7 @@ fn visit(node: NodeRef, pos: Vector, result: &mut HitTestResult) -> bool {
             .rev()
             .any(|&child| visit(child, pos, result));
         result.frames.pop();
-        child_hit || (!rect.is_null() && rect.get_untracked().contains(&pos))
+        child_hit || in_slop || (!rect.is_null() && rect.get_untracked().contains(&pos))
     };
     if hit {
         result.path.insert(node);
