@@ -10,6 +10,7 @@ Look up supported syntax, type contracts, and scheduling rules from any chapter.
 | [Component conventions][conventions-reference] | Naming, controlled values, compound parts, slots and events, composables, directives, icons, and the safe area. |
 | [Layers, overlays, and anchoring][layers-reference] | z-index, layer hosts, teleports, anchored popovers, presence animations, and node handles. |
 | [Focus, keyboard, and cursors][focus-reference] | Focusable nodes, Tab order, focus scopes, key events, focus rings, and cursors. |
+| [Text input and IME][text-input-reference] | Input controls, model modifiers, the `text_edit` node, formatters, undo, input methods, and platform support. |
 | [Style declarations][style-reference] | All `style!` declarations, accepted values, units, transforms, and transitions. |
 | [Scene runtime][scenes-reference] | Callbacks, input, scheduling, stack operations, faults, and effects. |
 | [Theme store and context][themes-reference] | Typed lookup, snapshots, live bindings, and inheritance. |
@@ -22,6 +23,7 @@ Look up supported syntax, type contracts, and scheduling rules from any chapter.
 [paint-reference]: paint-mask-and-textures.md
 [style-reference]: style.md
 [focus-reference]: focus-and-keyboard.md
+[text-input-reference]: text-input.md
 [layers-reference]: layers-and-overlays.md
 [conventions-reference]: component-conventions.md
 [scenes-reference]: scene.md
