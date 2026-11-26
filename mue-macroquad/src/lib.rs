@@ -85,7 +85,7 @@ pub use paint::clip::Sector;
 pub use paint::material::{UiMaterial, UniformValue, with_material};
 pub use paint::render::RenderStateGuard;
 pub use paint::shader::SharedTexture;
-pub use paint::shadow::{Shadow, ShadowCache};
+pub use paint::shadow::{BoxShadow, BoxShadows, ShadowCache};
 pub use paint::texture::{SafeTexture, flush_pending_texture_deletions};
 
 /// Install a callback for waking a blocking host event loop when a task is woken.

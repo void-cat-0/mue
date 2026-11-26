@@ -50,6 +50,23 @@ pub(super) fn declaration(
             length(input, host, false, false, true, false)?,
         ),
         "border" | "outline" => line_shorthand(name, input, host)?,
+        "box-shadow" => {
+            let ty = quote!(#host::paint::shadow::BoxShadows);
+            let value = if let Some(expr) = expression_with_token(input, &ty)? {
+                expr
+            } else if input.peek(Ident) && input.fork().parse::<Ident>()? == "none" {
+                input.parse::<Ident>()?;
+                quote!(#ty::none())
+            } else {
+                let mut shadows = vec![box_shadow(input, host)?];
+                while input.peek(Token![,]) {
+                    input.parse::<Token![,]>()?;
+                    shadows.push(box_shadow(input, host)?);
+                }
+                quote!(#ty::from([#(#shadows),*]))
+            };
+            setter("box_shadow", value)
+        }
         "backdrop-filter" => {
             let ty = quote!(#host::style::Size);
             let value = if let Some(expr) = expression_with_token(input, &ty)? {
@@ -159,4 +176,35 @@ fn line_shorthand(name: &str, input: ParseStream, host: &TokenStream) -> Result<
         Some(paint) => quote!(#style.#width_method(#width).#color_method(#paint)),
         None => quote!(#style.#width_method(#width)),
     })
+}
+
+/// One `box-shadow` layer: `<x> <y> [<blur> [<spread>]] <color>`, with the
+/// color first or last, as in CSS. Lengths are pixels and may be negative.
+fn box_shadow(input: ParseStream, host: &TokenStream) -> Result<TokenStream> {
+    let mut lengths = Vec::new();
+    let mut paint = None;
+    while !end(input) && !input.peek(Token![,]) {
+        let starts_number = input.peek(LitInt)
+            || input.peek(LitFloat)
+            || input.peek(Token![.])
+            || input.peek(Token![-]);
+        if starts_number && paint.is_none() || starts_number && lengths.len() < 2 {
+            lengths.push(pixel_number(input)?);
+        } else if input.peek(Ident) && input.fork().parse::<Ident>()? == "inset" {
+            return Err(input.error("inset shadows are not supported"));
+        } else if paint.is_none() {
+            paint = Some(color(input, host)?);
+        } else {
+            return Err(input.error("expected `box-shadow: <x> <y> [<blur> [<spread>]] <color>`"));
+        }
+    }
+    if !(2..=4).contains(&lengths.len()) {
+        return Err(input.error("a shadow needs two to four lengths: x, y, blur, spread"));
+    }
+    let paint =
+        paint.unwrap_or_else(|| quote!(#host::paint::color::Color::from_rgba(0, 0, 0, 255)));
+    let (x, y) = (lengths[0], lengths[1]);
+    let blur = lengths.get(2).copied().unwrap_or(0.).max(0.);
+    let spread = lengths.get(3).copied().unwrap_or(0.);
+    Ok(quote!(#host::paint::shadow::BoxShadow::new(#x, #y, #blur, #paint).spread(#spread)))
 }

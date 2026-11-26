@@ -8,7 +8,7 @@ use macroquad::prelude::{Conf, clear_background, next_frame};
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, Shadow,
+    App, BoxShadows,
     math::{Rect, Vector, vec2},
     motion::presence::{PresenceAnimation, presence},
     node::{NodeHandle, shader_box},
@@ -206,7 +206,7 @@ fn layers_row(menu_open: bool) -> impl Component {
                         padding: 6px; background: #2a3345; border-radius: 10px;
                         border: 1px solid #3b4862; flex-direction: column; min-width: 180px;
                     })
-                    .shadow(Shadow::new(18., 10.))
+                    .box_shadow(BoxShadows::elevation(12.))
                     .children((menu_item("Rename"), menu_item("Duplicate"), menu_item("Delete")))
             })
             .animation(PresenceAnimation::fade().slide(0., -6.))

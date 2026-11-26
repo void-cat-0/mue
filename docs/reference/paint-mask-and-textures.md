@@ -52,36 +52,39 @@ hidden retained nodes too. Paint-building callbacks and their property producers
 should be pure geometry/value computations, not recursively draw or build nodes
 while the shared tessellator is borrowed.
 
-### Shadow declarations
+### Box shadows
 
-`Style::shadow(Shadow::new(elevation, radius))` draws a drop shadow behind the
-background; use the same radius as `border-radius`. The shadow follows the
-node transform (rotation and scale). Shadows are drawn by `use_background`, so
-custom nodes must call `use_container` or `use_background`. Shadow geometry is a
-stack-built quad with fixed indices, submitted on the immediate path without
-temporary `Shapes` or geometry `Vec`s. Material uniform snapshots and batch-buffer
-growth may still allocate. Shadow-mask admission defaults to `ShadowCache::Auto`:
+`box-shadow` works as in CSS: each layer is the border box moved by an
+offset, grown by a spread, and blurred, with the node's corner radius (per-corner
+radii use their average). Several layers stack, and the first draws on top.
+Like CSS outer shadows, a shadow never shows through the node, so translucent
+panels stay clean. Shadows follow the node transform and add paint around the
+node without changing its layout bounds. They are drawn by `use_background`, so
+custom nodes must call `use_container` or `use_background`.
 
 ```rust
-use mue::{prelude::*, renderer::{Shadow, ShadowCache}};
+use mue::{prelude::*, renderer::{BoxShadow, BoxShadows, ShadowCache, paint::color::Color}};
 
-let auto = flexbox().shadow(Shadow::new(18., 16.)); // Auto when unset
+// In a declaration: x, y, blur, optional spread, and a color.
+let card = flexbox().style(style! {
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.25);
+});
 
-let disabled = flexbox()
-    .shadow(Shadow::new(18., 16.))
-    .shadow_cache(false); // always analytic (Disabled)
+// From code: one shadow, a list, or a preset that grows with elevation.
+let chip = flexbox().box_shadow(BoxShadow::new(0., 2., 6., Color::from_rgba(0, 0, 0, 90)));
+let menu = flexbox().box_shadow(BoxShadows::elevation(10.));
 
-let enabled = flexbox()
-    .shadow(Shadow::new(18., 16.))
-    .shadow_cache_policy(ShadowCache::Enabled); // bypass the Auto admission heuristic
+// The blur integral can be baked into a shared mask texture (native OpenGL).
+let fixed = flexbox()
+    .box_shadow(BoxShadows::elevation(16.))
+    .shadow_cache_policy(ShadowCache::Enabled);
 ```
 
-The existing `.shadow_cache(true/false)` API still accepts bool, `Prop<bool>` and
-bool signals; true means Enabled, false means Disabled. Use `.shadow_cache_policy`
-with `ShadowCache::{Auto, Enabled, Disabled}` or a reactive policy signal. These
-setters write the same property; the last setter wins. Declared/take accessors now
-return `Prop<ShadowCache>` rather than bool. The fluent API does not add a CSS
-`shadow-cache` or `box-shadow` declaration to `style!`.
+Blurred layers are analytic by default; stable, large shadows may be baked into a
+shared, bounded mask pool. `.shadow_cache(true/false)` and
+`.shadow_cache_policy(ShadowCache::{Auto, Enabled, Disabled})` choose the
+admission policy (Auto when unset). Each layer keeps its own cache state.
 
 <figure class="mue-chart">
 

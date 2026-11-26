@@ -14,6 +14,16 @@ macro_rules! define_style {
             self
         }
     };
+    (@setter $(#[$doc:meta])* box_shadow, $ty:ty) => {
+        $(#[$doc])*
+        ///
+        /// Accepts one [`BoxShadow`](crate::paint::shadow::BoxShadow), an
+        /// array or `Vec` of them, [`BoxShadows`], or a reactive value.
+        fn box_shadow(mut self, value: impl crate::paint::shadow::IntoBoxShadows) -> Self {
+            self.style_mut().put_box_shadow(value.into_box_shadows());
+            self
+        }
+    };
     (@setter $(#[$doc:meta])* transform_list, $ty:ty) => {
         $(#[$doc])*
         fn transform_list(mut self, value: impl Into<Prop<Transform>>) -> Self {

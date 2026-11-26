@@ -145,7 +145,7 @@ taps are swallowed; a backdrop tap or Escape only dismisses when
 for the building blocks.
 
 ```rust,no_run
-use mue::{components::overlay_host, prelude::*, renderer::Shadow};
+use mue::{components::overlay_host, prelude::*};
 
 let open = signal(false);
 overlay_host(
@@ -159,7 +159,7 @@ overlay_host(
             gap: 12px;
             align-items: center;
         })
-        .shadow(Shadow::new(18., 16.))
+        .style(style! { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); })
         .children((
             text("Paused"),
             button("Resume")

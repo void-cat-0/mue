@@ -2,7 +2,7 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    Shadow,
+    BoxShadows,
     input::back::{can_go_back, dispatch_back, use_back_handler},
     input::cursor::Cursor,
     motion::presence::{PresenceAnimation, presence},
@@ -151,7 +151,7 @@ fn popover_card() -> Node {
                             border-color: {border()};
                             background: {panel_brush()};
                         })
-                        .shadow(Shadow::new(16., 10.))
+                        .box_shadow(BoxShadows::elevation(10.))
                         .children((
                             menu_item("Rename", open),
                             menu_item("Duplicate", open),

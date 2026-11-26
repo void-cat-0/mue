@@ -15,10 +15,8 @@ pub mod units;
 
 pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
 
-pub use crate::paint::shadow::ShadowCache;
-use crate::{
-    paint::clip::Sector, paint::color::Color, paint::shader::Brush, paint::shadow::Shadow,
-};
+pub use crate::paint::shadow::{BoxShadow, BoxShadows, ShadowCache};
+use crate::{paint::clip::Sector, paint::color::Color, paint::shader::Brush};
 use cosmic_text::Align;
 use cosmic_text::{FamilyOwned, Weight};
 pub use ext::StyleableExt;
@@ -140,8 +138,9 @@ define_style! {
     outline_color: Brush = Brush::default();
     /// Distance between the border box and the outline; negative values inset it.
     outline_offset: Size = Size::Px(0.);
-    /// Draw a drop shadow behind the background.
-    shadow: Shadow;
+    /// Shadows behind the background, as in CSS `box-shadow`; the first draws
+    /// on top. They follow the corner radius and never show through the node.
+    box_shadow: BoxShadows;
     /// Select shared mask admission (Auto by default). Exact resident masks reuse immediately;
     /// new masks require stable parameters, and Auto also requires substantial recent coverage.
     /// Currently native OpenGL only; unsupported, small or changing shadows stay analytic.

@@ -20,7 +20,7 @@ use macroquad::{
 
 use mue_core::signal::Access;
 
-use super::{Shadow, ShadowCache};
+use super::{ShadowCache, ShadowShape};
 use crate::{
     math::{Matrix, Rect, model_matrix},
     paint::Paint,
@@ -56,13 +56,13 @@ const BAKE_FRAGMENT: &str = concat!(
 precision highp float;
 varying highp vec2 v_pos;
 uniform highp vec4 rect;
-uniform highp float elevation;
+uniform highp float sigma;
 uniform highp float radius;
 "#,
     include_str!("functions.glsl"),
     r#"
 void main() {
-    float alpha = roundedBoxShadowIntegral(rect.xy, rect.zw, v_pos, elevation, radius);
+    float alpha = roundedBoxShadowIntegral(rect.xy, rect.zw, v_pos, sigma, radius);
     gl_FragColor = vec4(1.0, 1.0, 1.0, alpha);
 }
 "#
@@ -70,12 +70,14 @@ void main() {
 
 // Keep the sharp interior cutout analytic, so bilinear filtering cannot leak
 // a cached shadow into a transparent panel. Only the expensive soft integral
-// is sampled. These equations match roundedBoxShadow before its y shift.
+// is sampled. The cutout uses the node box; the mask covers the shadow box.
 const SAMPLE_FRAGMENT_PREFIX: &str = concat!(
     r#"#version 100
 precision highp float;
 varying highp vec2 v_pos;
 uniform highp vec4 rect;
+uniform highp vec4 box;
+uniform highp float box_radius;
 uniform highp vec4 mask_bounds;
 uniform highp float radius;
 uniform highp vec4 color;
@@ -89,7 +91,7 @@ uniform sampler2D Texture;
 const SAMPLE_FRAGMENT_SUFFIX: &str = r#"
 void main() {
     vec2 point = (inverse_model * vec4(v_pos, 0.0, 1.0)).xy;
-    float factor = roundedBoxCutout(rect.xy, rect.zw, point, radius);
+    float factor = roundedBoxCutout(box.xy, box.zw, point, box_radius);
     vec2 uv = (point - rect.xy - mask_bounds.xy) / mask_bounds.zw;
     uv.y = 1.0 - uv.y;
     float alpha = texture2D(Texture, uv).a * factor;
@@ -121,7 +123,7 @@ pub struct ShadowMaskCacheStats {
 struct Key {
     width: f32,
     height: f32,
-    elevation: f32,
+    sigma: f32,
     radius: f32,
     pixels: (u32, u32),
 }
@@ -130,7 +132,7 @@ impl Key {
         self.pixels.0 as usize * self.pixels.1 as usize * 4
     }
     fn bounds(self) -> Rect {
-        let reach = self.elevation * 3.;
+        let reach = self.sigma * 3.;
         let w = self.width + 2. * reach;
         let h = self.height + 2. * reach;
         let pad_x = w / (self.pixels.0 - 2) as f32;
@@ -178,13 +180,14 @@ impl ShadowMaskState {
     pub(crate) fn draw(
         &mut self,
         paint: &Paint,
-        rect: Rect,
-        shadow: Shadow,
+        shape: &ShadowShape,
         transform: Matrix,
         inverse: Matrix,
         policy: ShadowCache,
     ) -> bool {
-        let Some(candidate) = candidate_for(paint, rect, shadow, transform) else {
+        let shape = *shape;
+        let rect = shape.rect;
+        let Some(candidate) = candidate_for(paint, &shape, transform) else {
             self.reset();
             POOL.with_borrow_mut(|pool| pool.stats.fallbacks += 1);
             return false;
@@ -218,7 +221,7 @@ impl ShadowMaskState {
                 texture
             } else {
                 let admitted = policy == ShadowCache::Enabled
-                    || pool.observe(key, self.id, candidate.halo_pixels(rect), now);
+                    || pool.observe(key, self.id, candidate.halo_pixels(shape.box_rect), now);
                 if state.resident {
                     // An evicted node waits again rather than rebaking every draw.
                     state.resident = false;
@@ -249,6 +252,8 @@ impl ShadowMaskState {
                 let sampler = samplers.entry(clip_depth).or_insert_with(|| {
                     let mut uniforms = vec![
                         UniformDesc::new("rect", UniformType::Float4),
+                        UniformDesc::new("box", UniformType::Float4),
+                        UniformDesc::new("box_radius", UniformType::Float1),
                         UniformDesc::new("mask_bounds", UniformType::Float4),
                         UniformDesc::new("radius", UniformType::Float1),
                         UniformDesc::new("color", UniformType::Float4),
@@ -265,7 +270,7 @@ impl ShadowMaskState {
                 };
                 sampler.clone()
             };
-            let reach = shadow.elevation * 3.;
+            let reach = shape.sigma * 3.;
             let expanded = Rect::new(
                 rect.x - reach,
                 rect.y - reach,
@@ -278,16 +283,19 @@ impl ShadowMaskState {
             material.with(|| {
                 crate::paint::clip::apply_active_clip_uniforms(&material, None);
                 material.set_uniform("rect", vec4(rect.x, rect.y, rect.right(), rect.bottom()));
+                let b = shape.box_rect;
+                material.set_uniform("box", vec4(b.x, b.y, b.right(), b.bottom()));
+                material.set_uniform("box_radius", shape.box_radius);
                 let bounds = key.bounds();
                 material.set_uniform("mask_bounds", vec4(bounds.x, bounds.y, bounds.w, bounds.h));
                 material.set_uniform("radius", key.radius);
                 material.set_uniform(
                     "color",
                     vec4(
-                        shadow.color.r,
-                        shadow.color.g,
-                        shadow.color.b,
-                        shadow.color.a * paint.opacity(),
+                        shape.color.r,
+                        shape.color.g,
+                        shape.color.b,
+                        shape.color.a * paint.opacity(),
                     ),
                 );
                 material.set_uniform("inverse_model", model_matrix(inverse));
@@ -314,12 +322,8 @@ impl Candidate {
     }
 }
 
-fn candidate_for(
-    paint: &Paint,
-    rect: Rect,
-    shadow: Shadow,
-    transform: Matrix,
-) -> Option<Candidate> {
+fn candidate_for(paint: &Paint, shape: &ShadowShape, transform: Matrix) -> Option<Candidate> {
+    let rect = shape.rect;
     // Outside node mounting, Paint may bake a separate transform which the
     // legacy shadow shader does not include in inverse_model. Preserve that path.
     if cfg!(target_arch = "wasm32")
@@ -327,17 +331,10 @@ fn candidate_for(
         || transform.y_axis.z != 0.
         || transform.z_axis.z != 1.
         || paint.transform.get() != Matrix::IDENTITY
-        || ![
-            rect.x,
-            rect.y,
-            rect.w,
-            rect.h,
-            shadow.elevation,
-            shadow.radius,
-        ]
-        .into_iter()
-        .all(f32::is_finite)
-        || shadow.elevation < 1.
+        || ![rect.x, rect.y, rect.w, rect.h, shape.sigma, shape.radius]
+            .into_iter()
+            .all(f32::is_finite)
+        || shape.sigma < 1.
     {
         return None;
     }
@@ -387,16 +384,16 @@ fn candidate_for(
     }
     // Two samples/device pixel; quantized density avoids tiny scale jitter.
     let density = (scale.max(1.) * 4. - 0.0001).ceil() * 0.5;
-    let w = ((rect.w + 6. * shadow.elevation) * density).ceil() + 2.;
-    let h = ((rect.h + 6. * shadow.elevation) * density).ceil() + 2.;
+    let w = ((rect.w + 6. * shape.sigma) * density).ceil() + 2.;
+    let h = ((rect.h + 6. * shape.sigma) * density).ceil() + 2.;
     if w < 3. || h < 3. || w > MAX_SIDE as f32 || h > MAX_SIDE as f32 {
         return None;
     }
     let key = Key {
         width: rect.w,
         height: rect.h,
-        elevation: shadow.elevation,
-        radius: shadow.radius.min(rect.w.min(rect.h) * 0.5),
+        sigma: shape.sigma,
+        radius: shape.radius,
         pixels: (w as u32, h as u32),
     };
     if key.bytes() > MAX_MASK_BYTES {
@@ -422,14 +419,14 @@ fn candidate_for(
     } else {
         clip
     };
-    let reach = shadow.elevation * 3.;
+    let reach = shape.sigma * 3.;
     let expanded = Rect::new(
         rect.x - reach,
         rect.y - reach,
         rect.w + 2. * reach,
         rect.h + 2. * reach,
     );
-    let visible_pixels = if clip_inside_box(m, viewport, clip, rect, key.radius) {
+    let visible_pixels = if clip_inside_box(m, viewport, clip, shape.box_rect, shape.box_radius) {
         0.
     } else {
         projected_area(m, expanded, viewport, clip)?
@@ -908,6 +905,8 @@ impl Resources {
         }
         let sampler_uniforms = vec![
             UniformDesc::new("rect", UniformType::Float4),
+            UniformDesc::new("box", UniformType::Float4),
+            UniformDesc::new("box_radius", UniformType::Float1),
             UniformDesc::new("mask_bounds", UniformType::Float4),
             UniformDesc::new("radius", UniformType::Float1),
             UniformDesc::new("color", UniformType::Float4),
@@ -934,7 +933,7 @@ impl Resources {
 struct BakeUniforms {
     bounds: [f32; 4],
     rect: [f32; 4],
-    elevation: f32,
+    sigma: f32,
     radius: f32,
 }
 struct Baker {
@@ -957,7 +956,7 @@ impl Baker {
                         uniforms: vec![
                             UniformDesc::new("bounds", UniformType::Float4),
                             UniformDesc::new("rect", UniformType::Float4),
-                            UniformDesc::new("elevation", UniformType::Float1),
+                            UniformDesc::new("sigma", UniformType::Float1),
                             UniformDesc::new("radius", UniformType::Float1),
                         ],
                     },
@@ -1010,7 +1009,7 @@ impl Baker {
             ctx.apply_uniforms(UniformsSource::table(&BakeUniforms {
                 bounds: [bounds.x, bounds.y, bounds.w, bounds.h],
                 rect: [0., 0., key.width, key.height],
-                elevation: key.elevation,
+                sigma: key.sigma,
                 radius: key.radius,
             }));
             ctx.draw(0, 6, 1);

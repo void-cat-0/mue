@@ -10,7 +10,7 @@ use macroquad::prelude::*;
 use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, Sector, Shadow, UiMaterial,
+    App, BoxShadows, Sector, UiMaterial,
     math::{Matrix, Rect as MueRect, vec2},
     node::{BuildNode, Node, NodeContext, flexbox, flexbox::use_container, use_rect},
     paint::color::Color as MueColor,
@@ -229,7 +229,7 @@ fn ui() -> impl Component {
                         .background(PANEL)
                         .radius(Size::Px(16.)),
                 )
-                .shadow(Shadow::new(10., 16.)),
+                .box_shadow(BoxShadows::elevation(8.)),
             flexbox()
                 .style(
                     Style::new()

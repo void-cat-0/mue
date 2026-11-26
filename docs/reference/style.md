@@ -122,6 +122,7 @@ let banner = flexbox().style(style! { grid-column: 1 / -1; });
 | `outline-width`, `outline-color`, `outline-offset` | Outline width, paint, and distance from the border box (offset may be negative) |
 | `outline` | `none`, or a width, an optional `solid`, and a color: `outline: 2px #7fd1a8` |
 | `opacity` | A fraction or percentage clamped into `0..=1` by the literal parser, or `{f32}` |
+| `box-shadow` | `none`, `{BoxShadows}`, or comma-separated layers of `<x> <y> [<blur> [<spread>]] <color>` in px; the first layer draws on top ([rendering][paint-reference]) |
 | `backdrop-filter` | `blur(Npx)`, `none`, or `{Size}`; blurs what is behind the node ([rendering][paint-reference]) |
 | `cursor` | `auto`, `default`, `pointer`, `text`, `crosshair`, `move`, `not-allowed`, `wait`, `help`, `ew-resize`, `ns-resize`, `nesw-resize`, `nwse-resize`, or `{Cursor}`; see [cursors][focus-reference] |
 

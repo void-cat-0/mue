@@ -857,13 +857,13 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let outline_offset =
         crate::style::units::resolve_length(style.take_outline_offset(), "outline-offset");
     let outline_color = style.take_outline_color();
-    let shadow = style.take_shadow();
+    let shadows = style.take_box_shadow();
     let shadow_cache = style.take_shadow_cache();
     let backdrop_blur =
         crate::style::units::resolve_length(style.take_backdrop_blur(), "backdrop-blur");
     let backdrop = (!matches!(backdrop_blur, Prop::Static(blur) if blur <= 0.))
         .then(crate::paint::offscreen::backdrop_user);
-    let mut shadow_mask = crate::paint::shadow::ShadowMaskState::default();
+    let mut shadow_masks: Vec<crate::paint::shadow::ShadowMaskState> = Vec::new();
     let paint = use_paint(style);
     let border = crate::node::NodeInner::with_mut(|node| *node.layout.border);
     // Default transparent containers need no cache, even during inherited opacity changes.
@@ -928,19 +928,19 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     style.on_render.append(move |_| {
         let rect = rect.get();
         if rect.w <= 0. || rect.h <= 0. {
-            shadow_mask.reset();
+            shadow_masks.clear();
             return;
         }
-        if let Some(shadow) = shadow.try_get() {
-            crate::paint::shadow::draw_shadow(
+        match shadows.try_get_clone() {
+            Some(list) if !list.is_empty() => crate::paint::shadow::draw_box_shadows(
                 &paint,
                 rect,
-                shadow,
+                radii.get().fit(rect),
+                &list,
                 shadow_cache.get(),
-                &mut shadow_mask,
-            );
-        } else {
-            shadow_mask.reset();
+                &mut shadow_masks,
+            ),
+            _ => shadow_masks.clear(),
         }
         if backdrop.is_some() {
             let blur = backdrop_blur.get();

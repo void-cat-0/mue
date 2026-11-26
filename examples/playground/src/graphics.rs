@@ -1,15 +1,13 @@
 use super::{assets, controls::*, halftone};
 use mue_components::*;
-use mue_core::prelude::*;
 use mue_macroquad::{
-    Shadow,
+    BoxShadow, BoxShadows,
     math::{Rect, Vector, vec2},
     paint::color::Color,
     paint::offscreen::{Filter, offscreen},
     paint::shader::{ColorStop, linear_gradient, radial_gradient, solid},
     style::{Styleable, StyleableExt},
 };
-use std::rc::Rc;
 
 const PAGE: &str = "Graphics";
 
@@ -144,21 +142,38 @@ fn paint_card() -> Node {
 }
 
 fn shadow_card() -> Node {
-    let (elevation, elevation_control) = segmented(
-        "Elevation",
-        vec![("2", 2.), ("8", 8.), ("16", 16.), ("32", 32.)],
+    let black = |alpha: u8| Color::from_rgba(0, 0, 0, alpha);
+    let (shadow, shadow_control) = segmented(
+        "Shadow",
+        vec![
+            ("Elevation 4", BoxShadows::elevation(4.)),
+            ("Elevation 12", BoxShadows::elevation(12.)),
+            ("Elevation 24", BoxShadows::elevation(24.)),
+            ("Hard offset", BoxShadow::new(8., 8., 0., black(160)).into()),
+            (
+                "Glow + spread",
+                BoxShadow::new(0., 0., 24., BLUE).spread(4.).into(),
+            ),
+            (
+                "Layered",
+                BoxShadows::from([
+                    BoxShadow::new(0., 1., 2., black(90)),
+                    BoxShadow::new(0., 12., 32., black(70)).spread(-4.),
+                    BoxShadow::new(-16., -16., 0., CORAL),
+                ]),
+            ),
+        ],
     );
     let (radius, radius_control) =
         segmented("Corner radius", vec![("0", 0.), ("12", 12.), ("40", 40.)]);
-    let shadow = computed(move |_| Shadow::new(elevation.get(), radius.get()));
     card(
-        "Shadows",
-        "Soft shadows follow the rounded shape and animate with it.",
+        "Box shadows",
+        "CSS box-shadow: offset, blur, spread, and color, in layers. Shadows follow the corner radius and never show through the box.",
         (
-            elevation_control,
+            shadow_control,
             radius_control,
             center()
-                .style(mue_macroquad::style! { width: 100%; height: {u(180.)}; })
+                .style(mue_macroquad::style! { width: 100%; height: {u(200.)}; })
                 .children(
                     center()
                         .style(mue_macroquad::style! {
@@ -167,10 +182,10 @@ fn shadow_card() -> Node {
                             border-radius: {radius.map(mue_macroquad::style::Size::Px)};
                             transition: 200ms ease-out;
                         })
-                        .shadow(shadow)
-                        .children(text(elevation.map(|e| Rc::<str>::from(format!("elevation {e:.0}")))).style(
-                            mue_macroquad::style! { font-size: {f(14.)}; line-height: {u(20.)}; color: {muted()}; },
-                        )),
+                        .box_shadow(shadow)
+                        .children(text("box-shadow").style(mue_macroquad::style! {
+                            font-size: {f(14.)}; line-height: {u(20.)}; color: {muted()};
+                        })),
                 ),
         ),
     )
