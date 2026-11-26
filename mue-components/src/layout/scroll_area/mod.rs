@@ -1,3 +1,12 @@
+//! The scroll area: a clipped viewport with touch, wheel, and mouse
+//! scrolling, momentum, overlay scrollbars, pull to refresh, load more, and
+//! focus reveal.
+
+mod gesture;
+mod refresh;
+mod scrollbar;
+mod state;
+
 use mue_macroquad::node::flexbox::flexbox;
 use std::{cell::RefCell, rc::Rc};
 
@@ -5,15 +14,9 @@ use mue_core::prelude::*;
 use taffy::Overflow;
 
 use mue_macroquad::{
-    input::gesture::Gesture,
-    input::pointer::{
-        ButtonState, ClaimToken, PointerAction, PointerEvent, PointerId, PointerType,
-    },
     layout::use_layout,
     math::{Rect, Vector},
     node::{BuildNode, IntoChildren, IntoNode, Node, NodeContext, NodeHandle, NodeRef},
-    paint::color::Color,
-    paint::path::{FillRule, PathData},
     paint::{use_background, use_paint},
     style::{Style, Styleable, StyleableExt},
 };
@@ -26,26 +29,10 @@ thread_local! {
 /// Space kept between a revealed caret and the keyboard or viewport edge.
 const REVEAL_MARGIN: f32 = 16.;
 
-type Action = Rc<RefCell<dyn FnMut()>>;
-
-/// Pull-to-refresh configuration.
-#[derive(Clone)]
-struct Refresh {
-    refreshing: Signal<bool>,
-    action: Action,
-    /// Pull distance that triggers a refresh on release.
-    threshold: f32,
-    /// Height the content stays pulled down while refreshing.
-    hold: f32,
-}
-
-/// Load-more configuration and its edge-trigger state.
-struct ReachEnd {
-    threshold: f32,
-    action: Action,
-    armed: bool,
-    last_max: f32,
-}
+use gesture::ScrollGesture;
+use refresh::draw_refresh_indicator;
+use scrollbar::Scrollbars;
+use state::{Action, ReachEnd, Refresh, ScrollState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScrollAxis {
@@ -86,7 +73,10 @@ pub struct ScrollOptions {
     pub max_velocity: f32,
     /// Allow an ancestor to scroll when this area cannot move in the requested direction.
     pub chain: bool,
-    /// Show and enable draggable overlay scrollbars when content overflows.
+    /// Overlay scrollbars when content overflows: a thin thumb that shows
+    /// while scrolling and fades out when idle, widens with a track when the
+    /// mouse comes near the edge, and can be dragged (clicking the track
+    /// jumps there).
     pub scrollbars: bool,
 }
 
@@ -309,7 +299,13 @@ impl BuildNode for ScrollAreaBuilder {
         assert!(options.friction.is_finite() && options.friction > 0.);
         assert!(options.max_velocity.is_finite() && options.max_velocity >= 0.);
         let node = NodeHandle::new();
-        ctx.push_style(style.node_handle(node));
+        let mut hovered = None;
+        let style = style.node_handle(node).with_hovered(|style, signal| {
+            hovered = Some(signal);
+            style
+        });
+        let hovered = hovered.expect("with_hovered runs its callback");
+        ctx.push_style(style);
         SCROLL_AREAS.with(|areas| {
             let mut areas = areas.borrow_mut();
             areas.retain(|area| area.get_untracked().is_some());
@@ -342,6 +338,7 @@ impl BuildNode for ScrollAreaBuilder {
                     last_max: 0.,
                 }),
                 animation: None,
+                bars: Scrollbars::default(),
             }));
             if let Some(handle) = &handle {
                 *handle.0.borrow_mut() = Rc::downgrade(&state);
@@ -432,6 +429,11 @@ impl BuildNode for ScrollAreaBuilder {
                     if reveal.replace(false) {
                         reveal_focused(node, &mut state.borrow_mut());
                     }
+                    {
+                        let mut state = state.borrow_mut();
+                        let layout = state.bar_layout();
+                        state.bars.advance(&layout, *dt);
+                    }
                     // Run callbacks after releasing the state.
                     let action = state.borrow_mut().advance(*dt);
                     if let Some(action) = action {
@@ -439,6 +441,24 @@ impl BuildNode for ScrollAreaBuilder {
                     }
                 }
             });
+            style.on_hover_event.append({
+                let state = state.clone();
+                move |event| {
+                    let mut state = state.borrow_mut();
+                    let layout = state.bar_layout();
+                    state.bars.hover(&layout, Some(event.position()));
+                }
+            });
+            {
+                let state = state.clone();
+                watch(hovered, move |hovered| {
+                    if !hovered.get() {
+                        let mut state = state.borrow_mut();
+                        let layout = state.bar_layout();
+                        state.bars.hover(&layout, None);
+                    }
+                });
+            }
             style.on_wheel_event.append({
                 let state = state.clone();
                 move |event| {
@@ -475,25 +495,9 @@ impl BuildNode for ScrollAreaBuilder {
                     if let Some(refresh) = &state.refresh {
                         draw_refresh_indicator(&paint, &state, refresh);
                     }
-                    if !options.scrollbars {
-                        return;
+                    if options.scrollbars {
+                        state.bars.draw(&paint, &state.bar_layout());
                     }
-                    paint.draw(|p| {
-                        for axis in 0..2 {
-                            if let Some((track, thumb)) = state.bar(axis) {
-                                p.fill(
-                                    &PathData::rounded_rect(track, 3.),
-                                    FillRule::NonZero,
-                                    Color::from_rgba(128, 128, 128, 40),
-                                );
-                                p.fill(
-                                    &PathData::rounded_rect(thumb, 3.),
-                                    FillRule::NonZero,
-                                    Color::from_rgba(128, 128, 128, 180),
-                                );
-                            }
-                        }
-                    });
                 }
             });
             mue_macroquad::node::add_gesture(ScrollGesture {
@@ -505,11 +509,7 @@ impl BuildNode for ScrollAreaBuilder {
                 if !state.viewport.contains(&pos) {
                     return;
                 }
-                let on_bar = (0..2).any(|axis| {
-                    state
-                        .bar(axis)
-                        .is_some_and(|(track, _)| track.contains(&pos))
-                });
+                let on_bar = options.scrollbars && state.bars.blocks(&state.bar_layout(), pos);
                 drop(state);
                 if !on_bar {
                     let children = node.children();
@@ -572,399 +572,5 @@ fn reveal_focused(area: NodeHandle, state: &mut ScrollState) {
     if delta != Vector::ZERO {
         state.velocity = Vector::ZERO;
         state.scroll_by(delta);
-    }
-}
-
-/// Draw the pull-to-refresh indicator: an arc that grows with the pull and
-/// spins while refreshing.
-fn draw_refresh_indicator(
-    paint: &mue_macroquad::paint::Paint,
-    state: &ScrollState,
-    refresh: &Refresh,
-) {
-    use std::f32::consts::PI;
-    let pull = state.pull.get_untracked();
-    let refreshing = refresh.refreshing.get_untracked();
-    if pull < 0.5 && !refreshing {
-        return;
-    }
-    let radius = 9.;
-    let center = Vector::new(
-        state.viewport.center().x,
-        state.viewport.y + (pull / 2.).max(radius + 6.).min(refresh.hold / 2. + 8.),
-    );
-    let (start, sweep) = if refreshing {
-        let spin = (mue_macroquad::app::runtime::get_time() * 5.) % (2. * PI);
-        (spin, 1.5 * PI)
-    } else {
-        let progress = (pull / refresh.threshold).clamp(0., 1.);
-        (-PI / 2., progress * 1.75 * PI)
-    };
-    let end = start + sweep.max(0.05);
-    let point = |angle: f32| center + Vector::new(angle.cos(), angle.sin()) * radius;
-    let (a, b) = (point(start), point(end));
-    let arc = format!(
-        "M{} {} A{radius} {radius} 0 {} 1 {} {}",
-        a.x,
-        a.y,
-        u8::from(sweep > PI),
-        b.x,
-        b.y
-    );
-    let Ok(arc) = PathData::parse(&arc) else {
-        return;
-    };
-    let alpha = if refreshing {
-        1.
-    } else {
-        (pull / refresh.threshold).clamp(0.3, 1.)
-    };
-    paint.draw(|p| {
-        p.fill(
-            &PathData::circle(center, radius + 7.),
-            FillRule::NonZero,
-            Color::new(0.16, 0.19, 0.27, alpha),
-        );
-        p.stroke(
-            &arc,
-            &mue_macroquad::paint::path::StrokeStyle::round(2.5),
-            Color::new(0.55, 0.72, 1., alpha),
-        );
-    });
-}
-
-struct ScrollState {
-    offset: Signal<Vector>,
-    options: ScrollOptions,
-    max: Vector,
-    viewport: Rect,
-    velocity: Vector,
-    drag: Option<Drag>,
-    last_offset: Vector,
-    /// Pull-to-refresh distance past the top.
-    pull: Signal<f32>,
-    refresh: Option<Refresh>,
-    end: Option<ReachEnd>,
-    /// A programmatic scroll in progress: from, to, elapsed fraction.
-    animation: Option<(Vector, Vector, f32)>,
-}
-
-impl ScrollState {
-    fn correct_offset(&mut self) {
-        // External navigation cancels an old fling. This also runs before the
-        // time step so an observer of prepared geometry can stop momentum.
-        if self.offset.get() != self.last_offset {
-            self.velocity = Vector::ZERO;
-        }
-        self.set_offset(self.offset.get());
-        self.last_offset = self.offset.get();
-    }
-
-    /// Advance momentum and pull springs; returns a load-more action to run.
-    fn advance(&mut self, dt: f32) -> Option<Action> {
-        self.advance_pull(dt);
-        self.advance_motion(dt);
-        self.check_end()
-    }
-
-    fn advance_pull(&mut self, dt: f32) {
-        let Some(refresh) = &self.refresh else {
-            return;
-        };
-        if self.drag.is_some() {
-            return;
-        }
-        let target = if refresh.refreshing.get_untracked() {
-            refresh.hold
-        } else {
-            0.
-        };
-        let pull = self.pull.get_untracked();
-        if (pull - target).abs() < 0.5 {
-            if pull != target {
-                self.pull.set(target);
-            }
-            return;
-        }
-        let rate = 1. - (-14. * dt.clamp(0., 0.05)).exp();
-        self.pull.set(pull + (target - pull) * rate);
-    }
-
-    fn check_end(&mut self) -> Option<Action> {
-        let offset = self.offset.get_untracked();
-        let end = self.end.as_mut()?;
-        if self.max.y > end.last_max + 0.5 {
-            // New content: arm again.
-            end.armed = true;
-        }
-        end.last_max = self.max.y;
-        let near = self.max.y - offset.y <= end.threshold;
-        if !near {
-            end.armed = true;
-            None
-        } else if end.armed {
-            end.armed = false;
-            Some(end.action.clone())
-        } else {
-            None
-        }
-    }
-
-    fn scroll_to(&mut self, target: Vector, animated: bool) {
-        let target = self.options.axis.mask(target).clamp(Vector::ZERO, self.max);
-        self.velocity = Vector::ZERO;
-        if animated {
-            self.animation = Some((self.offset.get_untracked(), target, 0.));
-        } else {
-            self.animation = None;
-            self.set_offset(target);
-            self.last_offset = self.offset.get_untracked();
-        }
-    }
-
-    fn advance_motion(&mut self, dt: f32) {
-        if let Some((from, to, t)) = self.animation {
-            if self.drag.is_some() {
-                // A touch takes over from the animation.
-                self.animation = None;
-            } else {
-                let t = (t + dt.clamp(0., 0.05) / 0.3).min(1.);
-                let eased = 1. - (1. - t) * (1. - t) * (1. - t);
-                self.set_offset(from + (to - from) * eased);
-                self.last_offset = self.offset.get_untracked();
-                self.animation = (t < 1.).then_some((from, to, t));
-                return;
-            }
-        }
-        self.correct_offset();
-        if self.drag.is_none() && self.options.momentum {
-            let dt = dt.clamp(0., 0.05);
-            let decay = (-self.options.friction * dt).exp();
-            let delta = self.velocity * (1. - decay) / self.options.friction;
-            let moved = self.scroll_by(delta);
-            if (moved.x - delta.x).abs() > 0.01 {
-                self.velocity.x = 0.;
-            }
-            if (moved.y - delta.y).abs() > 0.01 {
-                self.velocity.y = 0.;
-            }
-            self.velocity *= decay;
-            if self.velocity.length() < 5. {
-                self.velocity = Vector::ZERO;
-            }
-        }
-    }
-
-    fn set_offset(&self, value: Vector) {
-        let value = Vector::new(
-            if value.x.is_finite() { value.x } else { 0. },
-            if value.y.is_finite() { value.y } else { 0. },
-        );
-        self.offset
-            .set(self.options.axis.mask(value).clamp(Vector::ZERO, self.max));
-    }
-
-    fn scroll_by(&mut self, delta: Vector) -> Vector {
-        let old = self.offset.get();
-        self.set_offset(old + delta);
-        self.last_offset = self.offset.get();
-        self.last_offset - old
-    }
-
-    fn bar(&self, axis: usize) -> Option<(Rect, Rect)> {
-        if !self.options.scrollbars || self.max[axis] <= 0. {
-            return None;
-        }
-        let v = self.viewport;
-        let length = (v.size()[axis] - 12.).max(0.);
-        if length <= 0. {
-            return None;
-        }
-        let size = (length * v.size()[axis] / (v.size()[axis] + self.max[axis]))
-            .max(24.)
-            .min(length);
-        let start = (length - size) * self.offset.get()[axis] / self.max[axis];
-        Some(if axis == 0 {
-            (
-                Rect::new(v.x + 3., v.bottom() - 9., length, 6.),
-                Rect::new(v.x + 3. + start, v.bottom() - 9., size, 6.),
-            )
-        } else {
-            (
-                Rect::new(v.right() - 9., v.y + 3., 6., length),
-                Rect::new(v.right() - 9., v.y + 3. + start, 6., size),
-            )
-        })
-    }
-}
-
-struct Drag {
-    id: PointerId,
-    origin: Vector,
-    previous: Vector,
-    time: f32,
-    claimed: bool,
-    axis: ScrollAxis,
-    bar: Option<usize>,
-}
-
-struct ScrollGesture {
-    state: Rc<RefCell<ScrollState>>,
-}
-
-impl Gesture for ScrollGesture {
-    fn on_event(&mut self, event: &PointerEvent, token: &ClaimToken) {
-        let mut state = self.state.borrow_mut();
-        let options = state.options;
-        if let Some(drag) = &state.drag {
-            if drag.id != event.pointer_id() {
-                // A second finger stops the fling/drag; it is not treated as another pan.
-                state.drag = None;
-                state.velocity = Vector::ZERO;
-                token.dismiss();
-                return;
-            }
-        } else if event.action() == PointerAction::Down {
-            let bar = (0..2).find(|&axis| {
-                state
-                    .bar(axis)
-                    .is_some_and(|(track, _)| track.contains(&event.position()))
-            });
-            let allowed = match event.pointer_type() {
-                PointerType::Touch => options.touch,
-                PointerType::Mouse => {
-                    event.button_state().contains(ButtonState::PRIMARY)
-                        && (options.mouse_drag || bar.is_some())
-                }
-            };
-            if !allowed {
-                token.dismiss();
-                return;
-            }
-            state.velocity = Vector::ZERO;
-            let claimed = bar.is_some() && token.claim();
-            if bar.is_some() && !claimed {
-                token.dismiss();
-                return;
-            }
-            if let Some(axis) = bar {
-                let (track, thumb) = state.bar(axis).unwrap();
-                if !thumb.contains(&event.position()) {
-                    let mut offset = state.offset.get();
-                    let fraction =
-                        (event.position()[axis] - track.min()[axis] - thumb.size()[axis] / 2.)
-                            / (track.size()[axis] - thumb.size()[axis]).max(1.);
-                    offset[axis] = fraction * state.max[axis];
-                    state.set_offset(offset);
-                }
-            }
-            state.drag = Some(Drag {
-                id: event.pointer_id(),
-                origin: event.position(),
-                previous: event.position(),
-                time: event.time(),
-                claimed,
-                axis: options.axis,
-                bar,
-            });
-            return;
-        } else {
-            token.dismiss();
-            return;
-        }
-
-        let mut drag = state.drag.take().unwrap();
-        match event.action() {
-            PointerAction::Move => {
-                let total = event.position() - drag.origin;
-                if !drag.claimed {
-                    if total.length() <= options.drag_threshold {
-                        state.drag = Some(drag);
-                        return;
-                    }
-                    let dominant = if total.x.abs() > total.y.abs() {
-                        ScrollAxis::Horizontal
-                    } else {
-                        ScrollAxis::Vertical
-                    };
-                    if options.axis != ScrollAxis::Both && options.axis != dominant {
-                        token.dismiss();
-                        return;
-                    }
-                    if options.axis_lock {
-                        drag.axis = dominant;
-                    }
-                    let delta = -drag.axis.mask(total);
-                    let current = state.offset.get();
-                    let can_move = (current + delta).clamp(Vector::ZERO, state.max) != current;
-                    let can_pull = state.refresh.is_some()
-                        && drag.axis != ScrollAxis::Horizontal
-                        && current.y <= 0.
-                        && total.y > 0.;
-                    if (!can_move && !can_pull && options.chain) || !token.claim() {
-                        token.dismiss();
-                        return;
-                    }
-                    drag.claimed = true;
-                }
-                let delta = event.position() - drag.previous;
-                let dt = (event.time() - drag.time).clamp(0.001, 0.1);
-                if let Some(axis) = drag.bar {
-                    if let Some((track, thumb)) = state.bar(axis) {
-                        let mut movement = Vector::ZERO;
-                        movement[axis] = delta[axis] * state.max[axis]
-                            / (track.size()[axis] - thumb.size()[axis]).max(1.);
-                        state.scroll_by(movement);
-                    }
-                } else if state.refresh.is_some()
-                    && drag.axis != ScrollAxis::Horizontal
-                    && (state.pull.get_untracked() > 0.
-                        || (state.offset.get().y <= 0. && delta.y > 0.))
-                {
-                    // Past the top: pull with resistance instead of scrolling.
-                    let pull = (state.pull.get_untracked() + delta.y * 0.5).max(0.);
-                    state.pull.set(pull);
-                    state.velocity = Vector::ZERO;
-                } else {
-                    let moved = state.scroll_by(-drag.axis.mask(delta));
-                    state.velocity = (state.velocity * 0.25 + moved / dt * 0.75)
-                        .clamp_length_max(options.max_velocity);
-                }
-                drag.previous = event.position();
-                drag.time = event.time();
-                state.drag = Some(drag);
-            }
-            PointerAction::Up | PointerAction::Cancel => {
-                let trigger = event.action() == PointerAction::Up
-                    && state.refresh.as_ref().is_some_and(|refresh| {
-                        !refresh.refreshing.get_untracked()
-                            && state.pull.get_untracked() >= refresh.threshold
-                    });
-                if trigger && let Some(refresh) = state.refresh.clone() {
-                    refresh.refreshing.set(true);
-                    drop(state);
-                    (refresh.action.borrow_mut())();
-                    token.dismiss();
-                    return;
-                }
-                if event.action() == PointerAction::Cancel
-                    || !options.momentum
-                    || drag.bar.is_some()
-                    || event.time() - drag.time > 0.1
-                {
-                    state.velocity = Vector::ZERO;
-                }
-                token.dismiss();
-            }
-            PointerAction::Down => state.drag = Some(drag),
-        }
-    }
-
-    fn on_rejected(&mut self, pointer: PointerId) {
-        let mut state = self.state.borrow_mut();
-        if state.drag.as_ref().is_some_and(|drag| drag.id == pointer) {
-            state.drag = None;
-            state.velocity = Vector::ZERO;
-        }
     }
 }
