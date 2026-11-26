@@ -26,6 +26,27 @@ thread_local! {
 /// Space kept between a revealed caret and the keyboard or viewport edge.
 const REVEAL_MARGIN: f32 = 16.;
 
+type Action = Rc<RefCell<dyn FnMut()>>;
+
+/// Pull-to-refresh configuration.
+#[derive(Clone)]
+struct Refresh {
+    refreshing: Signal<bool>,
+    action: Action,
+    /// Pull distance that triggers a refresh on release.
+    threshold: f32,
+    /// Height the content stays pulled down while refreshing.
+    hold: f32,
+}
+
+/// Load-more configuration and its edge-trigger state.
+struct ReachEnd {
+    threshold: f32,
+    action: Action,
+    armed: bool,
+    last_max: f32,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScrollAxis {
     #[default]
@@ -109,6 +130,8 @@ pub fn scroll_area() -> ScrollAreaBuilder {
         content_style: Style::new(),
         options: ScrollOptions::default(),
         offset: None,
+        refresh: None,
+        reach_end: None,
     }
 }
 
@@ -117,6 +140,8 @@ pub struct ScrollAreaBuilder {
     content_style: Style,
     options: ScrollOptions,
     offset: Option<Signal<Vector>>,
+    refresh: Option<Refresh>,
+    reach_end: Option<(f32, Action)>,
 }
 
 pub type ScrollArea = ScrollAreaBuilder;
@@ -143,6 +168,30 @@ impl ScrollAreaBuilder {
         self.content_style = style;
         self
     }
+
+    /// Pull to refresh (MB7): dragging down past the top shows an indicator;
+    /// releasing past 64 px sets `refreshing` and calls `action`. The content
+    /// stays pulled down with a spinning indicator until the caller sets
+    /// `refreshing` back to false. Touch only unless `mouse_drag` is enabled.
+    pub fn on_refresh(mut self, refreshing: Signal<bool>, action: impl FnMut() + 'static) -> Self {
+        self.refresh = Some(Refresh {
+            refreshing,
+            action: Rc::new(RefCell::new(action)),
+            threshold: 64.,
+            hold: 48.,
+        });
+        self
+    }
+
+    /// Load more (MB7): call `action` when the end of the content comes within
+    /// `threshold` logical pixels of the viewport. It fires once per approach,
+    /// and again after the content grows or the user scrolls away; content
+    /// shorter than the viewport counts as reaching the end, so a list keeps
+    /// loading until it fills the area.
+    pub fn on_reach_end(mut self, threshold: f32, action: impl FnMut() + 'static) -> Self {
+        self.reach_end = Some((threshold.max(0.), Rc::new(RefCell::new(action))));
+        self
+    }
 }
 
 impl Styleable for ScrollAreaBuilder {
@@ -158,6 +207,8 @@ impl BuildNode for ScrollAreaBuilder {
             mut content_style,
             options,
             offset,
+            refresh,
+            reach_end,
         } = self;
         assert!(options.wheel_speed.is_finite() && options.wheel_speed >= 0.);
         assert!(options.drag_threshold.is_finite() && options.drag_threshold >= 0.);
@@ -179,6 +230,7 @@ impl BuildNode for ScrollAreaBuilder {
         ctx.finish(defaults, move |style| {
             let offset = offset.unwrap_or_else(|| signal(Vector::ZERO));
             let clip_rect = signal(Rect::default());
+            let pull = signal(0_f32);
             let state = Rc::new(RefCell::new(ScrollState {
                 offset,
                 options,
@@ -187,6 +239,14 @@ impl BuildNode for ScrollAreaBuilder {
                 velocity: Vector::ZERO,
                 drag: None,
                 last_offset: offset.get(),
+                pull,
+                refresh: refresh.clone(),
+                end: reach_end.map(|(threshold, action)| ReachEnd {
+                    threshold,
+                    action,
+                    armed: true,
+                    last_max: 0.,
+                }),
             }));
             let source = mue_macroquad::node::take_children();
             content_style.provide_defaults(Style::new().flex_none().min_width(0.).min_height(0.));
@@ -203,7 +263,10 @@ impl BuildNode for ScrollAreaBuilder {
             let content_id = content.layout_id().unwrap();
             mue_macroquad::node::set_children(content.into_children());
             mue_macroquad::node::set_clip(*clip_rect);
-            mue_macroquad::node::set_child_offset(*offset);
+            // Pulling to refresh moves the content down past the top.
+            mue_macroquad::node::set_child_offset(computed(move |_| {
+                offset.get() - Vector::new(0., pull.get())
+            }));
             let layout = use_layout(style);
             let rect = layout.rect;
             let layout_id = layout.layout_id;
@@ -271,7 +334,11 @@ impl BuildNode for ScrollAreaBuilder {
                     if reveal.replace(false) {
                         reveal_focused(node, &mut state.borrow_mut());
                     }
-                    state.borrow_mut().advance(*dt)
+                    // Run callbacks after releasing the state.
+                    let action = state.borrow_mut().advance(*dt);
+                    if let Some(action) = action {
+                        (action.borrow_mut())();
+                    }
                 }
             });
             style.on_wheel_event.append({
@@ -307,6 +374,9 @@ impl BuildNode for ScrollAreaBuilder {
                 let state = state.clone();
                 move |_| {
                     let state = state.borrow();
+                    if let Some(refresh) = &state.refresh {
+                        draw_refresh_indicator(&paint, &state, refresh);
+                    }
                     if !options.scrollbars {
                         return;
                     }
@@ -406,6 +476,64 @@ fn reveal_focused(area: NodeHandle, state: &mut ScrollState) {
     }
 }
 
+/// Draw the pull-to-refresh indicator: an arc that grows with the pull and
+/// spins while refreshing.
+fn draw_refresh_indicator(
+    paint: &mue_macroquad::paint::Paint,
+    state: &ScrollState,
+    refresh: &Refresh,
+) {
+    use std::f32::consts::PI;
+    let pull = state.pull.get_untracked();
+    let refreshing = refresh.refreshing.get_untracked();
+    if pull < 0.5 && !refreshing {
+        return;
+    }
+    let radius = 9.;
+    let center = Vector::new(
+        state.viewport.center().x,
+        state.viewport.y + (pull / 2.).max(radius + 6.).min(refresh.hold / 2. + 8.),
+    );
+    let (start, sweep) = if refreshing {
+        let spin = (mue_macroquad::runtime::get_time() * 5.) % (2. * PI);
+        (spin, 1.5 * PI)
+    } else {
+        let progress = (pull / refresh.threshold).clamp(0., 1.);
+        (-PI / 2., progress * 1.75 * PI)
+    };
+    let end = start + sweep.max(0.05);
+    let point = |angle: f32| center + Vector::new(angle.cos(), angle.sin()) * radius;
+    let (a, b) = (point(start), point(end));
+    let arc = format!(
+        "M{} {} A{radius} {radius} 0 {} 1 {} {}",
+        a.x,
+        a.y,
+        u8::from(sweep > PI),
+        b.x,
+        b.y
+    );
+    let Ok(arc) = PathData::parse(&arc) else {
+        return;
+    };
+    let alpha = if refreshing {
+        1.
+    } else {
+        (pull / refresh.threshold).clamp(0.3, 1.)
+    };
+    paint.draw(|p| {
+        p.fill(
+            &PathData::circle(center, radius + 7.),
+            FillRule::NonZero,
+            Color::new(0.16, 0.19, 0.27, alpha),
+        );
+        p.stroke(
+            &arc,
+            &mue_macroquad::path::StrokeStyle::round(2.5),
+            Color::new(0.55, 0.72, 1., alpha),
+        );
+    });
+}
+
 struct ScrollState {
     offset: Signal<Vector>,
     options: ScrollOptions,
@@ -414,6 +542,10 @@ struct ScrollState {
     velocity: Vector,
     drag: Option<Drag>,
     last_offset: Vector,
+    /// Pull-to-refresh distance past the top.
+    pull: Signal<f32>,
+    refresh: Option<Refresh>,
+    end: Option<ReachEnd>,
 }
 
 impl ScrollState {
@@ -427,7 +559,57 @@ impl ScrollState {
         self.last_offset = self.offset.get();
     }
 
-    fn advance(&mut self, dt: f32) {
+    /// Advance momentum and pull springs; returns a load-more action to run.
+    fn advance(&mut self, dt: f32) -> Option<Action> {
+        self.advance_pull(dt);
+        self.advance_motion(dt);
+        self.check_end()
+    }
+
+    fn advance_pull(&mut self, dt: f32) {
+        let Some(refresh) = &self.refresh else {
+            return;
+        };
+        if self.drag.is_some() {
+            return;
+        }
+        let target = if refresh.refreshing.get_untracked() {
+            refresh.hold
+        } else {
+            0.
+        };
+        let pull = self.pull.get_untracked();
+        if (pull - target).abs() < 0.5 {
+            if pull != target {
+                self.pull.set(target);
+            }
+            return;
+        }
+        let rate = 1. - (-14. * dt.clamp(0., 0.05)).exp();
+        self.pull.set(pull + (target - pull) * rate);
+    }
+
+    fn check_end(&mut self) -> Option<Action> {
+        let offset = self.offset.get_untracked();
+        let end = self.end.as_mut()?;
+        if self.max.y > end.last_max + 0.5 {
+            // New content: arm again.
+            end.armed = true;
+        }
+        end.last_max = self.max.y;
+        let near = self.max.y - offset.y <= end.threshold;
+        if !near {
+            end.armed = true;
+            None
+        } else if end.armed {
+            end.armed = false;
+            Some(end.action.clone())
+        } else {
+            None
+        }
+    }
+
+    fn advance_motion(&mut self, dt: f32) {
         self.correct_offset();
         if self.drag.is_none() && self.options.momentum {
             let dt = dt.clamp(0., 0.05);
@@ -589,7 +771,11 @@ impl Gesture for ScrollGesture {
                     let delta = -drag.axis.mask(total);
                     let current = state.offset.get();
                     let can_move = (current + delta).clamp(Vector::ZERO, state.max) != current;
-                    if (!can_move && options.chain) || !token.claim() {
+                    let can_pull = state.refresh.is_some()
+                        && drag.axis != ScrollAxis::Horizontal
+                        && current.y <= 0.
+                        && total.y > 0.;
+                    if (!can_move && !can_pull && options.chain) || !token.claim() {
                         token.dismiss();
                         return;
                     }
@@ -604,6 +790,15 @@ impl Gesture for ScrollGesture {
                             / (track.size()[axis] - thumb.size()[axis]).max(1.);
                         state.scroll_by(movement);
                     }
+                } else if state.refresh.is_some()
+                    && drag.axis != ScrollAxis::Horizontal
+                    && (state.pull.get_untracked() > 0.
+                        || (state.offset.get().y <= 0. && delta.y > 0.))
+                {
+                    // Past the top: pull with resistance instead of scrolling.
+                    let pull = (state.pull.get_untracked() + delta.y * 0.5).max(0.);
+                    state.pull.set(pull);
+                    state.velocity = Vector::ZERO;
                 } else {
                     let moved = state.scroll_by(-drag.axis.mask(delta));
                     state.velocity = (state.velocity * 0.25 + moved / dt * 0.75)
@@ -614,6 +809,18 @@ impl Gesture for ScrollGesture {
                 state.drag = Some(drag);
             }
             PointerAction::Up | PointerAction::Cancel => {
+                let trigger = event.action() == PointerAction::Up
+                    && state.refresh.as_ref().is_some_and(|refresh| {
+                        !refresh.refreshing.get_untracked()
+                            && state.pull.get_untracked() >= refresh.threshold
+                    });
+                if trigger && let Some(refresh) = state.refresh.clone() {
+                    refresh.refreshing.set(true);
+                    drop(state);
+                    (refresh.action.borrow_mut())();
+                    token.dismiss();
+                    return;
+                }
                 if event.action() == PointerAction::Cancel
                     || !options.momentum
                     || drag.bar.is_some()

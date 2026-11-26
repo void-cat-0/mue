@@ -67,6 +67,7 @@ pub mod safe_area;
 pub mod scroll_area;
 pub mod separator;
 pub mod stack;
+pub mod swipe_actions;
 pub mod wrap;
 
 pub use aspect_ratio::*;
@@ -81,4 +82,5 @@ pub use safe_area::*;
 pub use scroll_area::*;
 pub use separator::*;
 pub use stack::*;
+pub use swipe_actions::*;
 pub use wrap::*;

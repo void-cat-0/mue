@@ -25,6 +25,7 @@ fn every_component_builder_is_styleable() {
         styleable(separator());
         styleable(stack());
         styleable(hstack());
+        styleable(swipe_actions(text("A")));
         styleable(wrap());
         styleable(aspect_ratio());
         styleable(back_swipe());
