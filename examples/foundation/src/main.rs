@@ -108,6 +108,22 @@ fn vector_row() -> impl Component {
     ))
 }
 
+fn icon_row() -> impl Component {
+    // The application registers its own icon artwork once.
+    register_icon("clock", SvgDocument::parse(ICON).expect("valid icon"));
+    register_icon(
+        "check",
+        IconSource::stroked(PathData::parse("M5 12.5l4.5 4.5L19 7.5").unwrap(), 24., 2.),
+    );
+    hstack()
+        .style(style! { gap: 10px; font-size: 22px; color: #c9d1e0; })
+        .children((
+            icon_named("clock"),
+            text("Icons follow font size and color"),
+            icon_named("check").style(style! { color: #7fd1a8; font-size: 30px; }),
+        ))
+}
+
 fn grid_row() -> impl Component {
     let tile = |label: &'static str| {
         center()
@@ -302,6 +318,7 @@ fn ui(capture: bool) -> impl Component {
             heading("Foundation").style(style! { color: #ffffff; }),
             paint_row(),
             vector_row(),
+            icon_row(),
             grid_row(),
             focus_row(),
             effects_row(),
