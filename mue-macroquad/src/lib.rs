@@ -91,6 +91,7 @@ pub mod svg;
 pub mod text_input;
 pub mod texture;
 pub mod transition;
+pub mod transition_group;
 pub mod viewport;
 
 pub use app::App;
