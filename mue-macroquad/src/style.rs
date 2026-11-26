@@ -190,6 +190,8 @@ define_style! {
     focus_scope: crate::focus::FocusScope = crate::focus::FocusScope::None;
     /// Focus this node, or its first focusable descendant, each time it becomes displayed.
     auto_focus: bool = false;
+    /// Mouse cursor while hovering this node. `Auto` defers to ancestors.
+    cursor: crate::cursor::Cursor = crate::cursor::Cursor::Auto;
 
     @rects {
         margin: taffy::Rect<Size> = Size::Px(0.);

@@ -115,7 +115,6 @@ pub mod typography;
 pub use controls::*;
 pub use graphics::*;
 pub use layout::*;
-pub use mue_macroquad::focus::FocusScope;
 pub use mue_macroquad::node::{
     BuildNode, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
     KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ShapeBuilder, Span, SpanStyle, SvgBuilder,
@@ -124,6 +123,7 @@ pub use mue_macroquad::node::{
 };
 pub use mue_macroquad::path::{FillRule, PathData, PathFit, StrokeStyle};
 pub use mue_macroquad::svg::SvgDocument;
+pub use mue_macroquad::{cursor::Cursor, focus::FocusScope};
 pub use mue_macros::{component, node, style};
 pub use overlay::*;
 pub use tokens::{Theme, ThemeProvider, TokenSet, provide_theme};

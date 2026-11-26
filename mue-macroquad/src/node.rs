@@ -69,6 +69,7 @@ pub(crate) struct NodeInner {
     pub(crate) clip_radius: Option<Prop<f32>>,
     pub(crate) clip_sector: Option<Prop<Sector>>,
     pub(crate) focus: Option<Box<crate::focus::FocusSlot>>,
+    pub(crate) cursor: Option<Prop<crate::cursor::Cursor>>,
     pub(crate) child_offset: Option<ReadSignal<Vector>>,
     pub(crate) center_on_layout_origin: bool,
     pub(crate) matrix_transform: Prop<Matrix>,
@@ -146,6 +147,7 @@ impl NodeInner {
             clip_radius: None,
             clip_sector: None,
             focus: None,
+            cursor: None,
             child_offset: None,
             center_on_layout_origin: false,
             matrix_transform: Prop::Static(Matrix::IDENTITY),
@@ -469,6 +471,10 @@ impl Node {
                 NodeInner::with_mut(|node| node.clip_sector = Some(clip_sector));
             }
             let focus_mount = bind_focus(style);
+            let cursor = style.take_cursor();
+            if !matches!(cursor, Prop::Static(crate::cursor::Cursor::Auto)) {
+                NodeInner::with_mut(|node| node.cursor = Some(cursor));
+            }
             NodeInner::with_mut(|node| {
                 let after_children = std::mem::take(&mut node.hooks.after_children);
                 let after_clip = std::mem::take(&mut node.hooks.after_clip);

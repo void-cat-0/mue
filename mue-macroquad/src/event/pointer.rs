@@ -445,6 +445,7 @@ fn hit_roots_with_cache(
                     && Runtime::with(|rt| {
                         rt.nodes.borrow().get(node.id).is_some_and(|node| {
                             node.hovered.is_some()
+                                || node.cursor.is_some()
                                 || !node.hovered_aliases.is_empty()
                                 || !node.hooks.hover_event.is_empty()
                                 || !node.hooks.wheel_event.is_empty()
@@ -633,6 +634,7 @@ pub struct PointerManager {
     dpi_scale: f32,
     next_dpi_scale: Option<f32>,
     planned_path: Option<IndexSet<NodeRef>>,
+    cursor: crate::cursor::Cursor,
 }
 
 impl Drop for PointerManager {
@@ -666,6 +668,7 @@ impl PointerManager {
             dpi_scale: screen_scale(),
             next_dpi_scale: None,
             planned_path: None,
+            cursor: crate::cursor::Cursor::Default,
         }
     }
 
@@ -904,8 +907,26 @@ impl PointerManager {
         } else {
             IndexSet::new()
         };
+        self.update_cursor(&path);
         if let Some(track) = self.tracks.get_mut(&PointerId::MOUSE) {
             Self::update_hover_nodes(track, path, moved);
+        }
+    }
+
+    /// Show the deepest hovered node's cursor, applying only changes.
+    fn update_cursor(&mut self, path: &IndexSet<NodeRef>) {
+        use crate::cursor::Cursor;
+        let cursor = Runtime::with(|rt| {
+            let nodes = rt.nodes.borrow();
+            path.iter()
+                .filter_map(|node| nodes.get(node.id)?.cursor.as_ref())
+                .map(mue_core::signal::Access::get_untracked)
+                .find(|cursor| *cursor != Cursor::Auto)
+        })
+        .unwrap_or(Cursor::Default);
+        if cursor != self.cursor {
+            self.cursor = cursor;
+            miniquad::window::set_mouse_cursor(cursor.icon());
         }
     }
 

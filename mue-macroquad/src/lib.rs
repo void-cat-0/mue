@@ -60,6 +60,7 @@
 mod app;
 pub mod clip;
 pub mod color;
+pub mod cursor;
 mod error;
 pub mod event;
 pub mod focus;

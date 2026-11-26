@@ -55,7 +55,7 @@ let slider = flexbox()
     });
 ```
 
-See [focus and keyboard][focus-reference] for Tab order, focus scopes for dialogs, and programmatic focus.
+See [focus, keyboard, and cursors][focus-reference] for Tab order, focus scopes for dialogs, and programmatic focus.
 
 ## Track a drag in one node
 

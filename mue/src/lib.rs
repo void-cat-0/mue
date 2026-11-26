@@ -51,6 +51,7 @@ pub mod prelude {
         signal::{Access, ReadSignal, Signal, signal},
     };
     pub use crate::renderer::{
+        cursor::Cursor,
         focus::FocusScope,
         node::{Component, IntoNode, Node, NodeContext, flexbox, path, svg, text},
         path::{PathData, StrokeStyle},

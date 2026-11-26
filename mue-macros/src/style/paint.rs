@@ -50,6 +50,46 @@ pub(super) fn declaration(
             length(input, host, false, false, true, false)?,
         ),
         "border" | "outline" => line_shorthand(name, input, host)?,
+        "cursor" => {
+            let ty = quote!(#host::cursor::Cursor);
+            let value = if let Some(value) = token(input, &ty)? {
+                value
+            } else if let Some(expr) = expression_with_token(input, &ty)? {
+                expr
+            } else {
+                let name = keyword(
+                    input,
+                    &[
+                        "auto",
+                        "default",
+                        "pointer",
+                        "text",
+                        "crosshair",
+                        "move",
+                        "not-allowed",
+                        "wait",
+                        "help",
+                        "ew-resize",
+                        "ns-resize",
+                        "nesw-resize",
+                        "nwse-resize",
+                    ],
+                )?;
+                let variant = format_ident!(
+                    "{}",
+                    name.split('-')
+                        .map(|part| {
+                            let mut chars = part.chars();
+                            chars.next().map_or_else(String::new, |first| {
+                                first.to_ascii_uppercase().to_string() + chars.as_str()
+                            })
+                        })
+                        .collect::<String>()
+                );
+                quote!(#ty::#variant)
+            };
+            setter("cursor", value)
+        }
         _ => return Ok(None),
     }))
 }

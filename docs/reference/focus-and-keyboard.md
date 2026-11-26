@@ -1,4 +1,4 @@
-# Focus and keyboard
+# Focus, keyboard, and cursors
 
 [Reference contents][guide-reference] · [Related lesson][input-guide]
 
@@ -7,6 +7,7 @@
 - [Keyboard events](#keyboard-events)
 - [Showing focus](#showing-focus)
 - [Programmatic focus](#programmatic-focus)
+- [Cursors](#cursors)
 
 ## Focusable nodes
 
@@ -113,6 +114,16 @@ let tile = flexbox().focusable(true).with_focus(|style, focus| {
 | `focus::move_focus(forward)` | Tab or Shift+Tab without a key event. |
 | `focus::focus_within(node)` | Focus a node or its first tabbable descendant. |
 | `focus::blur()` | Remove focus. |
+
+## Cursors
+
+`cursor(Cursor::Pointer)` (or `cursor: pointer;` in `style!`) sets the mouse
+cursor while the node is hovered. The deepest hovered node with a cursor other
+than `Cursor::Auto` wins; otherwise the default arrow is shown. Available
+shapes are `default`, `pointer`, `text`, `crosshair`, `move`, `not-allowed`,
+`wait`, `help`, `ew-resize`, `ns-resize`, `nesw-resize`, and `nwse-resize`.
+A node with a cursor takes part in hover hit testing. Touch input ignores
+cursors.
 
 [guide-reference]: index.md
 [input-guide]: ../learn/input.md
