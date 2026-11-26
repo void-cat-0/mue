@@ -26,4 +26,5 @@ roxmltree = "0.20"
 slotmap = { workspace = true }
 smallvec = { workspace = true }
 taffy = { workspace = true }
+unicode-segmentation = "1.12"
 thiserror.workspace = true

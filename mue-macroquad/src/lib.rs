@@ -87,6 +87,7 @@ pub mod shader;
 pub mod shadow;
 pub mod style;
 pub mod svg;
+pub mod text_input;
 pub mod texture;
 pub mod transition;
 pub mod viewport;
