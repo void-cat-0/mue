@@ -52,6 +52,10 @@ pub mod reference {
         layers_overlays,
         "../../docs/reference/layers-and-overlays.md"
     );
+    guide!(
+        component_conventions,
+        "../../docs/reference/component-conventions.md"
+    );
     guide!(scene_runtime, "../../docs/reference/scene.md", illustrated);
     guide!(theme_store, "../../docs/reference/themes-and-tokens.md");
     guide!(executor, "../../docs/reference/tasks.md");

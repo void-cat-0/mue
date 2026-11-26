@@ -1,0 +1,106 @@
+# Component conventions
+
+[Reference contents][guide-reference] · [Related reference][components-reference]
+
+The rules every `mue-components` control follows, so controls compose the same
+way and application components can follow them too.
+
+- [Naming](#naming)
+- [Styles](#styles)
+- [Controlled and uncontrolled values](#controlled-and-uncontrolled-values)
+- [Compound components](#compound-components)
+- [Slots and events](#slots-and-events)
+- [Icons](#icons)
+- [Viewport and safe area](#viewport-and-safe-area)
+
+## Naming
+
+- Constructors are `snake_case` functions named after the control and take
+  only what the control cannot work without: `button("Save")`, `icon_named("check")`.
+- Everything else is a builder method with the same name as the property:
+  `.disabled(true)`, `.placement(Placement::Bottom)`.
+- Events are `on_<event>` and take a closure: `on_change`, `on_open_change`,
+  `on_activate`. Value events receive the new value by reference.
+- Boolean setters read as adjectives (`disabled`, `loading`, `dismissible`).
+- Compound parts live in a module named after the root, with `root` and part
+  constructors (`tabs::root`, `tabs::tab`).
+
+## Styles
+
+Every builder implements `Styleable`, so `.style(style! { .. })`, layout
+setters, and hooks work on any control; a test in `mue-components` checks this.
+Caller styles take precedence over a control's defaults. Controls keep their
+visual defaults in `provide_defaults` (or a `#[node]` default style) instead of
+hard-coding them in the body.
+
+## Controlled and uncontrolled values
+
+A control that holds a value declares a `#[model]` parameter with a
+`#[default]` and an `#[event] on_change: Callback<T>`:
+
+| Caller writes | Behavior |
+| --- | --- |
+| nothing | Uncontrolled: the control keeps its own signal, starting from the default |
+| `.value(signal)` | Controlled: the caller's signal is the state |
+| `.on_change(|value| ..)` | Notified after each change the control makes, either way |
+
+In the body, `Controllable::new(model, on_change)` combines the two; change the
+value only through `Controllable::set`, which updates the signal and emits
+`on_change` when the value differs. See the `state` module of `mue-components`
+for a complete example.
+
+## Compound components
+
+A multi-part control shares state from its root to its parts through context.
+The root calls `provide_part(context)` in its body before returning its builder;
+each part calls `use_part::<Context>("part", "root")`, which panics with a clear
+message when a part is used outside its root. Parts are ordinary components, so
+callers can rearrange and style them; a convenience constructor can build the
+usual arrangement.
+
+## Slots and events
+
+`#[component]` accepts two more parameter attributes:
+
+| Declaration | Setter | Body receives |
+| --- | --- | --- |
+| `#[slot] header: Slot` | `.header(view)` | `Slot`: `render()`, `or_else(fallback)`, or pass it to `children` |
+| `#[slot] row: ScopedSlot<Item>` | `.row(|item| view)` | `ScopedSlot`: `render(item)`, `render_or(item, fallback)` |
+| `#[event] on_pick: Callback<usize>` | `.on_pick(|index| ..)`, callable several times | `Callback`: `emit(&value)` |
+
+Slots and events are always optional. A scoped slot is Vue's scoped slot: the
+component decides when and with which data the caller's template is built.
+
+## Icons
+
+`icon(source)` draws an `SvgDocument`, a `PathData` in a view box (filled or
+stroked), or a texture region. Icons are `1em` squares by default, so they
+follow the font size, and they paint with the inherited foreground `color`
+(`currentColor` in SVG). mue ships no icon artwork: `register_icon(name, source)`
+adds your own or an icon library's SVGs (check the library's license) for
+`icon_named(name)`; an unregistered name draws nothing.
+
+```rust
+use mue::components::{IconSource, hstack, icon_named, register_icon, text};
+use mue::prelude::*;
+
+register_icon(
+    "check",
+    IconSource::stroked(PathData::parse("M5 12.5l4.5 4.5L19 7.5").unwrap(), 24., 2.),
+);
+let saved = hstack().children((
+    icon_named("check").style(style! { color: #7fd1a8; }),
+    text("Saved"),
+));
+```
+
+## Viewport and safe area
+
+`mue_macroquad::viewport` exposes the window as signals: `use_viewport()`
+(logical size, DPI scale, orientation), `breakpoint(thresholds)`, and
+`min_width(px)`. `safe_area()` returns insets for notches and system bars; the
+platform layer publishes them with `set_safe_area(edges)`, and they are zero on
+desktop. The `safe_area` component pads its content by those insets.
+
+[guide-reference]: index.md
+[components-reference]: components-and-node.md

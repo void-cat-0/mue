@@ -18,6 +18,7 @@ The component crate owns reusable behavior.
 - overlay: `overlay_host`;
 - graphics: `image`, `icon`/`icon_named`, and the renderer's `path`, `svg`, `shader_box`, and `shape` nodes;
 - layers and effects (re-exported from the renderer): `teleport`, `anchored`, `presence`, and `offscreen`;
+- state and behavior: `Controllable` and `provide_part`/`use_part`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 
 `flexbox`, `text`, `path`, `svg`, `shape`, and the atlas-backed text implementation are renderer primitives under `mue_macroquad::node` and are also exposed by the component catalog. `mue-macroquad` does not import `mue-components`.
@@ -28,7 +29,7 @@ Both `#[component]` and `#[node]` generate styleable builders. Calling a generat
 
 Consuming the builder with `IntoNode::into_node` constructs its node synchronously, once; `App::new` performs that conversion for its root. Parameters written as ordinary value types receive `Prop<T>` values inside the body.
 
-Required parameters form the public constructor, optional `#[default]` parameters have setters, and `#[model]` parameters receive writable `Signal<T>` values. `#[slot]` parameters (`Slot`, `ScopedSlot<T>`) take views or templates, and `#[event]` parameters (`Callback<T>`) take handler closures.
+Required parameters form the public constructor, optional `#[default]` parameters have setters, and `#[model]` parameters receive writable `Signal<T>` values. `#[slot]` parameters (`Slot`, `ScopedSlot<T>`) take views or templates, and `#[event]` parameters (`Callback<T>`) take handler closures; see [component conventions][conventions-reference].
 
 ```rust
 use std::rc::Rc;
@@ -179,3 +180,4 @@ overlay_host(
 
 [guide-reference]: index.md
 [layers-reference]: layers-and-overlays.md
+[conventions-reference]: component-conventions.md

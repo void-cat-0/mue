@@ -20,6 +20,7 @@
 [style-reference]: mod@crate::guide::reference::style_syntax
 [focus-reference]: mod@crate::guide::reference::focus_keyboard
 [layers-reference]: mod@crate::guide::reference::layers_overlays
+[conventions-reference]: mod@crate::guide::reference::component_conventions
 [scenes-reference]: mod@crate::guide::reference::scene_runtime
 [scene-input-reference]: mod@crate::guide::reference::scene_runtime#input
 [scene-transitions-reference]: mod@crate::guide::reference::scene_runtime#scene-transitions
