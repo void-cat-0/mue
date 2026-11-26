@@ -2,7 +2,10 @@ use mue_core::signal::{ReadSignal, Signal};
 use paste::paste;
 use taffy::{AlignContent, AlignItems, FlexDirection, Position};
 
-use crate::event::pointer::{PointerAction, PointerId};
+use crate::{
+    event::pointer::{PointerAction, PointerId},
+    shader::Brush,
+};
 
 use super::{Size, Styleable};
 use mue_core::prop::Prop;
@@ -59,6 +62,56 @@ pub trait StyleableExt: Styleable {
     fn gap(self, value: impl Into<Prop<Size>>) -> Self {
         let value = value.into();
         self.column_gap(value).row_gap(value)
+    }
+
+    /// Round all four corners of the background, border, and outline.
+    fn radius(self, value: impl Into<Prop<Size>>) -> Self {
+        let value = value.into();
+        self.radius_top_left(value)
+            .radius_top_right(value)
+            .radius_bottom_right(value)
+            .radius_bottom_left(value)
+    }
+
+    /// Round the two top corners.
+    fn radius_top(self, value: impl Into<Prop<Size>>) -> Self {
+        let value = value.into();
+        self.radius_top_left(value).radius_top_right(value)
+    }
+
+    /// Round the two bottom corners.
+    fn radius_bottom(self, value: impl Into<Prop<Size>>) -> Self {
+        let value = value.into();
+        self.radius_bottom_left(value).radius_bottom_right(value)
+    }
+
+    /// Round the two left corners.
+    fn radius_left(self, value: impl Into<Prop<Size>>) -> Self {
+        let value = value.into();
+        self.radius_top_left(value).radius_bottom_left(value)
+    }
+
+    /// Round the two right corners.
+    fn radius_right(self, value: impl Into<Prop<Size>>) -> Self {
+        let value = value.into();
+        self.radius_top_right(value).radius_bottom_right(value)
+    }
+
+    /// Set every border width and the border paint in one call.
+    fn border_all(self, width: impl Into<Prop<Size>>, color: impl Into<Prop<Brush>>) -> Self {
+        self.border((width,)).border_color(color)
+    }
+
+    /// Set the outline width, paint, and offset in one call.
+    fn outline(
+        self,
+        width: impl Into<Prop<Size>>,
+        color: impl Into<Prop<Brush>>,
+        offset: impl Into<Prop<Size>>,
+    ) -> Self {
+        self.outline_width(width)
+            .outline_color(color)
+            .outline_offset(offset)
     }
 
     /// Handle a tap without an unused event argument.

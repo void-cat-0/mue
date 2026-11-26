@@ -75,6 +75,7 @@ pub(crate) struct NodeHooks {
     pub layout: CallbackList<()>,
     pub render: CallbackList<()>,
     pub after_children: CallbackList<()>,
+    pub after_clip: CallbackList<()>,
     pub pointer_event: CallbackList<PointerEvent>,
     pub hover_event: CallbackList<PointerEvent>,
     pub wheel_event: CallbackList<WheelEvent>,

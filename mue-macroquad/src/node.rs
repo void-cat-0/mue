@@ -252,57 +252,67 @@ impl NodeRef {
     }
 
     fn render_inner(&self) {
-        Runtime::with(|rt| {
-            let transform = rt.node(self.id).transform();
-            let transform = transform.resolve();
-            crate::paint::with_transform(transform, || {
-                rt.invoke_hook(self.id, |hooks| &mut hooks.render, &());
+        // Keep the per-level call chain short: debug builds recurse once per
+        // tree level and the main thread's stack is small on some platforms.
+        let Some(transform) = Runtime::with(|rt| {
+            let nodes = rt.nodes.borrow();
+            let node = nodes.get(self.id)?;
+            Some(node.transform())
+        }) else {
+            return;
+        };
+        let transform = transform.resolve();
+        crate::paint::with_transform(transform, || self.render_content());
+    }
 
-                let (clip, clip_radius, clip_sector, layout_rect, children) = {
-                    let node = rt.node(self.id);
-                    (
-                        node.clip,
-                        node.clip_radius,
-                        node.clip_sector,
-                        *node.layout.rect,
-                        *node.children,
-                    )
-                };
-                let clip = clip.map(|rect| rect.get());
-                let draw = || {
-                    let draw_children = || {
-                        if !children.is_null() {
-                            for child in children.get_clone().iter() {
-                                child.render_inner();
-                            }
-                        }
-                        rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &());
-                    };
-                    if let Some(sector) = clip_sector {
-                        let sector = sector.try_get().unwrap_or_default();
-                        if sector.is_visible() {
-                            crate::clip::with_clip_sector(layout_rect.get(), sector, draw_children);
-                            return;
-                        }
-                    }
-                    if let Some(radius) = clip_radius {
-                        let radius = radius.try_get().unwrap_or(0.);
-                        if radius > 0. {
-                            crate::clip::with_clip_radius(layout_rect.get(), radius, draw_children);
-                        } else {
-                            draw_children();
-                        }
-                    } else {
-                        draw_children();
-                    }
-                };
-                if let Some(clip) = clip {
-                    crate::paint::with_clip(clip, draw);
-                } else {
-                    draw();
-                }
-            });
-        });
+    /// Draw this node and its subtree under its clips, then its post-clip hooks.
+    fn render_content(&self) {
+        Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.render, &()));
+        let Some((clip, clip_radius, clip_sector, layout_rect)) = Runtime::with(|rt| {
+            let nodes = rt.nodes.borrow();
+            let node = nodes.get(self.id)?;
+            Some((
+                node.clip,
+                node.clip_radius,
+                node.clip_sector,
+                *node.layout.rect,
+            ))
+        }) else {
+            return;
+        };
+        let clip = clip.map(|rect| rect.get());
+        let sector = clip_sector
+            .map(|sector| sector.try_get().unwrap_or_default())
+            .filter(|sector| sector.is_visible());
+        let radius = clip_radius
+            .map(|radius| radius.try_get().unwrap_or(0.))
+            .filter(|radius| *radius > 0.);
+        let clipped = || {
+            if let Some(sector) = sector {
+                crate::clip::with_clip_sector(layout_rect.get(), sector, || self.render_children());
+            } else if let Some(radius) = radius {
+                crate::clip::with_clip_radius(layout_rect.get(), radius, || self.render_children());
+            } else {
+                self.render_children();
+            }
+        };
+        match clip {
+            Some(clip) => crate::paint::with_clip(clip, clipped),
+            None => clipped(),
+        }
+        // Outlines and other decorations that must not be clipped by the node itself.
+        Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.after_clip, &()));
+    }
+
+    fn render_children(&self) {
+        let children =
+            Runtime::with(|rt| rt.nodes.borrow().get(self.id).map(|node| *node.children));
+        if let Some(children) = children.filter(|children| !children.is_null()) {
+            for child in children.get_clone().iter() {
+                child.render_inner();
+            }
+        }
+        Runtime::with(|rt| rt.invoke_hook(self.id, |hooks| &mut hooks.after_children, &()));
     }
 }
 
@@ -458,8 +468,10 @@ impl Node {
             }
             NodeInner::with_mut(|node| {
                 let after_children = std::mem::take(&mut node.hooks.after_children);
+                let after_clip = std::mem::take(&mut node.hooks.after_clip);
                 node.hooks = style.build_hooks();
                 node.hooks.after_children = after_children;
+                node.hooks.after_clip = after_clip;
                 append_hooks(node, style);
             });
             // Acquire arena access before removing the node from its stack.
@@ -593,6 +605,12 @@ pub fn set_layout_sync(sync: impl Fn(Vector) -> bool + 'static) {
 
 pub fn on_after_children(hook: impl FnMut(&()) + 'static) {
     NodeInner::with_mut(|node| node.hooks.after_children.append(hook));
+}
+
+/// Draw after the node's subtree and outside the node's own clip (but inside
+/// its ancestors' clips and its transform), as outlines do.
+pub fn on_after_clip(hook: impl FnMut(&()) + 'static) {
+    NodeInner::with_mut(|node| node.hooks.after_clip.append(hook));
 }
 
 pub fn add_gesture(gesture: impl crate::gesture::Gesture + 'static) {

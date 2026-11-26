@@ -25,7 +25,7 @@ A length literal accepts `px`, `vw`, and `vh`, or a unitless `0`. The table list
 | `padding`, `padding-{top,right,bottom,left}` | `%` | Space inside the box |
 | `margin`, `margin-{top,right,bottom,left}` | `%`, `auto`, signed lengths | Space around the box |
 | `inset`, `top`, `right`, `bottom`, `left` | `%`, `auto`, signed lengths | Relative offsets or absolute anchoring edges |
-| `border-width`, `border-{top,right,bottom,left}-width` | — | Border size for layout. Use paint or a custom node for a visible outline. |
+| `border-width`, `border-{top,right,bottom,left}-width` | — | Border size for layout. `border-color` paints it; see [Paint](#paint). |
 | `gap`, `row-gap`, `column-gap` | `%` | Distance between flex rows or columns |
 | `aspect-ratio` | `auto`, positive number or ratio such as `16 / 9`, `{Option<f32>}` | Preferred width-to-height ratio |
 
@@ -79,8 +79,25 @@ A unitless first number is a grow factor. Supply a basis with its unit, even for
 | Declaration | Literal and Rust forms |
 | --- | --- |
 | `background`, `background-color`, `color` | A color literal or a Rust value convertible to `Prop<Brush>` |
-| `border-radius` | One nonnegative length in `px`, `vw`, or `vh`, or `{Size}` |
+| `border-radius` | One to four nonnegative lengths in `px`, `vw`, or `vh` (clockwise from top-left), or one `{Size}` for all corners |
+| `border-{top-left,top-right,bottom-right,bottom-left}-radius` | One nonnegative length or `{Size}` |
+| `border-color` | A color literal or `{Brush}`; paints the area set by `border-width` |
+| `border` | `none`, or a width, an optional `solid`, and a color in any order: `border: 2px solid #6fa8ff` |
+| `outline-width`, `outline-color`, `outline-offset` | Outline width, paint, and distance from the border box (offset may be negative) |
+| `outline` | `none`, or a width, an optional `solid`, and a color: `outline: 2px #7fd1a8` |
 | `opacity` | A fraction or percentage clamped into `0..=1` by the literal parser, or `{f32}` |
+
+Radii follow CSS: one value sets all corners, two set top-left/bottom-right and top-right/bottom-left, three set top-left, top-right/bottom-left, and bottom-right. Radii that would overlap along a side are scaled down together, so `border-radius: 9999px` makes a pill or circle. The border is painted inside the border box with the same radii; inner corners shrink by the adjacent widths. The outline draws outside the border box after the node's children, is not clipped by the node's own clip, and does not take part in layout or hit testing. Only solid lines are supported. In Rust, `StyleableExt::radius` sets all corners and `radius_top`, `radius_bottom`, `radius_left`, and `radius_right` set two; `border_all(width, brush)` and `outline(width, brush, offset)` combine the related setters.
+
+```rust
+use mue::prelude::*;
+
+let card = flexbox().style(style! {
+    background: #2b3446; border: 3px solid #6fa8ff;
+    border-radius: 12px 12px 4px 4px;
+    outline: 2px #7fd1a8; outline-offset: 4px;
+});
+```
 
 `background-color` aliases `background`. `color` sets foreground paint. Opacity applies to descendants as well. Hex forms are `#rgb`, `#rgba`, `#rrggbb`, and `#rrggbbaa`. Quotes can enclose a hex color. `rgb(30, 50, 90)` uses 0–255 channels. Percent channels and alpha work with forms such as `rgb(10% 20% 35% / 60%)` and `rgba(30, 50, 90, 0.6)`.
 

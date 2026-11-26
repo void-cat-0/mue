@@ -3,7 +3,7 @@ use cosmic_text::FamilyOwned;
 use mue_macroquad::node::{Node, NodeContext};
 use mue_macroquad::{
     color::Color,
-    style::{Style, Styleable},
+    style::{Style, Styleable, StyleableExt},
 };
 use std::rc::Rc;
 

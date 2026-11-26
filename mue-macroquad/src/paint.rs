@@ -22,7 +22,7 @@ use mue_core::{
 use smallvec::SmallVec;
 
 use crate::{
-    math::{Matrix, Rect, Vector, vec2},
+    math::{CornerRadii, Edges, Matrix, Rect, Vector, vec2},
     path::{FillRule, PathData, StrokeStyle},
     shader::{Brush, IntoShader, Shader, SharedTexture},
     style::Style,
@@ -565,7 +565,7 @@ impl ShapesBuilder<'_> {
     ) {
         self.fill_quad(
             draw_rect,
-            0.,
+            CornerRadii::ZERO,
             Some(texture),
             Some(uv_rect),
             color.into_shader(),
@@ -575,7 +575,7 @@ impl ShapesBuilder<'_> {
     fn fill_quad(
         &mut self,
         rect: Rect,
-        radius: f32,
+        radii: CornerRadii,
         texture: Option<SharedTexture>,
         uv: Option<Rect>,
         shader: impl Shader,
@@ -609,15 +609,11 @@ impl ShapesBuilder<'_> {
                 for y in y0..=y1 {
                     let v = y as f32 / rows as f32;
                     let py = rect.h * v;
-                    let dy = (radius - py.min(rect.h - py)).max(0.);
-                    let inset = if radius > 0. {
-                        radius - (radius * radius - dy * dy).max(0.).sqrt()
-                    } else {
-                        0.
-                    };
+                    let left = corner_inset(radii.top_left, radii.bottom_left, py, rect.h);
+                    let right = corner_inset(radii.top_right, radii.bottom_right, py, rect.h);
                     for x in x0..=x1 {
                         let u = x as f32 / columns as f32;
-                        let point = vec2(rect.x + inset + (rect.w - 2. * inset) * u, rect.y + py);
+                        let point = vec2(rect.x + left + (rect.w - left - right) * u, rect.y + py);
                         let vertex = if let Some(uv) = uv {
                             texture_vertex(
                                 &shader,
@@ -686,30 +682,24 @@ impl ShapesBuilder<'_> {
         S: IntoShader,
     {
         let shader = shader.into_shader();
-        self.fill_quad(rect, 0., shader.texture(), None, shader);
+        self.fill_quad(rect, CornerRadii::ZERO, shader.texture(), None, shader);
     }
 
-    pub fn fill_rounded_rect<S>(&mut self, rect: Rect, radius: f32, shader: S)
+    /// Fill a rectangle with per-corner radii, sampling the interior for gradients.
+    pub(crate) fn fill_rounded_rect<S>(&mut self, rect: Rect, radii: CornerRadii, shader: S)
     where
         S: IntoShader,
     {
         let shader = shader.into_shader();
-        let radius = radius.max(0.).min(rect.w.min(rect.h) / 2.);
+        let radii = radii.fit(rect);
         // Boundary-only tessellation misses the center of a radial gradient.
         // Sample the interior too, curving the grid's edges around the corners.
-        if shader.subdivisions(rect) != (1, 1) {
-            self.fill_quad(rect, radius, shader.texture(), None, shader);
+        if shader.subdivisions(rect) != (1, 1) || radii.is_zero() {
+            self.fill_quad(rect, radii, shader.texture(), None, shader);
             return;
         }
         let mut path = lyon::path::Path::builder();
-        path.add_rounded_rectangle(
-            &lyon::geom::Box2D::from_origin_and_size(
-                lyon::geom::point(rect.x, rect.y),
-                lyon::geom::size(rect.w, rect.h),
-            ),
-            &lyon::path::builder::BorderRadii::new(radius),
-            lyon::path::Winding::Positive,
-        );
+        crate::path::add_rounded_rect(&mut path, rect, radii, lyon::path::Winding::Positive);
         let path = path.build();
         self.inner.build(self.shapes, shader, |cache, builder| {
             cache
@@ -717,6 +707,40 @@ impl ShapesBuilder<'_> {
                 .tessellate(path.iter(), &self.fill_options, builder)
         });
     }
+
+    /// Fill the ring between `outer` and `inner` rounded rectangles.
+    pub(crate) fn fill_ring<S>(
+        &mut self,
+        outer: (Rect, CornerRadii),
+        inner: (Rect, CornerRadii),
+        shader: S,
+    ) where
+        S: IntoShader,
+    {
+        let mut path = lyon::path::Path::builder();
+        crate::path::add_rounded_rect(&mut path, outer.0, outer.1, lyon::path::Winding::Positive);
+        crate::path::add_rounded_rect(&mut path, inner.0, inner.1, lyon::path::Winding::Negative);
+        let path = path.build();
+        let options = self
+            .fill_options
+            .with_fill_rule(lyon::tessellation::FillRule::EvenOdd);
+        self.inner
+            .build(self.shapes, shader.into_shader(), |cache, builder| {
+                cache.fill_tess.tessellate(path.iter(), &options, builder)
+            });
+    }
+}
+
+/// Horizontal inset of a rounded edge at height `py` within a box of height `h`.
+fn corner_inset(top: f32, bottom: f32, py: f32, h: f32) -> f32 {
+    let inset = |radius: f32, distance: f32| {
+        if radius <= 0. || distance >= radius {
+            return 0.;
+        }
+        let dy = radius - distance;
+        radius - (radius * radius - dy * dy).max(0.).sqrt()
+    };
+    inset(top, py).max(inset(bottom, h - py))
 }
 
 impl ShapesBuilder<'_> {
@@ -735,16 +759,64 @@ impl ShapesBuilder<'_> {
     }
 }
 
-/// Cache background geometry and draw it before the node's content hooks.
+/// Resolve the four corner radius properties into one reactive value.
+pub(crate) fn take_corner_radii(style: &mut Style) -> Prop<CornerRadii> {
+    use crate::style::units::resolve_length;
+    let corners = [
+        resolve_length(style.take_radius_top_left(), "radius"),
+        resolve_length(style.take_radius_top_right(), "radius"),
+        resolve_length(style.take_radius_bottom_right(), "radius"),
+        resolve_length(style.take_radius_bottom_left(), "radius"),
+    ];
+    if let [
+        Prop::Static(top_left),
+        Prop::Static(top_right),
+        Prop::Static(bottom_right),
+        Prop::Static(bottom_left),
+    ] = corners
+    {
+        return Prop::Static(CornerRadii {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        });
+    }
+    let [top_left, top_right, bottom_right, bottom_left] = corners;
+    computed(move |_| CornerRadii {
+        top_left: top_left.get(),
+        top_right: top_right.get(),
+        bottom_right: bottom_right.get(),
+        bottom_left: bottom_left.get(),
+    })
+    .into()
+}
+
+fn is_transparent(brush: &Prop<Brush>) -> bool {
+    matches!(brush, Prop::Static(Brush::Solid(color)) if color.a <= 0.)
+}
+
+/// Cache background, border, and outline geometry for a node.
+///
+/// The drop shadow, background, and border draw before the node's content
+/// hooks; the outline draws after its children. Border widths come from the
+/// node's layout (`border` widths); `border_color` paints them.
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
-    let radius = crate::style::units::resolve_length(style.take_radius(), "radius");
+    let radii = take_corner_radii(style);
+    let border_color = style.take_border_color();
+    let outline_width =
+        crate::style::units::resolve_length(style.take_outline_width(), "outline-width");
+    let outline_offset =
+        crate::style::units::resolve_length(style.take_outline_offset(), "outline-offset");
+    let outline_color = style.take_outline_color();
     let shadow = style.take_shadow();
     let shadow_cache = style.take_shadow_cache();
     let mut shadow_mask = crate::shadow::ShadowMaskState::default();
     let paint = use_paint(style);
+    let border = crate::node::NodeInner::with_mut(|node| *node.layout.border);
     // Default transparent containers need no cache, even during inherited opacity changes.
-    let shapes = if matches!(&background, Prop::Static(Brush::Solid(color)) if color.a <= 0.) {
+    let shapes = if is_transparent(&background) && is_transparent(&border_color) {
         None
     } else {
         Some(paint.build(move |p| {
@@ -752,18 +824,56 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
             if rect.w <= 0. || rect.h <= 0. {
                 return;
             }
+            let radii = radii.get().fit(rect);
             let brush = background.get_clone();
-            if matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
-                return;
+            if !matches!(&brush, Brush::Solid(color) if color.a <= 0.) {
+                if radii.is_zero() {
+                    p.fill_rect(rect, brush.shader(rect));
+                } else {
+                    p.fill_rounded_rect(rect, radii, brush.shader(rect));
+                }
             }
-            let radius = radius.get().max(0.).min(rect.w.min(rect.h) / 2.);
-            if radius > 0. {
-                p.fill_rounded_rect(rect, radius, brush.shader(rect));
+            let border_brush = border_color.get_clone();
+            let widths: Edges = if border.is_null() {
+                Edges::ZERO
             } else {
-                p.fill_rect(rect, brush.shader(rect));
+                border.get()
+            };
+            if !widths.is_zero() && !matches!(&border_brush, Brush::Solid(color) if color.a <= 0.) {
+                let inner = rect.deflate(widths);
+                p.fill_ring(
+                    (rect, radii),
+                    (inner, radii.inset(widths)),
+                    border_brush.shader(rect),
+                );
             }
         }))
     };
+    let outline = if matches!(outline_width, Prop::Static(width) if width <= 0.)
+        || is_transparent(&outline_color)
+    {
+        None
+    } else {
+        Some(paint.build(move |p| {
+            let rect = rect.get();
+            let width = outline_width.get();
+            if rect.w <= 0. || rect.h <= 0. || width <= 0. {
+                return;
+            }
+            let offset = outline_offset.get();
+            let radii = radii.get().fit(rect);
+            let inner = rect.outset(offset);
+            let outer = inner.outset(width);
+            p.fill_ring(
+                (outer, radii.outset(offset + width)),
+                (inner, radii.outset(offset)),
+                outline_color.get_clone().shader(outer),
+            );
+        }))
+    };
+    if let Some(outline) = outline {
+        crate::node::on_after_clip(move |_| outline.get_clone().draw());
+    }
     style.on_render.append(move |_| {
         let rect = rect.get();
         if rect.w <= 0. || rect.h <= 0. {

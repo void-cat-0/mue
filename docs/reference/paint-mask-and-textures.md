@@ -11,7 +11,7 @@
 
 | Entry point | Use |
 | --- | --- |
-| `use_background(style, rect)` | Install the built-in background and shadow consumers on a terminal node. |
+| `use_background(style, rect)` | Install the built-in shadow, background, border, and outline consumers on a terminal node. |
 | `use_paint(style).build(...)` | Build CPU geometry from tracked dependencies. Draw the resulting shapes in a render hook. |
 | `use_paint(style).draw(...)` | Build and submit transient geometry in the current render callback. |
 | `Shapes::build(...)` | Own geometry independently of a node's style bindings. |
@@ -39,7 +39,10 @@ fn meter_track(ctx: NodeContext) -> Node {
 ## Background paint and shadows
 
 `use_background` caches CPU `Shapes` through `Paint::build`, rebuilding when its
-tracked rect, brush, radius or paint state changes. Cached geometry still uses
+tracked rect, brush, corner radii, border widths, or paint state changes. The
+drop shadow, background, and border draw before the node's own render hooks; the
+outline is a separate cache drawn after its children and outside the node's own
+clip (`clip_radius`, scroll clips), so focus rings stay visible. Cached geometry still uses
 immediate submission and batching; no per-background GPU buffers are created.
 Permanently transparent solid backgrounds do not create a cache, but may still
 draw shadows. The reactive cache is eager: changing dependencies can rebuild

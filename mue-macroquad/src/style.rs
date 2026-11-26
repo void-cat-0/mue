@@ -97,8 +97,24 @@ define_style! {
     background: Brush = Brush::default();
     /// Set the foreground brush for text and image tint.
     color: Brush = Brush::Solid(Color::WHITE);
-    /// Round background corners by this radius in pixels.
-    radius: Size = Size::Px(0.);
+    /// Round the top-left background, border, and outline corner (px/vw/vh).
+    /// Set all four corners with [`StyleableExt::radius`].
+    radius_top_left: Size = Size::Px(0.);
+    /// Round the top-right corner. See `radius_top_left`.
+    radius_top_right: Size = Size::Px(0.);
+    /// Round the bottom-right corner. See `radius_top_left`.
+    radius_bottom_right: Size = Size::Px(0.);
+    /// Round the bottom-left corner. See `radius_top_left`.
+    radius_bottom_left: Size = Size::Px(0.);
+    /// Paint the border area set by `border` widths. Transparent by default.
+    border_color: Brush = Brush::default();
+    /// Draw an outline outside the border box, above the children. It does not
+    /// affect layout or hit testing. Zero width draws nothing.
+    outline_width: Size = Size::Px(0.);
+    /// Paint the outline. Transparent by default.
+    outline_color: Brush = Brush::default();
+    /// Distance between the border box and the outline; negative values inset it.
+    outline_offset: Size = Size::Px(0.);
     /// Draw a drop shadow behind the background.
     shadow: Shadow;
     /// Select shared mask admission (Auto by default). Exact resident masks reuse immediately;
@@ -196,6 +212,7 @@ impl Style {
             layout: self.take_on_layout(),
             render: self.take_on_render(),
             after_children: CallbackList::default(),
+            after_clip: CallbackList::default(),
             pointer_event: self.take_on_pointer_event(),
             hover_event: self.take_on_hover_event(),
             wheel_event: self.take_on_wheel_event(),

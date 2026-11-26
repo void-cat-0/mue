@@ -123,7 +123,7 @@ let row = flexbox()
 
 ### Choose what the declared width measures
 
-With `border-box`, the declared width includes padding and border widths. With `content-box`, the same declaration sizes the content, then adds padding and borders. `border-width` participates in layout. Use a separate paint layer if you need to draw an outline.
+With `border-box`, the declared width includes padding and border widths. With `content-box`, the same declaration sizes the content, then adds padding and borders. `border-width` participates in layout and `border-color` paints it. An `outline` draws outside the box without affecting layout.
 
 <div class="mue-demo">
 <div class="mue-demo-code">
@@ -388,7 +388,7 @@ let child_b = style! {
 
 ### Change a tile without changing its size
 
-`background` and `background-color` set the backing paint. `border-radius` rounds it. `color` provides the foreground for text. `opacity` affects the node and its descendants together, so the text and paint fade together.
+`background` and `background-color` set the backing paint. `border-radius` rounds it (one value, or up to four corners), and `border` or `outline` draw a line inside or outside the box. `color` provides the foreground for text. `opacity` affects the node and its descendants together, so the text and paint fade together.
 
 <div class="mue-demo">
 <div class="mue-demo-code">

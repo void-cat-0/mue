@@ -459,7 +459,31 @@ macro_rules! bind_property {
     (opacity, $value:expr, $transition:expr) => {
         crate::transition::bind_projected($value, $transition)
     };
-    (radius, $value:expr, $transition:expr) => {
+    (radius_top_left, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (radius_top_right, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (radius_bottom_right, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (radius_bottom_left, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (border_color, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (outline_width, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (outline_color, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (backdrop_blur, $value:expr, $transition:expr) => {
+        crate::transition::bind_projected($value, $transition)
+    };
+    (outline_offset, $value:expr, $transition:expr) => {
         crate::transition::bind_projected($value, $transition)
     };
     (font_size, $value:expr, $transition:expr) => {
