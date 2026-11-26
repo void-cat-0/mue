@@ -11,6 +11,7 @@ pub mod shader_box;
 pub mod shape;
 pub mod slot;
 pub mod text;
+pub mod text_edit;
 pub mod vector;
 pub use atlas::GlyphAtlasStats;
 pub use children::*;
@@ -20,6 +21,7 @@ pub use shader_box::{ShaderBoxBuilder, shader_box};
 pub use shape::{ShapeBuilder, shape};
 pub use slot::{Callback, ScopedSlot, Slot};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
+pub use text_edit::{TextEditBuilder, TextEditHandle, text_edit};
 pub use vector::{PathBuilder, SvgBuilder, path, svg};
 
 use std::{cell::RefCell, marker::PhantomData, ops::Deref, rc::Rc};

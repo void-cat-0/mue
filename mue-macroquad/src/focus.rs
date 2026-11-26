@@ -584,6 +584,31 @@ pub(crate) fn mounted(id: NodeId, auto_focus: bool, contain: bool) {
     }
 }
 
+/// Focus state helpers for headless tests in other modules.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    pub(crate) fn reset() {
+        GLOBAL.with(|global| {
+            global.focused.set(None);
+            global.visible.set(false);
+            global.roots.borrow_mut().clear();
+            global.auto_focus.borrow_mut().clear();
+            global.pending_restore.borrow_mut().clear();
+            global.current_scope.set(None);
+        });
+    }
+
+    /// Lay out `root` in a 400 x 400 window and make it the only root.
+    pub(crate) fn mount(root: impl crate::node::IntoNode) -> crate::node::Node {
+        let root = root.into_node();
+        root.prepare_layout(crate::math::Vector::new(400., 400.));
+        set_roots([*root]);
+        root
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

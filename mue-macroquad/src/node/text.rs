@@ -878,6 +878,57 @@ fn build_retained_text(
     batches
 }
 
+/// Draw one layout run's glyphs with their baseline at `pen` (immediate path,
+/// shared with the editable text node).
+pub(crate) fn draw_run_glyphs(
+    p: &mut crate::paint::ShapesBuilder,
+    fonts: &mut FontState,
+    run: &cosmic_text::LayoutRun,
+    pen: crate::math::Vector,
+    brush: &Brush,
+    shader_bounds: Rect,
+) {
+    for glyph in run.glyphs.iter() {
+        let physical_glyph = glyph.physical((0., 0.), 1.0);
+        let atlas = fonts
+            .font_atlas
+            .get_or_insert_with(|| Atlas::new(device_page_size()));
+        let Some(cached) = atlas.cache_glyph(
+            &mut fonts.font_system,
+            &mut fonts.swash_cache,
+            physical_glyph.cache_key,
+        ) else {
+            continue;
+        };
+        let placement = cached.placement;
+        let draw_rect = Rect::new(
+            (physical_glyph.x + placement.left) as f32 + pen.x,
+            (physical_glyph.y - placement.top) as f32 + pen.y,
+            placement.width as f32,
+            placement.height as f32,
+        );
+        p.draw_texture(
+            draw_rect,
+            cached.texture,
+            cached.uv,
+            brush.shader(shader_bounds),
+        );
+    }
+}
+
+/// Finish a glyph pass started by [`draw_run_glyphs`].
+pub(crate) fn end_glyph_pass(fonts: &mut FontState) {
+    if let Some(atlas) = &mut fonts.font_atlas {
+        atlas.end_pass();
+    }
+}
+
+impl FontState {
+    pub(crate) fn font_system(&mut self) -> &mut FontSystem {
+        &mut self.font_system
+    }
+}
+
 /// Display a plain reactive string with the renderer's text node.
 #[mue_macros::node]
 pub fn text(ctx: NodeContext, text: Rc<str>) -> Node {
