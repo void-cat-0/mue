@@ -2,7 +2,8 @@
 //! directives).
 //!
 //! A [`Directive`] adds hooks or styles to a node. Attach one with
-//! [`WithDirective::directive`]. [`Hotkey`] is a built-in directive.
+//! [`WithDirective::directive`]. Built-in directives: [`Hotkey`] and
+//! [`ClickOutside`].
 //!
 //! ```
 //! use mue_components::prelude::*;
@@ -13,8 +14,14 @@
 //!     .directive(Hotkey::command(KeyCode::S, || println!("save")));
 //! ```
 
+use mue_core::{prop::Prop, signal::Access};
 use mue_macroquad::{
-    event::keyboard::{KeyCode, KeyEvent},
+    event::{
+        keyboard::{KeyCode, KeyEvent},
+        pointer::use_pointer_down_observer,
+    },
+    math::Vector,
+    node::{NodeHandle, NodeRef},
     style::{Style, Styleable},
 };
 
@@ -92,4 +99,82 @@ impl<F: FnMut() + 'static> Directive for Hotkey<F> {
             }
         });
     }
+}
+
+/// Run an action when a press lands outside the node (Vue's
+/// `v-click-outside`), for dismissing menus and popovers.
+///
+/// A press counts as inside when it hits the node or one of its descendants,
+/// or lands within the node's bounds with nothing else on top. Presses are
+/// observed before they are dispatched, so the action runs even when the
+/// press then lands on another control.
+///
+/// ```
+/// use mue_components::prelude::*;
+/// use mue_core::prelude::*;
+///
+/// # let owner = mue_core::scope::OwnedScope::new();
+/// # owner.run(|| {
+/// let open = signal(true);
+/// let _menu = flexbox()
+///     .directive(ClickOutside::new(move || open.set(false)).enabled(open));
+/// # });
+/// ```
+pub struct ClickOutside<F> {
+    action: F,
+    enabled: Prop<bool>,
+}
+
+impl<F: FnMut() + 'static> ClickOutside<F> {
+    pub fn new(action: F) -> Self {
+        Self {
+            action,
+            enabled: Prop::Static(true),
+        }
+    }
+
+    /// Only watch presses while `enabled` (for example while a menu is open).
+    pub fn enabled(mut self, enabled: impl Into<Prop<bool>>) -> Self {
+        self.enabled = enabled.into();
+        self
+    }
+}
+
+impl<F: FnMut() + 'static> Directive for ClickOutside<F> {
+    fn apply(self, style: &mut Style) {
+        let Self {
+            mut action,
+            enabled,
+        } = self;
+        let handle = NodeHandle::new();
+        style.bind_node_handle(handle);
+        use_pointer_down_observer(move |position, path| {
+            if !enabled.get_untracked() {
+                return;
+            }
+            let Some(node) = handle.get_untracked() else {
+                return;
+            };
+            if !press_is_inside(node, position, path.iter()) {
+                action();
+            }
+        });
+    }
+}
+
+fn press_is_inside<'a>(
+    node: NodeRef,
+    position: Vector,
+    path: impl Iterator<Item = &'a NodeRef> + Clone,
+) -> bool {
+    if path.clone().any(|hit| node.contains(*hit)) {
+        return true;
+    }
+    // A non-interactive node is not in the hit path; fall back to its bounds
+    // when only its ancestors were hit (nothing covers it there).
+    let within = node
+        .rect()
+        .and_then(|rect| rect.try_get_untracked())
+        .is_some_and(|rect| rect.contains(&position));
+    within && path.clone().all(|hit| hit.contains(node))
 }
