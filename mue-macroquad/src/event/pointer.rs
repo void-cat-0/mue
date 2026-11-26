@@ -366,7 +366,10 @@ impl InputPlan {
                     x,
                     y,
                     ..
-                } => Some(vec2(x / dpi, y / dpi)),
+                } => {
+                    mouse.touch();
+                    Some(vec2(x / dpi, y / dpi))
+                }
                 InputEvent::MouseWheel { .. } => mouse.position(),
                 InputEvent::MouseLeave {} => {
                     mouse.leave();
@@ -1235,6 +1238,12 @@ impl EventHandler for PointerManager {
     fn touch_event(&mut self, phase: miniquad::TouchPhase, id: u64, x: f32, y: f32, _time: f64) {
         let pointer_id = PointerId::from_touch_id(id);
         let pos = self.logical_position(x, y);
+        if phase == miniquad::TouchPhase::Started {
+            // A finger ends any mouse hover (no sticky `&hover` after a tap).
+            super::hover::note_touch();
+            self.hover.touch();
+            self.refresh_hover(false);
+        }
         match phase {
             miniquad::TouchPhase::Started => {
                 self.on_pointer_start(pointer_id, PointerType::Touch, pos)

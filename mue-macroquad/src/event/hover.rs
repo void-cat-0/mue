@@ -1,5 +1,19 @@
+//! Mouse hover tracking.
+//!
+//! Touch input never hovers. A touch also clears any hover left by an earlier
+//! mouse position, and mouse events that arrive just after a touch (emulated
+//! by some platforms, such as Windows touch screens and browsers) do not
+//! hover either, so `&hover` styles do not stick after a tap (MB2).
+//! [`hover_capable`] reports whether the last pointer could hover.
+
+use std::cell::Cell;
+
 use indexmap::IndexSet;
-use mue_core::{batch, signal::Signal};
+use mue_core::{
+    batch,
+    scope::Scope,
+    signal::{Access, ReadSignal, Signal},
+};
 
 use crate::{
     math::{Rect, Vector},
@@ -8,6 +22,41 @@ use crate::{
 };
 
 use super::hit_test::hit_test;
+
+/// Seconds after a touch during which mouse events are treated as emulated.
+const TOUCH_MOUSE_GRACE: f64 = 0.8;
+
+thread_local! {
+    static HOVER_CAPABLE: Signal<bool> = Scope::null().run(|| {
+        Signal::new(!cfg!(any(target_os = "android", target_os = "ios")))
+    });
+    static LAST_TOUCH: Cell<f64> = const { Cell::new(f64::NEG_INFINITY) };
+}
+
+/// Whether the most recent pointer could hover (a mouse or pen rather than a
+/// finger), like the CSS `(hover: hover)` media feature. Tracked. Starts
+/// true on desktop platforms and false on Android and iOS.
+pub fn hover_capable() -> ReadSignal<bool> {
+    HOVER_CAPABLE.with(|signal| **signal)
+}
+
+fn set_hover_capable(capable: bool) {
+    HOVER_CAPABLE.with(|signal| {
+        if signal.get_untracked() != capable {
+            signal.set(capable);
+        }
+    });
+}
+
+/// Record a touch: clears hover and starts the emulated-mouse grace period.
+pub(crate) fn note_touch() {
+    LAST_TOUCH.with(|last| last.set(miniquad::date::now()));
+    set_hover_capable(false);
+}
+
+fn mouse_is_emulated() -> bool {
+    LAST_TOUCH.with(|last| miniquad::date::now() - last.get() < TOUCH_MOUSE_GRACE)
+}
 
 /// Mouse location is independent of the pressed pointer's captured down path.
 #[derive(Clone)]
@@ -49,7 +98,17 @@ impl HoverState {
         })
     }
 
+    /// Forget the mouse position for a touch.
+    pub(crate) fn touch(&mut self) {
+        self.position = None;
+    }
+
     pub(crate) fn observe_mouse(&mut self, position: Vector) -> bool {
+        // Mouse events emulated from a recent touch do not hover.
+        if mouse_is_emulated() {
+            self.position = None;
+            return false;
+        }
         // Captured native events may continue outside the window after leave.
         // They remain raw Scene input, but cannot establish a UI mouse route.
         let valid = self.focused
@@ -61,6 +120,7 @@ impl HoverState {
             // A fresh in-window position also confirms re-entry when capture
             // prevents the platform from reporting a separate native enter.
             self.outside = false;
+            set_hover_capable(true);
         }
         valid
     }
@@ -120,5 +180,30 @@ impl HoverState {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touches_clear_hover_and_suppress_emulated_mouse() {
+        LAST_TOUCH.with(|last| last.set(f64::NEG_INFINITY));
+        let mut hover = HoverState::default();
+        assert!(hover.observe_mouse(Vector::new(10., 10.)));
+        assert!(hover_capable().get_untracked());
+        hover.touch();
+        note_touch();
+        assert_eq!(hover.position(), None, "a touch ends the mouse hover");
+        assert!(!hover_capable().get_untracked());
+        assert!(
+            !hover.observe_mouse(Vector::new(12., 12.)),
+            "a mouse event right after a touch is emulated"
+        );
+        assert_eq!(hover.position(), None);
+        LAST_TOUCH.with(|last| last.set(f64::NEG_INFINITY));
+        assert!(hover.observe_mouse(Vector::new(12., 12.)));
+        assert!(hover_capable().get_untracked());
     }
 }
