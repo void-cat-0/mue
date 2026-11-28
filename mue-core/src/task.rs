@@ -1911,7 +1911,7 @@ mod tests {
         assert_eq!(count.get(), 3);
         let outputs = tasks
             .iter_mut()
-            .map(|task| poll_task(task))
+            .map(poll_task)
             .collect::<Vec<_>>();
         assert_eq!(
             outputs,
@@ -3084,7 +3084,7 @@ mod tests {
         .join()
         .unwrap();
         assert!(task.is_finished());
-        let _ = block_on_handle(task, None);
+        block_on_handle(task, None);
     }
 
     #[test]

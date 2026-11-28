@@ -195,7 +195,7 @@ mod tests {
         });
         let thread_id = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_ne!(thread_id, ui_thread);
-        let mut publisher = super::super::spawn(async move { task.await });
+        let mut publisher = super::super::spawn(task);
         tick_until(|| publisher.is_finished());
         assert_eq!(poll_task(&mut publisher), Poll::Ready(42));
     }
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn blocking_task_panic_propagates_on_await() {
         let task = spawn_blocking(|| -> u32 { panic!("blocking boom") });
-        let publisher = super::super::spawn(async move { task.await });
+        let publisher = super::super::spawn(task);
         let result = catch_unwind(AssertUnwindSafe(|| {
             tick_until(|| publisher.is_finished());
         }));
