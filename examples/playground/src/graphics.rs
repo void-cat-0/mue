@@ -64,7 +64,6 @@ fn image_card() -> Node {
     let (round, round_control) = option_switch("Rounded", false);
     card(
         "Images",
-        "A photo decoded on a worker thread, then fitted into a fixed box. The box outline is the node's bounds.",
         (
             fit_control,
             position_control,
@@ -105,7 +104,6 @@ fn paint_card() -> Node {
     };
     card(
         "Backgrounds, borders, and outlines",
-        "Gradients, per-side borders, per-corner radii, outlines with an offset, and gradient borders.",
         row((
             swatch("solid", flexbox().style(box_style()).style(mue_macroquad::style! { background: {BLUE}; border-radius: 10px; })),
             swatch(
@@ -171,7 +169,6 @@ fn shadow_card() -> Node {
         segmented("Corner radius", vec![("0", 0.), ("12", 12.), ("40", 40.)]);
     card(
         "Box shadows",
-        "CSS box-shadow: offset, blur, spread, and color, in layers. Shadows follow the corner radius and never show through the box.",
         (
             shadow_control,
             radius_control,
@@ -207,7 +204,6 @@ fn corner_card() -> Node {
     ];
     card(
         "Corner shapes",
-        "CSS corner-shape: the same border-radius drawn as different curves. Edges, borders, and outlines are antialiased.",
         (
             radius_control,
             row(shapes
@@ -246,7 +242,6 @@ fn vector_card() -> Node {
     let size = || mue_macroquad::style! { width: {u(56.)}; height: {u(56.)}; };
     card(
         "Vector paths, SVG, and icons",
-        "Paths scale to their box without blurring; icons follow the font size and text color.",
         (
             row((
                 swatch(
@@ -298,7 +293,6 @@ fn vector_card() -> Node {
                     .style(mue_macroquad::style! { font-size: {f(24.)}; color: {foreground()}; }),
                 icon_named("check")
                     .style(mue_macroquad::style! { font-size: {f(32.)}; color: #7fd1a8; }),
-                hint("Icons at 16, 24, and 32"),
             )),
         ),
     )
@@ -346,7 +340,6 @@ fn effects_card() -> Node {
     ));
     card(
         "Layer effects and shaders",
-        "Group opacity draws the pair as one layer (no darker overlap), filters apply to the whole group, and backdrop blur frosts what is behind.",
         (
             row((
                 swatch("opacity 0.5", pair().opacity(0.5)),
@@ -427,8 +420,7 @@ fn stripes_card() -> Node {
         ))
     });
     card(
-        "Blinds (stripes)",
-        "The moving diagonal stripes of Phira's home screen, a built-in shader component; the app background uses it too. Every parameter is reactive, so the sliders change it live.",
+        "Stripes",
         (
             stack()
                 .style(mue_macroquad::style! {
@@ -483,7 +475,7 @@ fn stripes_card() -> Node {
                     tint,
                 ),
             ),
-            row((button("Phira's defaults").size(ControlSize::Sm).on_activate(reset),)),
+            row((button("Restore defaults").size(ControlSize::Sm).on_activate(reset),)),
             code_block(code).style(mue_macroquad::style! {
                 width: 100%; min-width: 0px;
                 font-size: {f(13.)}; line-height: {u(19.)};
@@ -496,7 +488,6 @@ fn stripes_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Images, paint, shadows, vectors, layer effects, custom shaders, and the built-in blinds effect.",
         (
             image_card(),
             paint_card(),
@@ -511,9 +502,10 @@ pub fn page() -> Node {
                     "Each object-fit mode places the photo as labeled",
                     "Borders, radii, and outlines are crisp at this DPI",
                     "Shadows are soft with no bright halo",
-                    "Group opacity shows no darker overlap; blur and grayscale apply",
+                    "Group opacity shows no darker overlap",
+                    "Blur and grayscale apply to the whole group",
                     "The halftone shader animates smoothly",
-                    "The blinds follow every slider live and move smoothly; speed 0 stops them",
+                    "Stripes follow every slider, and speed 0 stops them",
                 ],
             ),
         ),

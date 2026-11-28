@@ -19,7 +19,7 @@ const PAGE: &str = "Overlays & focus";
 
 fn dialog_card() -> Node {
     let open = signal(false);
-    let (dismissible, dismissible_control) = option_switch("Backdrop and back close it", true);
+    let (dismissible, dismissible_control) = option_switch("Dismissible", true);
     let name = signal(String::new());
     let dialog = keyed(dismissible, move |dismissible| {
         overlay_host(
@@ -43,7 +43,6 @@ fn dialog_card() -> Node {
                             font-size: {f(18.)}; line-height: {u(24.)};
                             color: {foreground()};
                         }),
-                    hint("Focus moved into the dialog. Tab and Shift+Tab stay inside it."),
                     input().model(name).placeholder("Type something"),
                     row((
                         button("Cancel").on_activate(move || open.set(false)),
@@ -63,7 +62,6 @@ fn dialog_card() -> Node {
     });
     card(
         "Modal dialog",
-        "Teleported above everything, with a backdrop, a focus trap, and focus returned to the trigger on close.",
         (
             dismissible_control,
             row((button("Open dialog")
@@ -90,7 +88,7 @@ fn menu_item(label: &'static str, open: Signal<bool>) -> Node {
             border-radius: {u(6.)};
         })
         .on_activate(move || {
-            log_event(format!("menu: {label}"));
+            log_event(format!("menu {label}"));
             open.set(false);
         })
         .children(text(label).style(mue_macroquad::style! {
@@ -116,7 +114,6 @@ fn popover_card() -> Node {
     let tip_visible = signal(false);
     card(
         "Popover and tooltip from primitives",
-        "The library's menu and tooltip (see Components) are built from these parts: teleport into a layer, anchored to a node with a placement that flips to stay in the window, presence for the enter and exit animation, and ClickOutside and the back handler to close.",
         (
             placement_control,
             row((
@@ -132,7 +129,7 @@ fn popover_card() -> Node {
                     })
                     .with_hovered(move |view, hovered| {
                         watch(hovered, move |hovered| tip_visible.set(hovered.get()));
-                        view.children(text("Hover me for a tooltip").style(mue_macroquad::style! {
+                        view.children(text("Hover here").style(mue_macroquad::style! {
                             font-size: {f(14.)}; line-height: {u(20.)};
                             color: {foreground()};
                         }))
@@ -190,16 +187,15 @@ fn focus_card() -> Node {
     let item = |label: &'static str, tab_index: i32| {
         button(label)
             .tab_index(tab_index)
-            .on_focus(move |_| log_event(format!("focus: {label}")))
-            .on_activate(move || log_event(format!("activate: {label}")))
+            .on_focus(move |_| log_event(format!("focus {label}")))
+            .on_activate(move || log_event(format!("activate {label}")))
     };
     card(
         "Keyboard focus",
-        "Press Tab and Shift+Tab. Enter or Space activates the focused button. \"Skipped\" has a negative tab index: clicking focuses it, Tab skips it.",
         row((
             item("One", 0),
             item("Two", 0),
-            item("Skipped", -1),
+            item("Not in tab order", -1),
             item("Three", 0),
         )),
     )
@@ -211,11 +207,11 @@ fn back_card() -> Node {
     // Handlers enabled later win, like Android's OnBackPressedDispatcher.
     use_back_handler(first, move || {
         first.set(false);
-        log_event("back: closed level 1");
+        log_event("back closed level 1");
     });
     use_back_handler(second, move || {
         second.set(false);
-        log_event("back: closed level 2");
+        log_event("back closed level 2");
     });
     let status = computed(move |_| {
         Rc::<str>::from(format!(
@@ -226,16 +222,15 @@ fn back_card() -> Node {
     });
     card(
         "Back navigation",
-        "Open both levels, then press back (Escape, the Android back button, the button below, or swipe right from the left edge of the strip). The most recently opened level closes first; with nothing open, back returns to the previous page.",
         (
             row((
                 button("Open level 1").on_activate(move || first.set(true)),
                 button("Open level 2").on_activate(move || second.set(true)),
-                button("Dispatch back").primary(true).on_activate(move || {
+                button("Back").primary(true).on_activate(move || {
                     let any = can_go_back();
                     let handled = dispatch_back();
                     log_event(format!(
-                        "dispatch_back → handled {handled} (can_go_back was {any})"
+                        "dispatch_back handled {handled}, can_go_back was {any}"
                     ));
                 }),
             )),
@@ -250,32 +245,29 @@ fn back_card() -> Node {
                     justify-content: center;
                     padding-left: {u(16.)};
                 })
-                .children(hint(
-                    "⟵ Swipe right from this strip's left edge (mouse drags work)",
-                )),
+                .children(hint("Swipe right from the left edge")),
         ),
     )
 }
 
 pub fn page() -> Node {
     page_body(
-        "The overlay machinery under the library's dialogs, menus, and tooltips: modal layers, anchored popovers, keyboard focus, and the back handler stack.",
         (
             dialog_card(),
             popover_card(),
             focus_card(),
             back_card(),
-            card("Events", "", event_log()),
+            card("Events", event_log()),
             checklist(
                 PAGE,
                 &[
-                    "The dialog traps Tab and returns focus to its button on close",
-                    "Back and the backdrop close the dialog only when allowed",
-                    "The menu stays inside the window and closes on an outside press",
-                    "The tooltip follows hover and never sticks after a touch",
-                    "Tab order skips the negative tab index",
-                    "Back closes level 2, then level 1, then goes to the previous page",
-                    "The edge swipe on the strip triggers back",
+                    "Tab stays inside the dialog and returns to its button",
+                    "Back and backdrop close the dialog only when dismissible",
+                    "The menu stays in the window and closes on an outside press",
+                    "The tooltip never sticks after a touch",
+                    "Tab skips the Not in tab order button",
+                    "Back closes level 2, then level 1, then the page",
+                    "The edge swipe triggers back",
                 ],
             ),
         ),

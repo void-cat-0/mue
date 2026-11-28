@@ -259,35 +259,19 @@ pub fn mono(content: impl Into<Prop<Rc<str>>>) -> Node {
         .into_node()
 }
 
-/// A page: an optional one-line introduction followed by its cards.
-pub fn page_body(intro: &str, cards: impl IntoChildren) -> Node {
-    let mut children = Vec::new();
-    if !intro.is_empty() {
-        children.push(hint(Rc::<str>::from(intro)));
-    }
+/// A page: its cards, one below the other.
+pub fn page_body(cards: impl IntoChildren) -> Node {
     stack()
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
             gap: {system::space(4.)};
         })
-        .children((children, cards))
+        .children(cards)
         .into_node()
 }
 
-/// A titled card, with an optional one-line description.
-pub fn card(title: &str, description: &str, content: impl IntoChildren) -> Node {
-    let mut header = vec![
-        text(Rc::<str>::from(title))
-            .style(mue_macroquad::style! {
-                font-size: {f(15.)}; line-height: {u(22.)};
-                font-weight: 600;
-                color: {foreground()};
-            })
-            .into_node(),
-    ];
-    if !description.is_empty() {
-        header.push(hint(Rc::<str>::from(description)));
-    }
+/// A titled card.
+pub fn card(title: &str, content: impl IntoChildren) -> Node {
     let compact = responsive::compact();
     stack()
         .style(mue_macroquad::style! {
@@ -300,9 +284,11 @@ pub fn card(title: &str, description: &str, content: impl IntoChildren) -> Node 
             background: {panel_brush()};
         })
         .children((
-            stack()
-                .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {system::space(0.5)}; })
-                .children(header),
+            text(Rc::<str>::from(title)).style(mue_macroquad::style! {
+                font-size: {f(15.)}; line-height: {u(22.)};
+                font-weight: 600;
+                color: {foreground()};
+            }),
             content,
         ))
         .into_node()
@@ -478,11 +464,7 @@ pub fn event_log() -> Node {
         })
         .children((
             text(log.map(|lines| {
-                Rc::<str>::from(if lines.is_empty() {
-                    "Event log: interact with the demos above"
-                } else {
-                    "Event log (newest first)"
-                })
+                Rc::<str>::from(if lines.is_empty() { "No events yet" } else { "Newest first" })
             }))
             .style(mue_macroquad::style! {
                 font-size: {f(12.)}; line-height: {u(16.)};
@@ -637,10 +619,9 @@ pub fn checklist(page: &'static str, labels: &[&'static str]) -> Node {
         })
         .collect::<Vec<_>>();
     card(
-        "Manual checks",
-        "Tap a line to mark it ✓ passed, ✗ failed, or ○ untested. The Overview page totals them.",
+        "Checks",
         stack()
             .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: 0px; })
-            .children(rows),
+            .children((hint("Tap a line to mark it passed or failed"), rows)),
     )
 }

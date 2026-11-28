@@ -49,7 +49,6 @@ fn lengths_card() -> Node {
     };
     card(
         "Lengths",
-        "Literal lengths are fixed logical pixels; values in braces are Rust expressions. This app writes design units as {u(..)} (logical pixels times the zoom) and font sizes as {f(..)} (rem), so pages scale with the zoom button.",
         row((
             tile("padding: 12px 20px;", mue_macroquad::style! { padding: 12px 20px; }),
             tile("width: 45%;", mue_macroquad::style! { width: 45%; flex-grow: 0; }),
@@ -88,7 +87,6 @@ fn paint_card() -> Node {
     };
     card(
         "Paint declarations",
-        "Borders, outlines, corner shapes, and shadows, each written as one style! declaration.",
         row((
             swatch(
                 "border: 3px solid #ffd36e;\nborder-radius: 18px 4px;",
@@ -119,10 +117,9 @@ fn paint_card() -> Node {
 }
 
 fn reactive_card() -> Node {
-    let (active, control) = option_switch("Accent state", false);
+    let (active, control) = option_switch("Accent", false);
     card(
         "Reactive declarations",
-        "Signals inside braces keep a declaration live, and transition animates every change, here color, rotation, and radius together.",
         (
             control,
             stack()
@@ -158,7 +155,6 @@ fn reactive_card() -> Node {
 fn text_card() -> Node {
     card(
         "Text declarations",
-        "Weight, family, decoration, color, and a unitless line height.",
         text("font-weight: 600; font-family: monospace;\ntext-decoration: underline; line-height: 1.5;")
             .style(mue_macroquad::style! {
                 width: 100%;
@@ -180,7 +176,6 @@ fn transform_card() -> Node {
     let time = animation_time();
     card(
         "3D transforms",
-        "perspective, rotateX, rotateY, translateZ, and rotate, driven by the frame clock.",
         (
             control,
             center()
@@ -217,7 +212,6 @@ fn transform_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "The style! macro: lengths, paint, reactive values with transitions, text, and 3D transforms.",
         (
             lengths_card(),
             paint_card(),
@@ -227,9 +221,9 @@ pub fn page() -> Node {
             checklist(
                 PAGE,
                 &[
-                    "Literal lengths stay fixed while design units grow with the zoom",
+                    "Literal lengths stay fixed, design units follow the zoom",
                     "Corner shapes, outlines, and shadows match their declarations",
-                    "The accent switch animates color, radius, and rotation together",
+                    "Accent animates color, radius, and rotation together",
                     "The 3D card rotates in perspective without tearing",
                 ],
             ),

@@ -4,6 +4,7 @@
 
 use super::controls::*;
 use mue_components::*;
+use mue_components::system::{ControlSize, Palette};
 use mue_core::{prelude::*, scope::OwnedScope};
 use mue_macroquad::{
     app::runtime::set_timeout,
@@ -17,7 +18,6 @@ use mue_macroquad::{
     },
     math::{Rect, Vector},
     node::NodeHandle,
-    paint::color::Color,
     paint::shader::Brush,
     style::{Styleable, StyleableExt},
 };
@@ -232,7 +232,7 @@ fn reactivity() -> Outcome {
         // Effects may be deferred to the end of the current batch (this test
         // runs inside a timer callback), but computed values are always fresh.
         expect("computed", tripled.get(), 15)?;
-        Ok("signal → computed is fresh; the effect ran".into())
+        Ok("computed values are fresh and the effect ran".into())
     })
 }
 
@@ -336,7 +336,7 @@ fn result_row(name: &'static str, status: ReadSignal<Status>) -> Node {
     });
     let tint = status.map(|status| {
         Brush::Solid(match status {
-            Status::Pending => Color::from_rgba(146, 157, 178, 255),
+            Status::Pending => Palette::Gray.shade(400),
             Status::Pass(_) => GREEN,
             Status::Fail(_) => RED,
         })
@@ -428,7 +428,7 @@ pub fn page() -> Node {
                 all.len()
             );
             if !failing.is_empty() {
-                line.push_str(&format!(" · failing: {}", failing.join(", ")));
+                line.push_str(&format!(" · failing {}", failing.join(", ")));
             }
             Rc::<str>::from(line)
         })
@@ -453,16 +453,14 @@ pub fn page() -> Node {
         });
     };
     page_body(
-        "Checks that run on this device and need no interaction. They also run when the page is first opened.",
         (
             card(
                 "Automated checks",
-                "Text editing model, layout, hit testing, shaping, reactivity, back handling, pointer observers, and timers.",
                 stack()
                     .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(2.)}; })
                     .children((
                         row((
-                            button("Run again").primary(true).on_activate(run_all),
+                            button("Run checks").primary(true).size(ControlSize::Sm).on_activate(run_all),
                             para(summary),
                         )),
                         stack()
@@ -472,11 +470,11 @@ pub fn page() -> Node {
             ),
             card(
                 "Clipboard round trip",
-                "Copies a short marker to the system clipboard and reads it back. This replaces what is on your clipboard, so it only runs when you press the button.",
                 stack()
                     .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(4.)}; })
                     .children((
-                        row((button("Test clipboard").on_activate(clipboard_test),)),
+                        hint("Replaces what is on your clipboard"),
+                        row((button("Copy and read back").variant(ButtonVariant::Outline).size(ControlSize::Sm).on_activate(clipboard_test),)),
                         result_row("Clipboard", *clipboard),
                     )),
             ),
@@ -484,7 +482,7 @@ pub fn page() -> Node {
                 "Self tests",
                 &[
                     "Every automated check passes",
-                    "The clipboard round trip passes",
+                    "Clipboard round trip passes",
                 ],
             ),
         ),

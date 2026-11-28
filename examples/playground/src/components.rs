@@ -44,7 +44,7 @@ fn caption(label: &'static str) -> Node {
     text(label)
         .style(mue_macroquad::style! {
             font-size: {f(12.)}; line-height: {u(16.)};
-            font-weight: 700;
+            font-weight: 600;
             color: {muted()};
         })
         .into_node()
@@ -64,7 +64,7 @@ fn buttons_card() -> Node {
     let loading = signal(false);
     let disabled = signal(false);
     let clicks = signal(0u32);
-    let last = signal(Rc::<str>::from("none yet"));
+    let last = signal(Rc::<str>::from("none"));
     let press = move |name: &'static str| {
         move || {
             clicks.update(|n| *n += 1);
@@ -95,7 +95,6 @@ fn buttons_card() -> Node {
     );
     card(
         "Buttons",
-        "Five variants in any palette and size. Pressing scales a button down; loading shows a spinner and keeps the width.",
         groups((
             field("Palette", picker(PALETTES.to_vec(), palette)),
             field("Size", picker(SIZES.to_vec(), size)),
@@ -104,7 +103,7 @@ fn buttons_card() -> Node {
                 switch().checked(disabled).label("Disabled").size(ControlSize::Sm),
             )),
             variants,
-            caption("ICONS, LOADING TEXT, FULL WIDTH"),
+            caption("Icons and loading"),
             row((
                 button("Star").left_icon(text("★")).palette(Palette::Yellow).on_activate(press("Star")),
                 button("Next").right_icon(text("→")).variant(ButtonVariant::Outline).palette(Palette::Teal).on_activate(press("Next")),
@@ -117,7 +116,7 @@ fn buttons_card() -> Node {
                 icon_button(text("≡")).variant(ButtonVariant::Outline).on_activate(press("⚙")),
             )),
             button("Full width").full_width(true).variant(ButtonVariant::Subtle).palette(Palette::Purple).on_activate(press("Full width")),
-            caption("BUTTON GROUPS"),
+            caption("Groups"),
             stack().style(mue_macroquad::style! { gap: {u(10.)}; align-items: flex-start; }).children((
                 button_group(vec![
                     button("Day").on_activate(press("Day")),
@@ -135,7 +134,7 @@ fn buttons_card() -> Node {
                 .size(ControlSize::Sm),
             )),
             mono(computed(move |_| {
-                Rc::<str>::from(format!("{} presses · last: {}", clicks.get(), last.get_clone()))
+                Rc::<str>::from(format!("{} presses · last {}", clicks.get(), last.get_clone()))
             })),
         )),
     )
@@ -172,7 +171,6 @@ fn inputs_card() -> Node {
     });
     card(
         "Inputs",
-        "Outline, filled, flushed, and unstyled fields in four sizes; all fields share one model. The focus border uses the focus ring color.",
         groups((
             field(
                 "Variant",
@@ -247,10 +245,9 @@ fn choices_card() -> Node {
     let labels = ["Photos", "Music", "Documents"];
     card(
         "Checkbox, radio, and switch",
-        "Checks scale in, radio dots grow, switch thumbs slide with a spring. The parent box is indeterminate while only some children are checked. Arrow keys move inside the radio group.",
         groups((
             field("Size", picker(SIZES.to_vec(), size)),
-            caption("SELECT ALL"),
+            caption("Select all"),
             checkbox()
                 .checked(parent)
                 .indeterminate(computed(move |_| some.get() && !all.get()))
@@ -269,7 +266,7 @@ fn choices_card() -> Node {
                         .map(|(item, label)| checkbox().checked(*item).label(label).into_node())
                         .collect::<Vec<_>>(),
                 ),
-            caption("STATES, PALETTES, RADIO GROUP, SWITCHES"),
+            caption("States and palettes"),
             sized,
             mono(computed(move |_| {
                 let checked: Vec<&str> = items
@@ -315,7 +312,6 @@ fn slider_card() -> Node {
     });
     card(
         "Slider",
-        "Drag the thumb, press the track to jump, or use the arrow keys, Page Up/Down, Home, and End. The three sliders share one value.",
         groups((
             field("Palette", picker(PALETTES.to_vec(), palette)),
             sliders,
@@ -356,7 +352,6 @@ fn progress_card() -> Node {
     });
     card(
         "Progress and spinners",
-        "Bars and rings glide to a new value; indeterminate ones run forever. The slider drives every determinate indicator.",
         groups((
             field("Value", slider().value(value).palette(Palette::Green)),
             field("Size", picker(SIZES.to_vec(), size)),
@@ -365,7 +360,7 @@ fn progress_card() -> Node {
                 switch().checked(moving).label("Animated stripes").size(ControlSize::Sm),
             )),
             bars,
-            caption("CIRCULAR"),
+            caption("Circular"),
             row((
                 circular_progress()
                     .value(value)
@@ -375,7 +370,7 @@ fn progress_card() -> Node {
                 circular_progress().value(value).palette(Palette::Teal).diameter(Size::Rem(2.)),
                 circular_progress().indeterminate(true).palette(Palette::Purple).diameter(Size::Rem(3.)),
             )),
-            caption("SPINNERS"),
+            caption("Spinners"),
             row((
                 spinner().size(ControlSize::Xs),
                 spinner().size(ControlSize::Sm),
@@ -438,13 +433,12 @@ fn badges_card() -> Node {
     .style(mue_macroquad::style! { width: 100%; flex-direction: column; gap: {u(6.)}; align-items: flex-start; });
     card(
         "Badges and tags",
-        "Badges label a status; tags label keywords and can be removed. Removed tags shrink away and the others slide over.",
         groups((
-            caption("BADGES: SUBTLE, SOLID, OUTLINE"),
+            caption("Badges"),
             badge_row(BadgeVariant::Subtle),
             badge_row(BadgeVariant::Solid),
             badge_row(BadgeVariant::Outline),
-            caption("TAGS IN THREE SIZES"),
+            caption("Tags"),
             row((
                 mue_components::tag("Small").size(ControlSize::Sm).palette(Palette::Teal),
                 mue_components::tag("Medium").size(ControlSize::Md).palette(Palette::Teal),
@@ -452,9 +446,9 @@ fn badges_card() -> Node {
                 mue_components::tag("Outline").variant(BadgeVariant::Outline).palette(Palette::Cyan),
                 mue_components::tag("With icon").left_icon(text("★")).palette(Palette::Yellow),
             )),
-            caption("CLOSABLE"),
+            caption("Closable tags"),
             closable,
-            row((button("Reset tags").size(ControlSize::Xs).variant(ButtonVariant::Outline).on_activate(reset),)),
+            row((button("Restore tags").size(ControlSize::Xs).variant(ButtonVariant::Outline).on_activate(reset),)),
         )),
     )
 }
@@ -480,13 +474,12 @@ fn tabs_card() -> Node {
     };
     card(
         "Tabs",
-        "The indicator slides to the selected tab: an underline, an enclosed card, or a soft pill. All three share one selection; arrow keys, Home, and End move between tabs.",
         groups((
-            caption("LINE"),
+            caption("Line"),
             make(TabsVariant::Line, Palette::Blue, false),
-            caption("ENCLOSED, FITTED"),
+            caption("Enclosed, fitted"),
             make(TabsVariant::Enclosed, Palette::Purple, true),
-            caption("SOFT ROUNDED"),
+            caption("Soft rounded"),
             make(TabsVariant::SoftRounded, Palette::Teal, false),
             mono(show(*selected, move |index| format!("selected tab {index} ({})", names.get(*index).unwrap_or(&"?")))),
         )),
@@ -503,9 +496,8 @@ fn popups_card() -> Node {
     };
     card(
         "Tooltips and menus",
-        "Tooltips open after a short hover or a long press. Menus open below their button, flip to stay in the window, and close on a selection, an outside press, Escape, or back; arrow keys move between items.",
         groups((
-            caption("TOOLTIP PLACEMENTS"),
+            caption("Tooltips"),
             row((
                 tip(Placement::Top, "Top"),
                 tip(Placement::Bottom, "Bottom"),
@@ -513,12 +505,12 @@ fn popups_card() -> Node {
                 tip(Placement::Right, "Right"),
                 tooltip("Opens at once", icon_button(text("?")).variant(ButtonVariant::Subtle)).open_delay(0.),
             )),
-            caption("MENUS"),
+            caption("Menus"),
             row((
                 menu().children((
                     menu_button("Actions").palette(Palette::Blue).variant(ButtonVariant::Solid),
                     menu_list().children((
-                        menu_item("New file").command("Ctrl+N").icon(text("＋")).on_select(pick("New file")),
+                        menu_item("Add file").command("Ctrl+N").icon(text("＋")).on_select(pick("Add file")),
                         menu_item("Duplicate").command("Ctrl+D").on_select(pick("Duplicate")),
                         menu_item("Rename").on_select(pick("Rename")),
                         menu_divider(),
@@ -537,7 +529,7 @@ fn popups_card() -> Node {
                     )),
                 )),
             )),
-            mono(show(*action, |action| format!("last menu action: {action}"))),
+            mono(show(*action, |action| format!("last action {action}"))),
         )),
     )
 }
@@ -562,7 +554,6 @@ fn alerts_card() -> Node {
     });
     card(
         "Alerts",
-        "Four statuses in four variants. The last alert can be dismissed; it fades out and the button brings it back.",
         groups((
             field(
                 "Variant",
@@ -583,13 +574,13 @@ fn alerts_card() -> Node {
                     .palette(Palette::Purple)
                     .on_close(move || dismissed.set(true))
                     .children((
-                        alert_title("Dismiss me"),
-                        alert_description("Press the close button on the right."),
+                        alert_title("Dismissible"),
+                        alert_description("Close it with the button on the right."),
                     ))
             })
             .animation(PresenceAnimation::fade().slide(16., 0.))
             .style(mue_macroquad::style! { width: 100%; }),
-            row((button("Show the dismissed alert")
+            row((button("Restore alert")
                 .size(ControlSize::Sm)
                 .disabled(dismissed.map(|gone| !gone))
                 .on_activate(move || dismissed.set(false)),)),
@@ -602,9 +593,8 @@ fn people_card() -> Node {
     let people = ["Ada Lovelace", "Alan Turing", "Grace Hopper", "Linus Torvalds", "Margaret Hamilton", "Dennis Ritchie"];
     card(
         "Avatars and skeletons",
-        "Avatars show initials on a color picked from the name, a generic person without a name, and an optional status dot. Skeletons hold the place of content that is still loading.",
         groups((
-            caption("SIZES"),
+            caption("Sizes"),
             row((
                 avatar().name("Ada Lovelace").size(AvatarSize::Xs),
                 avatar().name("Ada Lovelace").size(AvatarSize::Sm),
@@ -613,12 +603,12 @@ fn people_card() -> Node {
                 avatar().name("Ada Lovelace").size(AvatarSize::Xl).show_border(true),
                 avatar().size(AvatarSize::Lg),
             )),
-            caption("NAMES"),
+            caption("Names"),
             row(people
                 .iter()
                 .map(|name| tooltip(*name, avatar().name(*name)).into_node())
                 .collect::<Vec<_>>()),
-            caption("SKELETON"),
+            caption("Skeleton"),
             switch().checked(loaded).label("Loaded").size(ControlSize::Sm),
             hstack()
                 .style(mue_macroquad::style! { width: 100%; gap: {u(14.)}; align-items: flex-start; })
@@ -643,7 +633,7 @@ fn dialog_card() -> Node {
     let open = signal(false);
     let name = signal(String::new());
     let newsletter = signal(true);
-    let result = signal(Rc::<str>::from("not submitted"));
+    let result = signal(Rc::<str>::from(""));
     let dialog = overlay_host(
         open,
         stack()
@@ -664,24 +654,23 @@ fn dialog_card() -> Node {
                     .style(mue_macroquad::style! { width: 100%; gap: {u(10.)}; align-items: center; })
                     .children((
                         avatar().name(name.map(|name| Rc::<str>::from(name.as_str()))).size(AvatarSize::Md),
-                        heading("Create a profile").level(HeadingLevel::H4).style(mue_macroquad::style! {
+                        heading("Profile").level(HeadingLevel::H4).style(mue_macroquad::style! {
                             flex: 1; font-size: {f(18.)}; line-height: {u(24.)}; color: {foreground()};
                         }),
                         icon_button(text("✕")).size(ControlSize::Sm).on_activate(move || open.set(false)),
                     )),
-                hint("The avatar follows the name. Tab stays inside the dialog; Escape, back, or the backdrop closes it."),
                 input().model(name).placeholder("Your name"),
                 checkbox().checked(newsletter).label("Send me the newsletter"),
                 hstack()
                     .style(mue_macroquad::style! { width: 100%; gap: {u(8.)}; justify-content: flex-end; })
                     .children((
                         button("Cancel").variant(ButtonVariant::Ghost).on_activate(move || open.set(false)),
-                        button("Create")
+                        button("Save profile")
                             .primary(true)
                             .disabled(name.map(|name| name.trim().is_empty()))
                             .on_activate(move || {
                                 result.set(Rc::from(format!(
-                                    "created {:?}, newsletter {}",
+                                    "saved {:?}, newsletter {}",
                                     name.get_clone_untracked(),
                                     if newsletter.get_untracked() { "on" } else { "off" }
                                 )));
@@ -694,10 +683,9 @@ fn dialog_card() -> Node {
     .on_dismiss(move || open.set(false));
     card(
         "Dialog",
-        "overlay_host with library controls inside: the content rises and scales in over a fading backdrop.",
         groups((
             row((
-                button("Open dialog").primary(true).on_activate(move || open.set(true)),
+                button("Edit profile").primary(true).on_activate(move || open.set(true)),
                 mono(show(*result, |result| result.to_string())),
             )),
             dialog,
@@ -707,7 +695,6 @@ fn dialog_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "The controls of mue-components, modeled on Chakra UI. Every control is sized in rem, so it follows the zoom setting, and follows the light or dark mode.",
         (
             buttons_card(),
             inputs_card(),
@@ -723,17 +710,17 @@ pub fn page() -> Node {
             checklist(
                 PAGE,
                 &[
-                    "Every button variant reacts to hover and press, in light and dark mode",
+                    "Buttons react to hover and press in both modes",
                     "Loading buttons keep their width and ignore presses",
-                    "The select-all box turns indeterminate when only some children are checked",
-                    "Sliders follow drags, track presses, and the arrow keys",
-                    "Progress bars and rings glide to the slider value",
-                    "Removing a tag animates; the others slide over",
-                    "Tab indicators slide, and arrow keys move between tabs",
-                    "Tooltips and menus stay inside the window and close as described",
-                    "The dismissed alert fades out and comes back",
-                    "The dialog traps focus and closes on Escape, back, and the backdrop",
-                    "Controls look right at every zoom level and on a phone",
+                    "Select all turns indeterminate with some items checked",
+                    "Sliders follow drags, track presses, and arrow keys",
+                    "Bars and rings glide to the slider value",
+                    "Removing a tag slides the others into place",
+                    "Tab indicators slide on click and arrow keys",
+                    "Tooltips and menus stay inside the window",
+                    "The dismissed alert fades out and returns",
+                    "The dialog keeps focus and closes on Escape, back, and backdrop",
+                    "Controls fit at every zoom level and on a phone",
                 ],
             ),
         ),

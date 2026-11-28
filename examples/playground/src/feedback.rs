@@ -12,6 +12,9 @@ use std::rc::Rc;
 
 const PAGE: &str = "Feedback & directives";
 
+/// The save shortcut as the platform writes it.
+const SAVE_KEYS: &str = if cfg!(any(target_os = "macos", target_os = "ios")) { "Cmd+S" } else { "Ctrl+S" };
+
 thread_local! {
     static HAPTICS_ON: Signal<bool> = Scope::null().run(|| signal(true));
 }
@@ -56,11 +59,10 @@ fn haptics_card() -> Node {
     ];
     card(
         "Haptics",
-        "Android performHapticFeedback, iOS feedback generators, and navigator.vibrate on the web. Desktops have no haptics; the log still shows each call.",
         (
             switch()
                 .checked(on)
-                .label(on.map(|on| Rc::<str>::from(if on { "Haptics on" } else { "Haptics muted" }))),
+                .label("Vibrate"),
             row(styles
                 .into_iter()
                 .map(|(label, style)| button(label).on_activate(move || haptic(style)).into_node())
@@ -79,7 +81,6 @@ fn sounds_card() -> Node {
     ];
     card(
         "Sound cues",
-        "Components ask for a cue by name; the application decides what plays. Here every cue is logged.",
         row(cues
             .into_iter()
             .map(|(label, cue)| button(label).on_activate(move || sound(cue)).into_node())
@@ -101,7 +102,6 @@ fn directives_card() -> Node {
     };
     card(
         "Directives",
-        "Reusable behavior attached with .directive(..), like Vue's custom directives.",
         stack()
             .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(14.)}; })
             .children((
@@ -111,13 +111,13 @@ fn directives_card() -> Node {
                         stepper("−", -1),
                         mono(count.map(|n| Rc::<str>::from(format!("{n:>3}")))),
                         stepper("+", 1),
-                        hint("Hold a button: it repeats and speeds up"),
+                        hint("Hold to repeat"),
                     )),
                 ),
                 field(
-                    "Sound + Haptic",
+                    "Sound, Haptic",
                     row((
-                        button("Tap me")
+                        button("Play click")
                             .directive(Sound::new(SoundCue::Click))
                             .directive(Haptic::new(HapticStyle::Light)),
                         flexbox()
@@ -129,7 +129,7 @@ fn directives_card() -> Node {
                             .directive(Haptic::on(FeedbackTrigger::LongPress, HapticStyle::Heavy))
                             .directive(Sound::on(FeedbackTrigger::LongPress, SoundCue::ClickLarge))
                             .on_long_press(|_| {})
-                            .children(text("Long-press me").style(mue_macroquad::style! {
+                            .children(text("Long-press").style(mue_macroquad::style! {
                                 font-size: {f(14.)}; line-height: {u(20.)};
                                 color: {foreground()};
                             })),
@@ -142,7 +142,7 @@ fn directives_card() -> Node {
                         .focus_ring(2., BLUE, 2.)
                         .directive(Hotkey::command(KeyCode::S, move || {
                             saves.update(|n| *n += 1);
-                            log_event("hotkey: Ctrl/Cmd+S");
+                            log_event(format!("hotkey {SAVE_KEYS}"));
                         }))
                         .style(mue_macroquad::style! {
                             padding: {(u(12.), u(8.))};
@@ -151,9 +151,7 @@ fn directives_card() -> Node {
                         })
                         .children(
                             text(saves.map(|n| {
-                                Rc::<str>::from(format!(
-                                    "Click here, then press Ctrl+S (Cmd+S on macOS): saved {n}×"
-                                ))
+                                Rc::<str>::from(format!("Click here, then press {SAVE_KEYS} ({n} saved)"))
                             }))
                             .style(mue_macroquad::style! {
                                 font-size: {f(14.)}; line-height: {u(20.)};
@@ -173,7 +171,7 @@ fn directives_card() -> Node {
                         })
                         .children(
                             text(outside.map(|n| {
-                                Rc::<str>::from(format!("Presses outside this box: {n}"))
+                                Rc::<str>::from(format!("{n} presses outside this box"))
                             }))
                             .style(mue_macroquad::style! {
                                 font-size: {f(14.)}; line-height: {u(20.)};
@@ -188,20 +186,19 @@ fn directives_card() -> Node {
 pub fn page() -> Node {
     install_handlers();
     page_body(
-        "Haptics, sound cues, and the built-in directives.",
         (
             haptics_card(),
             sounds_card(),
             directives_card(),
-            card("Events", "", event_log()),
+            card("Events", event_log()),
             checklist(
                 PAGE,
                 &[
-                    "Phones vibrate for each haptic style (and not while muted)",
-                    "Every sound cue appears in the log",
-                    "Holding + or − repeats and speeds up; a single tap steps once",
-                    "Ctrl/Cmd+S counts only while the box is focused",
-                    "ClickOutside counts presses outside the box, not inside",
+                    "Phones vibrate for each style, and not with Vibrate off",
+                    "Every sound cue plays and appears in the log",
+                    "Holding + or − repeats faster, a tap steps once",
+                    "The save keys count only while the box is focused",
+                    "ClickOutside counts only presses outside the box",
                 ],
             ),
         ),

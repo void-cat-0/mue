@@ -56,7 +56,6 @@ fn color_mode_card() -> Node {
     watch(*system, |system| set_system_color_scheme(system.get()));
     card(
         "Color mode",
-        "use_color_mode: a light, dark, or system preference and the resolved scheme. Hosts report the system scheme; here you can simulate it.",
         (
             field("Preference", picker(modes.to_vec(), color.mode)),
             field(
@@ -69,7 +68,7 @@ fn color_mode_card() -> Node {
             mono(
                 color
                     .scheme
-                    .map(|scheme| Rc::<str>::from(format!("resolved scheme: {scheme:?}"))),
+                    .map(|scheme| Rc::<str>::from(format!("resolved {scheme:?}"))),
             ),
         ),
     )
@@ -79,9 +78,8 @@ fn tokens_card() -> Node {
     let selected = signal(true);
     card(
         "Theme tokens",
-        "Each tile picks between two token handles. Switching the scheme rewrites every token in place, so no component rebuilds; this app's backdrop, glass, and card colors are tokens too.",
         (
-            row((button("Toggle selected").on_activate(move || selected.toggle()),)),
+            switch().checked(selected).label("Selected").size(mue_components::system::ControlSize::Sm),
             row((
                 tile("Default"),
                 tile("Accent").accent(true),
@@ -142,14 +140,13 @@ fn media_card() -> Node {
         .collect::<Vec<_>>();
     card(
         "Media queries",
-        "use_media_query evaluates CSS media queries against the window and input. Resize, rotate, or switch between mouse and touch.",
         (
             stack()
                 .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: 0px; })
                 .children(rows),
             switch()
                 .checked(reduced)
-                .label("Simulate prefers-reduced-motion: reduce")
+                .label("Reduced motion")
                 .on_change(|on: &bool| set_prefers_reduced_motion(*on)),
         ),
     )
@@ -157,7 +154,6 @@ fn media_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Color modes, application tokens, and media queries.",
         (
             color_mode_card(),
             tokens_card(),
@@ -166,7 +162,7 @@ pub fn page() -> Node {
                 PAGE,
                 &[
                     "Light, Dark, and System switch the whole app at once",
-                    "Width and orientation queries change when resizing or rotating",
+                    "Width and orientation queries follow resizing and rotation",
                     "Hover and pointer queries follow the last input device",
                 ],
             ),

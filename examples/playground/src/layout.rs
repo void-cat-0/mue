@@ -73,7 +73,6 @@ fn flex_card() -> Node {
     );
     card(
         "Flexbox",
-        "Every option is applied live and the tiles animate to their new places.",
         (
             direction_control,
             wrap_control,
@@ -156,7 +155,6 @@ fn grid_card() -> Node {
     });
     card(
         "Grid",
-        "CSS grid tracks with repeat, minmax, fr, and spans.",
         (columns_control, grid_view),
     )
 }
@@ -183,7 +181,6 @@ fn ratio_card() -> Node {
     );
     card(
         "Aspect ratio and float",
-        "The box keeps its ratio at any width; the badge floats on one of its corners, centered on the edge.",
         (
             ratio_control,
             placement_control,
@@ -264,7 +261,6 @@ fn touch_target_card() -> Node {
     });
     card(
         "Touch targets",
-        "A 16 px dot with a larger invisible hit area (the outline). Tap just outside the dot.",
         (
             slop_control,
             row((
@@ -285,7 +281,6 @@ fn stacks_card() -> Node {
     };
     card(
         "Stacks, wrap, and blocks",
-        "vstack lays out vertically, hstack horizontally, wrap flows onto new lines, and div is block layout.",
         row((
             surface()
                 .style(mue_macroquad::style! { width: auto; flex: 1; min-width: {u(140.)}; padding: {(u(8.),)}; })
@@ -305,7 +300,6 @@ fn stacks_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Flexbox, grid, aspect ratio, and touch targets. Resize the window to test wrapping.",
         (
             flex_card(),
             grid_card(),
@@ -316,9 +310,9 @@ pub fn page() -> Node {
                 PAGE,
                 &[
                     "Flexbox options move the tiles as labeled",
-                    "Grid spans and auto-fill columns are correct",
-                    "The aspect box keeps its ratio when the window is resized",
-                    "Touch-target taps register inside the outline but not beyond it",
+                    "Grid spans and auto-fill columns line up",
+                    "The aspect box keeps its ratio while resizing",
+                    "Taps count inside the outline, not beyond it",
                 ],
             ),
         ),

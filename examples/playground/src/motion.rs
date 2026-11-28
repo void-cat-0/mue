@@ -43,7 +43,6 @@ fn transitions_card() -> Node {
     });
     card(
         "Property transitions",
-        "Flip any switch; the box animates from its current value, even mid-animation.",
         (
             curve_control,
             row((big_control, round_control, warm_control, faded_control)),
@@ -108,7 +107,6 @@ fn presence_card() -> Node {
     });
     card(
         "Presence (enter and exit)",
-        "Like Vue's <Transition>: content animates in when shown and out before it is removed.",
         (
             animation_control,
             row((
@@ -212,11 +210,10 @@ fn list_card() -> Node {
     .style(mue_macroquad::style! { width: 100%; gap: {u(6.)}; flex-direction: column; });
     card(
         "Animated list",
-        "Like Vue's <TransitionGroup>: new items fade in, removed items fade out, and the rest slide to their new places.",
         (
             row((
-                button("Add").primary(true).on_activate(add),
-                button("Remove").on_activate(remove),
+                button("Add item").primary(true).on_activate(add),
+                button("Remove item").on_activate(remove),
                 button("Shuffle").on_activate(shuffle),
                 button("Sort").on_activate(sort),
             )),
@@ -275,9 +272,8 @@ fn springs_card() -> Node {
         .collect::<Vec<_>>();
     card(
         "Springs and curves",
-        "The same move with five curves. Springs settle naturally and can overshoot; press again mid-flight and every ball turns around from where it is.",
         (
-            row((button(right.map(|right| Rc::<str>::from(if right { "Back" } else { "Go" })))
+            row((button(right.map(|right| Rc::<str>::from(if right { "Move left" } else { "Move right" })))
                 .primary(true)
                 .on_activate(move || right.toggle()),)),
             stack()
@@ -335,7 +331,6 @@ fn stagger_card() -> Node {
         .collect::<Vec<_>>();
     card(
         "Staggered entrance",
-        "Each tile starts a little after its neighbor, so the grid fills in a wave. The pages of this app enter the same way: header first, then each card.",
         (
             step_control,
             row((button("Play").primary(true).on_activate(play),)),
@@ -410,7 +405,6 @@ fn clock_card() -> Node {
         .collect::<Vec<_>>();
     card(
         "Frame-driven motion",
-        "Values computed from a clock signal every frame: dots orbiting and breathing, and an equalizer wave. Pausing freezes the clock.",
         (
             running_control,
             row((
@@ -442,7 +436,6 @@ fn clock_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Everything here animates by interpolating style values: property transitions, springs, staggered entrances, enter and exit animations, keyed list moves, and values computed from a clock every frame.",
         (
             transitions_card(),
             springs_card(),
@@ -453,13 +446,13 @@ pub fn page() -> Node {
             checklist(
                 PAGE,
                 &[
-                    "Transitions retarget smoothly when switched mid-animation",
-                    "Springs overshoot by their bounce and turn around mid-flight",
-                    "The stagger wave fills the grid diagonally at each speed",
-                    "Presence plays both the enter and the exit animation",
-                    "List items slide into place after add, remove, shuffle, and sort",
-                    "The orbit and the equalizer move every frame and freeze when paused",
-                    "Animations stay smooth (see the FPS readout in the top bar)",
+                    "Switching mid-animation retargets smoothly",
+                    "Springs overshoot and turn around mid-flight",
+                    "The wave fills the grid diagonally at each stagger",
+                    "Presence plays the enter and the exit animation",
+                    "Items slide into place after every list change",
+                    "Orbit and equalizer freeze when paused",
+                    "The fps readout stays steady while animating",
                 ],
             ),
         ),

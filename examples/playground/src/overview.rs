@@ -36,7 +36,6 @@ fn diagnostics() -> Node {
     let show = |value: ReadSignal<String>| value.map(|text| Rc::<str>::from(text.as_str()));
     card(
         "Device",
-        "What the platform reports right now. Rotate the device, resize the window, or open the soft keyboard and watch these update.",
         row((
             stat("Platform", Rc::<str>::from(platform())),
             stat(
@@ -58,7 +57,7 @@ fn diagnostics() -> Node {
                 })),
             ),
             stat(
-                "Safe area t r b l",
+                "Safe area (t r b l)",
                 show(
                     safe.map(|e| {
                         format!("{:.0} {:.0} {:.0} {:.0}", e.top, e.right, e.bottom, e.left)
@@ -147,42 +146,75 @@ fn results() -> Node {
         },
     );
     card(
-        "Manual check results",
-        "Every page ends with a checklist. Results stay while the app runs, so you can walk through the pages and read the totals here.",
+        "Check results",
         stack()
             .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(6.)}; })
             .children((
                 para(totals),
                 rows,
-                row((button("Reset all checks").on_activate(reset_checks),)),
+                row((button("Clear results").variant(ButtonVariant::Outline).size(ControlSize::Sm).on_activate(reset_checks),)),
+            )),
+    )
+}
+
+/// One numbered step of the test procedure.
+fn step(number: u32, label: &'static str) -> Node {
+    hstack()
+        .style(mue_macroquad::style! {
+            width: 100%; min-width: 0px;
+            gap: {u(10.)};
+            align-items: center;
+        })
+        .children((
+            center()
+                .style(mue_macroquad::style! {
+                    flex: none;
+                    width: {u(22.)}; height: {u(22.)};
+                    border-radius: 9999px;
+                    border-width: 1px;
+                    border-color: {border()};
+                })
+                .children(text(Rc::<str>::from(number.to_string())).style(mue_macroquad::style! {
+                    font-size: {f(12.)}; line-height: {u(16.)};
+                    font-weight: 600;
+                    color: {muted()};
+                })),
+            text(label).style(mue_macroquad::style! {
+                flex: 1; min-width: 0px;
+                font-size: {f(14.)}; line-height: {u(20.)};
+                color: {foreground()};
+            }),
+        ))
+        .into_node()
+}
+
+fn procedure() -> Node {
+    card(
+        "Test a new platform",
+        stack()
+            .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(8.)}; })
+            .children((
+                step(1, "Pass every self test"),
+                step(2, "Try Components in light and dark mode, at several zoom levels"),
+                step(3, "Mark the checks at the end of each page"),
+                step(4, "Compare the totals in Check results"),
+                row((button("Run self tests").primary(true).size(ControlSize::Sm).on_activate(|| super::open_page(1)),)),
             )),
     )
 }
 
 pub fn page() -> Node {
     page_body(
-        "A test bench for mue. Pick a page in the navigation, try the demos, and mark the checklist at the bottom of each page. Back (Escape, the Android back button) returns to the previous page.",
         (
+            procedure(),
             diagnostics(),
             results(),
-            card(
-                "How to use this on a new platform",
-                "",
-                stack()
-                    .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(4.)}; })
-                    .children((
-                        para("1. Open Self tests and confirm every automated check passes."),
-                        para("2. Open Components and try every control in light and dark mode (the button at the top right) and at a few zoom levels."),
-                        para("3. Visit each page and mark its manual checks; Text input and Pointer & gestures cover the platform bridges (IME, soft keyboard, multi-touch)."),
-                        para("4. Come back here and read the totals."),
-                    )),
-            ),
             checklist(
                 PAGE,
                 &[
                     "Window size and DPI match the device",
-                    "Rotating or resizing updates the readouts",
-                    "The pointer kind switches between touch and mouse when both are used",
+                    "Resizing or rotating updates the readouts",
+                    "Pointer switches between touch and mouse",
                 ],
             ),
         ),

@@ -69,7 +69,6 @@ fn layout_card() -> Node {
     let (paragraphs, paragraph_control) = option_switch("Paragraph spacing", false);
     card(
         "Text layout",
-        "One paragraph rendered with every text option. The box has a fixed height so overflow and vertical alignment are visible.",
         (
             wrap_control,
             overflow_control,
@@ -143,7 +142,6 @@ fn scripts_card() -> Node {
     };
     card(
         "Scripts and font fallback",
-        "Bundled Noto fonts cover these scripts. Missing glyphs show as boxes; check that none appear.",
         stack()
             .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(6.)}; })
             .children((
@@ -181,7 +179,6 @@ fn headings_card() -> Node {
     };
     card(
         "Headings",
-        "Six levels from the heading component.",
         stack()
             .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(4.)}; })
             .children((
@@ -213,7 +210,6 @@ fn rich_card() -> Node {
     };
     card(
         "Rich text",
-        "Inline code and emphasis, quotes, code blocks, lists, structured documents, and Markdown.",
         (
             row((
                 code("let answer = 42;").style(mue_macroquad::style! {
@@ -271,7 +267,6 @@ fn rich_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Text layout options, script coverage, headings, and rich text.",
         (
             layout_card(),
             scripts_card(),
@@ -281,8 +276,8 @@ pub fn page() -> Node {
                 PAGE,
                 &[
                     "Every script renders without missing-glyph boxes",
-                    "Arabic is right-to-left and the mixed line keeps its order",
-                    "Ellipsis modes shorten the text at the right place",
+                    "Arabic runs right to left, the mixed line in order",
+                    "Each ellipsis mode cuts at its end, middle, or start",
                     "Bold, italic, underline, and strikethrough render",
                 ],
             ),

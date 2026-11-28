@@ -92,7 +92,6 @@ fn options_card() -> Node {
     });
     card(
         "Scroll options",
-        "With chaining on, reaching the end of the box hands the gesture to the page.",
         (
             axis_control,
             friction_control,
@@ -100,7 +99,7 @@ fn options_card() -> Node {
             row((momentum_control, bars_control, chain_control)),
             area,
             row((
-                button("Reset").on_activate(move || offset.set(Vector::ZERO)),
+                button("Scroll to start").on_activate(move || offset.set(Vector::ZERO)),
                 mono(offset.map(|v| Rc::<str>::from(format!("offset {:.0}, {:.0}", v.x, v.y)))),
             )),
         ),
@@ -135,7 +134,7 @@ fn handle_card() -> Node {
                         border-radius: {u(8.)};
                         background: #7fd1a8;
                     })
-                    .children(text("Row 30: the target").style(mue_macroquad::style! {
+                    .children(text("Row 30, the target").style(mue_macroquad::style! {
                         font-size: {f(15.)}; line-height: {u(22.)};
                         color: #131720;
                     }))
@@ -147,14 +146,13 @@ fn handle_card() -> Node {
         .collect::<Vec<_>>();
     card(
         "Scrolling from code",
-        "ScrollAreaHandle, like a Vue template ref with defineExpose.",
         (
             animated_control,
             row((
-                button("Top").on_activate(top),
-                button("Down 200").on_activate(down),
+                button("Scroll to top").on_activate(top),
+                button("Scroll down 200").on_activate(down),
                 button("Reveal row 30").on_activate(reveal),
-                button("End").on_activate(end),
+                button("Scroll to end").on_activate(end),
             )),
             scroll_area()
                 .handle(list)
@@ -228,7 +226,6 @@ fn feed_card() -> Node {
     };
     card(
         "Pull to refresh, load more, swipe actions",
-        "Drag down past the top to refresh. Rows reveal actions when swiped; a long swipe deletes. Mouse drags work too.",
         (
             mono(status.map(|text| Rc::<str>::from(text.as_str()))),
             scroll_area()
@@ -246,7 +243,7 @@ fn feed_card() -> Node {
                         list.extend(mails.get_clone_untracked().iter().cloned());
                         mails.set(list.into());
                         refreshing.set(false);
-                        status.set("Refreshed: two new messages".into());
+                        status.set("Two new messages".into());
                     });
                 })
                 .on_reach_end(120., move || {
@@ -296,7 +293,6 @@ fn nested_card() -> Node {
     };
     card(
         "Nested scrolling",
-        "A horizontal carousel inside the vertically scrolling page. Horizontal drags move the carousel, vertical drags move the page.",
         scroll_area()
             .axis(ScrollAxis::Horizontal)
             .options(ScrollOptions {
@@ -313,22 +309,21 @@ fn nested_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Scroll physics and options, scrolling from code, mobile list patterns, and nested scroll areas.",
         (
             options_card(),
             handle_card(),
             feed_card(),
             nested_card(),
-            card("Events", "", event_log()),
+            card("Events", event_log()),
             checklist(
                 PAGE,
                 &[
-                    "Touch and wheel scrolling feel natural, with momentum",
-                    "Chaining hands the gesture to the page at the end of the box",
-                    "Scroll handle buttons move to the right place",
-                    "Pull to refresh shows the indicator and adds two rows",
-                    "Reaching the end loads more rows once per load",
-                    "Swipe actions open, close, and delete; only one row is open at a time",
+                    "Touch and wheel scrolling glide with momentum",
+                    "At the end of the box, the page takes over the scroll",
+                    "Each scroll button lands in the right place",
+                    "Pull to refresh adds two rows",
+                    "The end of the list loads more rows once",
+                    "Swipes archive and delete, one open row at a time",
                     "The carousel scrolls sideways without moving the page",
                 ],
             ),

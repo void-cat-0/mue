@@ -157,7 +157,6 @@ fn touch_card() -> Node {
     });
     card(
         "Multi-touch",
-        "Put several fingers on the pad (or drag with the mouse). Each pointer gets a dot; the pad claims the touches so the page does not scroll.",
         (
             TouchPad {
                 touches,
@@ -187,7 +186,6 @@ fn press_card() -> Node {
     let child = signal(0u32);
     card(
         "Tap, long press, hover, and press state",
-        "Hover only appears with a mouse or pen; after a touch it must not stick. The link inside is a nested target.",
         link_overlay()
             .style(mue_macroquad::style! {
                 width: 100%; min-width: 0px;
@@ -199,11 +197,11 @@ fn press_card() -> Node {
             .use_pressed(pressed)
             .on_activate(move || {
                 taps.update(|n| *n += 1);
-                log_event("panel: tap");
+                log_event("panel tap");
             })
             .on_long_press(move |_| {
                 holds.update(|n| *n += 1);
-                log_event("panel: long press");
+                log_event("panel long press");
             })
             .with_hovered(move |view, hover| {
                 view.style(mue_macroquad::style! {
@@ -220,11 +218,11 @@ fn press_card() -> Node {
                             hover.get()
                         ))
                     })),
-                    link(child.map(|n| Rc::<str>::from(format!("Nested link (activated {n}×)"))))
+                    link(child.map(|n| Rc::<str>::from(format!("Nested link ({n}×)"))))
                         .style(mue_macroquad::style! { font-size: {f(14.)}; line-height: {u(20.)}; })
                         .on_activate(move || {
                             child.update(|n| *n += 1);
-                            log_event("nested link: tap");
+                            log_event("nested link tap");
                         }),
                 ))
             }),
@@ -252,7 +250,6 @@ fn gestures_card() -> Node {
     };
     card(
         "Recognizers",
-        "Swipe and pan work with one finger or the mouse; pinch and rotate need two fingers.",
         (
             row((
                 pad("Swipe").on_swipe(move |event| {
@@ -296,7 +293,6 @@ fn map_card() -> Node {
     });
     card(
         "Map-style transform",
-        "Two fingers pan, pinch, and rotate the image at once. One finger still scrolls the page.",
         (
             scroll_area()
                 .style(mue_macroquad::style! {
@@ -339,7 +335,7 @@ fn map_card() -> Node {
                         .transform_list(transform),
                 ),
             row((
-                button("Reset").on_activate(move || {
+                button("Reset view").on_activate(move || {
                     offset.set(Vector::ZERO);
                     scale.set(1.);
                     rotation.set(0.);
@@ -358,21 +354,22 @@ fn map_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Raw pointers, press states, gesture recognizers, and a combined two-finger transform.",
         (
             touch_card(),
             press_card(),
             gestures_card(),
             map_card(),
-            card("Events", "", event_log()),
+            card("Events", event_log()),
             checklist(
                 PAGE,
                 &[
-                    "Every finger on the multi-touch pad gets its own dot (try 5 or more)",
-                    "Lifting a finger removes its dot; no dot is left behind",
-                    "Tap and long press count once each; the nested link does not tap the panel",
+                    "Each finger on the pad gets its own dot, even 5 or more",
+                    "Lifting a finger removes its dot",
+                    "Tap and long press count once each",
+                    "The nested link does not tap the panel",
                     "Hover never sticks after a touch",
-                    "Swipe reports the right direction; pinch and rotate track two fingers",
+                    "Swipe reports the right direction",
+                    "Pinch and rotate track two fingers",
                     "The map image pans, zooms, and rotates together",
                 ],
             ),

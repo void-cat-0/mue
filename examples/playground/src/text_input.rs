@@ -53,14 +53,13 @@ fn fields_card() -> Node {
     let price = signal(String::new());
     let email = signal(String::new());
     let submitted = |kind: &'static str| {
-        move |action: TextInputAction| log_event(format!("{kind}: submit ({action:?})"))
+        move |action: TextInputAction| log_event(format!("{kind} submit ({action:?})"))
     };
     card(
         "Field types",
-        "Each field asks the soft keyboard for a matching layout and action key. On desktop, focus a field and type; on phones, check the keyboard that opens.",
         row((
             labeled(
-                "Text (action: Next)",
+                "Text (Next key)",
                 input()
                     .model(name)
                     .placeholder("Your name")
@@ -103,7 +102,7 @@ fn fields_card() -> Node {
                 None,
             ),
             labeled(
-                "Email (action: Send)",
+                "Email (Send key)",
                 input()
                     .model(email)
                     .kind(TextInputKind::Email)
@@ -113,7 +112,7 @@ fn fields_card() -> Node {
                 None,
             ),
             labeled(
-                "Search (action: Search)",
+                "Search (Search key)",
                 input()
                     .kind(TextInputKind::Search)
                     .action(TextInputAction::Search)
@@ -129,7 +128,7 @@ fn fields_card() -> Node {
                 None,
             ),
             labeled(
-                "URL (action: Go)",
+                "URL (Go key)",
                 input()
                     .kind(TextInputKind::Url)
                     .action(TextInputAction::Go)
@@ -184,7 +183,6 @@ fn states_card() -> Node {
     });
     card(
         "Sizes, variants, and states",
-        "A disabled field ignores input; a read-only field can still be selected and copied.",
         (
             variant_control,
             row((invalid_control, disabled_control, read_only_control)),
@@ -199,7 +197,6 @@ fn modifiers_card() -> Node {
     let trimmed = signal(String::new());
     card(
         "Model modifiers",
-        "Vue's v-model modifiers. .lazy writes on blur or Enter; .trim drops surrounding spaces from the model.",
         row((
             labeled(
                 ".model(text)",
@@ -232,7 +229,6 @@ fn textarea_card() -> Node {
     ));
     card(
         "Textarea",
-        "Grows with its content from four rows. Try selection across lines, Page Up/Down, and the soft keyboard's return key.",
         (
             textarea().model(body).rows(4),
             mono(show(*body, |text| {
@@ -250,7 +246,6 @@ fn groups_card() -> Node {
     let query = signal(String::new());
     card(
         "Input groups",
-        "Addons attach to the border; elements sit inside it.",
         stack()
             .style(mue_macroquad::style! { width: 100%; gap: {u(8.)}; })
             .children((
@@ -288,16 +283,16 @@ fn inspector_card() -> Node {
         Rc::<str>::from(format!("text {:?}\n{selection}\n{composing}", value.text))
     });
     let platform = computed(move |_| {
-        let caret = caret.get().map_or(String::from("caret: none"), |r| {
+        let caret = caret.get().map_or(String::from("caret none"), |r| {
             format!(
-                "caret rect: {:.0}, {:.0}  {:.0} × {:.0}",
+                "caret {:.0}, {:.0}  {:.0} × {:.0}",
                 r.x, r.y, r.w, r.h
             )
         });
         let keyboard = if keyboard.visible.get() {
-            format!("keyboard: visible, covers {:.0} px", keyboard.inset.get())
+            format!("keyboard visible, {:.0} px", keyboard.inset.get())
         } else {
-            String::from("keyboard: hidden")
+            String::from("keyboard hidden")
         };
         Rc::<str>::from(format!("{caret}\n{keyboard}"))
     });
@@ -327,7 +322,6 @@ fn inspector_card() -> Node {
     let blur = move || h.blur();
     card(
         "IME inspector",
-        "The raw editing state. While an input method composes (Pinyin, Kana, Hangul, dictation), the composing range shows the provisional text; the candidate window should open at the caret rect.",
         (
             text_edit()
                 .editing_value(editing)
@@ -351,7 +345,7 @@ fn inspector_card() -> Node {
                 button("Insert 😀").on_activate(insert),
                 button("Undo").on_activate(undo),
                 button("Redo").on_activate(redo),
-                button("Reset").on_activate(reset),
+                button("Reset text").on_activate(reset),
             )),
         ),
     )
@@ -359,7 +353,6 @@ fn inspector_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Text fields on top of the platform text input bridge: IME composition on desktop, soft keyboards and their mirrors on Android, iOS, and the web.",
         (
             fields_card(),
             states_card(),
@@ -369,20 +362,19 @@ pub fn page() -> Node {
             inspector_card(),
             card(
                 "Events",
-                "Submits and soft-keyboard actions from the fields above.",
                 event_log(),
             ),
             checklist(
                 PAGE,
                 &[
-                    "Typing, selection, copy, cut, paste, undo, and redo work",
-                    "IME composition is drawn inline and the candidate window sits at the caret",
-                    "Committing an IME word and pressing Undo removes the whole word",
-                    "Emoji and CJK text insert and delete as whole characters",
-                    "Phones open the matching keyboard (number, email, phone, URL)",
-                    "The keyboard's action key submits (see the event log)",
-                    "A focused field below the fold scrolls above the soft keyboard",
-                    "The password field never shows suggestions or the plain text",
+                    "Typing, selection, clipboard, undo, and redo work",
+                    "IME text draws inline, with candidates at the caret",
+                    "Undo after an IME commit removes the whole word",
+                    "Emoji and CJK insert and delete as whole characters",
+                    "Phones open the matching keyboard",
+                    "The keyboard action key submits",
+                    "A focused field scrolls above the soft keyboard",
+                    "Password shows no suggestions or plain text",
                 ],
             ),
         ),

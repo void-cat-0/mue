@@ -105,14 +105,12 @@ pub fn licenses() -> Node {
         "Noto Sans Symbols 2",
     ];
     page_body(
-        "The playground bundles these fonts so every platform renders the same text. Their licenses follow.",
         NOTICES
             .iter()
             .zip(titles)
             .map(|(notice, title)| {
                 card(
                     title,
-                    "",
                     text(*notice).style(mue_macroquad::style! {
                         width: 100%;
                         font-size: {f(12.)};
