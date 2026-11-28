@@ -393,13 +393,14 @@ impl NodeHandle {
         Self(signal(None))
     }
 
-    /// The bound node while it is alive. Tracked.
+    /// The bound node while it is alive. Tracked. A handle whose scope was
+    /// disposed (it outlived the view that created it) reads as unbound.
     pub fn get(&self) -> Option<NodeRef> {
-        self.0.get().filter(NodeRef::is_live)
+        self.0.try_get().flatten().filter(NodeRef::is_live)
     }
 
     pub fn get_untracked(&self) -> Option<NodeRef> {
-        self.0.get_untracked().filter(NodeRef::is_live)
+        self.0.try_get_untracked().flatten().filter(NodeRef::is_live)
     }
 
     /// The handle as a read-only signal of the last bound node.
