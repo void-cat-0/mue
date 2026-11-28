@@ -2,9 +2,11 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    motion::transition::Transition,
+    BoxShadow,
+    app::runtime::set_timeout,
+    motion::transition::{Transition, animated},
     paint::shader::Brush,
-    style::{Size, Styleable, Transform, TransformOp},
+    style::{Size, Styleable, StyleableExt, Transform, TransformOp},
 };
 use mue_components::motion::transition_group::transition_group;
 use mue_components::motion::presence::{PresenceAnimation, presence};
@@ -223,20 +225,241 @@ fn list_card() -> Node {
     )
 }
 
+/// Four balls race across the same track, each with its own curve.
+fn springs_card() -> Node {
+    let right = signal(false);
+    let curves = [
+        ("spring(0.6, 0.0) — no bounce", Transition::spring(0.6, 0.), ACCENT_A),
+        ("spring(0.6, 0.3)", Transition::spring(0.6, 0.3), ACCENT_B),
+        ("spring(0.9, 0.7) — bouncy", Transition::spring(0.9, 0.7), CORAL),
+        ("ease-in-out 0.6 s", Transition::ease_in_out(0.6), GREEN),
+        ("linear 0.6 s", Transition::linear(0.6), mue_macroquad::paint::color::Color::from_rgba(200, 200, 215, 255)),
+    ];
+    let lanes = curves
+        .into_iter()
+        .map(|(label, curve, color)| {
+            // The ball's left edge as a fraction of the free track width.
+            let progress = animated::<f32>(right.map(|right| if right { 1_f32 } else { 0. }), curve);
+            stack()
+                .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(4.)}; })
+                .children((
+                    hint(label),
+                    flexbox()
+                        .style(mue_macroquad::style! {
+                            position: relative;
+                            width: 100%;
+                            height: {u(28.)};
+                            border-radius: 9999px;
+                            background: {raised()};
+                        })
+                        .children(
+                            flexbox()
+                                .absolute()
+                                .inset_top(Size::Px(0.))
+                                // Percent insets resolve against the track width.
+                                .inset_left(progress.map(|p| Size::Percent(p * 100.)))
+                                .style(mue_macroquad::style! {
+                                    width: {u(28.)}; height: {u(28.)};
+                                    border-radius: 9999px;
+                                    background: {color};
+                                })
+                                .transform_list(progress.map(|p| {
+                                    // Keep the ball inside the track: shift it back by its own width at the end.
+                                    Transform(vec![TransformOp::Translate(Size::Percent(-100. * p), Size::Px(0.))])
+                                }))
+                                .box_shadow(BoxShadow::new(0., 0., 12., mue_macroquad::paint::color::Color::new(color.r, color.g, color.b, 0.6))),
+                        ),
+                ))
+                .into_node()
+        })
+        .collect::<Vec<_>>();
+    card(
+        "Springs and curves",
+        "The same move with five curves. Springs settle naturally and can overshoot; press again mid-flight and every ball turns around from where it is.",
+        (
+            row((button(right.map(|right| Rc::<str>::from(if right { "Back" } else { "Go" })))
+                .primary(true)
+                .on_activate(move || right.toggle()),)),
+            stack()
+                .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(10.)}; })
+                .children(lanes),
+        ),
+    )
+}
+
+/// A grid of tiles that appear one after another, from the top left.
+fn stagger_card() -> Node {
+    const COLUMNS: usize = 8;
+    const COUNT: usize = 24;
+    let shown: Vec<Signal<bool>> = (0..COUNT).map(|_| signal(true)).collect();
+    let (step, step_control) = segmented("Stagger", vec![("40 ms", 0.04_f32), ("15 ms", 0.015), ("90 ms", 0.09)]);
+    let play = {
+        let shown = shown.clone();
+        move || {
+            for tile in &shown {
+                tile.set(false);
+            }
+            let step = step.get_untracked();
+            for (index, tile) in shown.iter().copied().enumerate() {
+                // Diagonal order: tiles on the same diagonal enter together.
+                let order = index % COLUMNS + index / COLUMNS;
+                set_timeout(0.15 + order as f32 * step, move || tile.set(true));
+            }
+        }
+    };
+    let tiles = shown
+        .iter()
+        .enumerate()
+        .map(|(index, tile)| {
+            let enter = animated::<f32>(tile.map(|on| if on { 1_f32 } else { 0. }), tile.map(|on| {
+                if on { Transition::spring(0.5, 0.35) } else { Transition::Instant }
+            }));
+            let hue = index as f32 / COUNT as f32;
+            let color = ACCENT_A.lerp(CORAL, hue);
+            flexbox()
+                .style(mue_macroquad::style! {
+                    height: {u(36.)};
+                    border-radius: {u(9.)};
+                    background: {color};
+                })
+                .opacity(enter.clone().map(|enter| enter.clamp(0., 1.)))
+                .transform_list(enter.map(|enter| {
+                    let scale = 0.4 + 0.6 * enter;
+                    Transform(vec![
+                        TransformOp::Translate(Size::Px(0.), Size::Px((1. - enter) * 14.)),
+                        TransformOp::Scale(scale, scale),
+                    ])
+                }))
+                .into_node()
+        })
+        .collect::<Vec<_>>();
+    card(
+        "Staggered entrance",
+        "Each tile starts a little after its neighbor, so the grid fills in a wave. The pages of this app enter the same way: header first, then each card.",
+        (
+            step_control,
+            row((button("Play").primary(true).on_activate(play),)),
+            grid()
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    gap: {u(8.)};
+                    grid-template-columns: repeat(8, 1fr);
+                })
+                .children(tiles),
+        ),
+    )
+}
+
+/// Motion computed every frame from the clock: orbiting dots and a wave.
+fn clock_card() -> Node {
+    let time = super::styles::animation_time();
+    let (running, running_control) = option_switch("Running", true);
+    // Freeze the clock while paused.
+    let frozen = signal(0_f32);
+    let offset = signal(0_f32);
+    watch(*running, move |running| {
+        if running.get() {
+            offset.set(offset.get_untracked() + (time.get_untracked() - frozen.get_untracked()));
+        } else {
+            frozen.set(time.get_untracked());
+        }
+    });
+    let clock = computed(move |_| {
+        if running.get() { time.get() - offset.get() } else { frozen.get() - offset.get() }
+    });
+    let dots = (0..8)
+        .map(|index| {
+            let phase = index as f32 / 8. * std::f32::consts::TAU;
+            let color = ACCENT_A.lerp(ACCENT_B, index as f32 / 7.);
+            flexbox()
+                .absolute()
+                .inset_left(Size::Percent(50.))
+                .inset_top(Size::Percent(50.))
+                .style(mue_macroquad::style! {
+                    width: {u(14.)}; height: {u(14.)};
+                    margin-left: {u(-7.)}; margin-top: {u(-7.)};
+                    border-radius: 9999px;
+                    background: {color};
+                })
+                .transform_list(clock.map(move |t| {
+                    let angle = t * 1.2 + phase;
+                    let radius = 46. + 10. * (t * 2. + phase * 2.).sin();
+                    let scale = super::responsive::scale();
+                    Transform(vec![TransformOp::Translate(
+                        Size::Px(angle.cos() * radius * scale),
+                        Size::Px(angle.sin() * radius * scale),
+                    )])
+                }))
+                .into_node()
+        })
+        .collect::<Vec<_>>();
+    let bars = (0..16)
+        .map(|index| {
+            flexbox()
+                .style(mue_macroquad::style! {
+                    flex: 1;
+                    border-radius: 9999px;
+                })
+                .background(accent_gradient())
+                .height(clock.map(move |t| {
+                    let wave = (t * 3. - index as f32 * 0.45).sin() * 0.5 + 0.5;
+                    Size::Percent(20. + 80. * wave)
+                }))
+                .into_node()
+        })
+        .collect::<Vec<_>>();
+    card(
+        "Frame-driven motion",
+        "Values computed from a clock signal every frame: dots orbiting and breathing, and an equalizer wave. Pausing freezes the clock.",
+        (
+            running_control,
+            row((
+                flexbox()
+                    .style(mue_macroquad::style! {
+                        position: relative;
+                        flex: none;
+                        width: {u(150.)}; height: {u(150.)};
+                        border-radius: {u(16.)};
+                        background: {raised()};
+                    })
+                    .children(dots),
+                hstack()
+                    .style(mue_macroquad::style! {
+                        flex: 1;
+                        min-width: {u(180.)};
+                        height: {u(150.)};
+                        padding: {(u(14.),)};
+                        gap: {u(5.)};
+                        align-items: flex-end;
+                        border-radius: {u(16.)};
+                        background: {raised()};
+                    })
+                    .children(bars),
+            )),
+        ),
+    )
+}
+
 pub fn page() -> Node {
     page_body(
-        "Property transitions, enter and exit animations, and keyed list animations.",
+        "Everything here animates by interpolating style values: property transitions, springs, staggered entrances, enter and exit animations, keyed list moves, and values computed from a clock every frame.",
         (
             transitions_card(),
+            springs_card(),
+            stagger_card(),
             presence_card(),
             list_card(),
+            clock_card(),
             checklist(
                 PAGE,
                 &[
                     "Transitions retarget smoothly when switched mid-animation",
+                    "Springs overshoot by their bounce and turn around mid-flight",
+                    "The stagger wave fills the grid diagonally at each speed",
                     "Presence plays both the enter and the exit animation",
-                    "List items slide into place after add, remove, and shuffle",
-                    "Animations stay smooth (see FPS in the top bar)",
+                    "List items slide into place after add, remove, shuffle, and sort",
+                    "The orbit and the equalizer move every frame and freeze when paused",
+                    "Animations stay smooth (see the FPS readout in the top bar)",
                 ],
             ),
         ),
