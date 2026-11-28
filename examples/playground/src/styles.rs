@@ -18,6 +18,11 @@ pub fn update_animation_time(time: f32) {
     ANIMATION_TIME.with(|value| value.set(time));
 }
 
+/// Seconds since start, updated once per frame (tracked).
+pub fn animation_time() -> ReadSignal<f32> {
+    ANIMATION_TIME.with(|time| **time)
+}
+
 // Separate construction frames keep the style builders' debug temporaries
 // from exhausting the default Windows main-thread stack.
 fn lengths_card() -> Node {

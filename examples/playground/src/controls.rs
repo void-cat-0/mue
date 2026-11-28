@@ -6,10 +6,12 @@ use mue_components::*;
 use mue_core::prelude::*;
 use mue_components::system::{ControlSize, Palette};
 use mue_macroquad::{
-    motion::transition::Transition,
+    BoxShadow, BoxShadows,
+    app::runtime::set_timeout,
+    motion::transition::{Transition, animated},
     paint::color::Color,
-    paint::shader::Brush,
-    style::{FontSize, Size, Styleable, StyleableExt},
+    paint::shader::{Brush, ColorStop, linear_gradient, radial_gradient},
+    style::{FontSize, Size, Styleable, StyleableExt, Transform, TransformOp},
 };
 use std::{cell::RefCell, rc::Rc};
 use taffy::{AlignItems, FlexDirection};
@@ -20,6 +22,9 @@ pub const CORAL: Color = Color::from_rgba(245, 165, 112, 255);
 pub const GREEN: Color = Color::from_rgba(111, 207, 151, 255);
 pub const RED: Color = Color::from_rgba(235, 103, 103, 255);
 pub const SPRING: Transition = Transition::spring(0.3, 0.1);
+/// The two ends of the accent gradient (indigo to sky blue).
+pub const ACCENT_A: Color = Color::from_rgba(124, 92, 255, 255);
+pub const ACCENT_B: Color = Color::from_rgba(59, 164, 255, 255);
 
 /// One theme: the same token names, different values.
 struct ThemeValues {
@@ -42,20 +47,57 @@ impl ThemeValues {
     }
 }
 
+const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
+    Color::from_rgba(r, g, b, a)
+}
+
+/// The app background: a diagonal gradient between two tints.
+fn backdrop(from: Color, to: Color) -> Brush {
+    linear_gradient((0., 0.), (1., 1.), [ColorStop::new(0., from), ColorStop::new(1., to)])
+}
+
+/// A soft colored glow that fades to transparent at its edge.
+fn glow(color: Color) -> Brush {
+    radial_gradient(
+        (0.5, 0.5),
+        0.5,
+        [
+            ColorStop::new(0., color),
+            ColorStop::new(0.55, Color::new(color.r, color.g, color.b, color.a * 0.35)),
+            ColorStop::new(1., Color::new(color.r, color.g, color.b, 0.)),
+        ],
+    )
+}
+
+/// A card's fill: slightly lighter at the top, like light from above.
+fn sheen(top: Color, bottom: Color) -> Brush {
+    linear_gradient((0., 0.), (0., 1.), [ColorStop::new(0., top), ColorStop::new(1., bottom)])
+}
+
 fn light_palette() -> ThemeValues {
-    let canvas = Color::from_rgba(240, 243, 248, 255);
+    let canvas = rgba(243, 245, 251, 255);
     ThemeValues {
         brushes: token_set! {
             canvas: Brush::Solid(canvas),
-            panel: Brush::Solid(Color::WHITE),
-            raised: Brush::Solid(Color::from_rgba(228, 233, 242, 255)),
-            border: Brush::Solid(Color::from_rgba(214, 220, 231, 255)),
-            foreground: Brush::Solid(Color::from_rgba(31, 41, 55, 255)),
-            muted: Brush::Solid(Color::from_rgba(96, 108, 128, 255)),
-            "tile.panel": Brush::Solid(Color::from_rgba(228, 233, 242, 255)),
+            backdrop: backdrop(rgba(246, 247, 253, 255), rgba(236, 239, 250, 255)),
+            "glow.a": glow(rgba(99, 102, 241, 60)),
+            "glow.b": glow(rgba(236, 72, 153, 40)),
+            glass: Brush::Solid(rgba(255, 255, 255, 150)),
+            panel: sheen(rgba(255, 255, 255, 235), rgba(250, 251, 255, 225)),
+            raised: Brush::Solid(rgba(235, 239, 247, 255)),
+            border: Brush::Solid(rgba(15, 23, 42, 22)),
+            foreground: Brush::Solid(rgba(30, 36, 52, 255)),
+            muted: Brush::Solid(rgba(92, 101, 122, 255)),
+            hover: Brush::Solid(rgba(79, 70, 229, 20)),
+            "tile.panel": Brush::Solid(rgba(228, 233, 242, 255)),
             "tile.accent": Brush::Solid(CORAL),
         },
-        colors: token_set! { canvas: canvas },
+        colors: token_set! {
+            canvas: canvas,
+            stripes: rgba(79, 70, 229, 10),
+            shadow: rgba(30, 41, 90, 26),
+            accent: rgba(79, 70, 229, 255),
+        },
         numbers: token_set! {
             "tile.scale.panel": 1.02_f32,
             "tile.scale.accent": 1.04_f32,
@@ -64,19 +106,29 @@ fn light_palette() -> ThemeValues {
 }
 
 fn dark_palette() -> ThemeValues {
-    let canvas = Color::from_rgba(17, 21, 30, 255);
+    let canvas = rgba(11, 15, 30, 255);
     ThemeValues {
         brushes: token_set! {
             canvas: Brush::Solid(canvas),
-            panel: Brush::Solid(Color::from_rgba(27, 33, 46, 255)),
-            raised: Brush::Solid(Color::from_rgba(38, 46, 63, 255)),
-            border: Brush::Solid(Color::from_rgba(45, 54, 73, 255)),
-            foreground: Brush::Solid(Color::from_rgba(236, 240, 247, 255)),
-            muted: Brush::Solid(Color::from_rgba(146, 157, 178, 255)),
-            "tile.panel": Brush::Solid(Color::from_rgba(38, 46, 63, 255)),
+            backdrop: backdrop(rgba(10, 14, 28, 255), rgba(20, 22, 48, 255)),
+            "glow.a": glow(rgba(99, 102, 241, 80)),
+            "glow.b": glow(rgba(236, 72, 153, 46)),
+            glass: Brush::Solid(rgba(13, 18, 36, 140)),
+            panel: sheen(rgba(30, 37, 66, 200), rgba(21, 26, 49, 200)),
+            raised: Brush::Solid(rgba(37, 45, 76, 255)),
+            border: Brush::Solid(rgba(255, 255, 255, 20)),
+            foreground: Brush::Solid(rgba(233, 237, 248, 255)),
+            muted: Brush::Solid(rgba(150, 160, 190, 255)),
+            hover: Brush::Solid(rgba(255, 255, 255, 14)),
+            "tile.panel": Brush::Solid(rgba(38, 46, 63, 255)),
             "tile.accent": Brush::Solid(BLUE),
         },
-        colors: token_set! { canvas: canvas },
+        colors: token_set! {
+            canvas: canvas,
+            stripes: rgba(255, 255, 255, 8),
+            shadow: rgba(0, 0, 0, 90),
+            accent: rgba(129, 140, 248, 255),
+        },
         numbers: token_set! {
             "tile.scale.panel": 1_f32,
             "tile.scale.accent": 1_f32,
@@ -121,6 +173,21 @@ pub fn background() -> Prop<Brush> {
     brush("canvas")
 }
 
+/// The gradient behind the whole app.
+pub fn backdrop_brush() -> Prop<Brush> {
+    brush("backdrop")
+}
+
+/// One of the two soft color glows behind the app ("a" or "b").
+pub fn glow_brush(which: &str) -> Prop<Brush> {
+    brush(&format!("glow.{which}"))
+}
+
+/// The translucent fill of frosted (backdrop-blurred) chrome.
+pub fn glass() -> Prop<Brush> {
+    brush("glass")
+}
+
 pub fn panel_brush() -> Prop<Brush> {
     brush("panel")
 }
@@ -139,6 +206,39 @@ pub fn foreground() -> Prop<Brush> {
 
 pub fn muted() -> Prop<Brush> {
     brush("muted")
+}
+
+/// The tint under a hovered row.
+pub fn hover_tint() -> Prop<Brush> {
+    brush("hover")
+}
+
+fn color(name: &str) -> Prop<Color> {
+    THEME.with(|theme| theme.get(name))
+}
+
+/// The color of the moving stripes behind the app.
+pub fn stripe_color() -> Prop<Color> {
+    color("stripes")
+}
+
+/// Shadow color for cards and other raised surfaces.
+pub fn shadow_color() -> Prop<Color> {
+    color("shadow")
+}
+
+/// The accent color of the current theme (indigo).
+pub fn accent_color() -> Prop<Color> {
+    color("accent")
+}
+
+/// The accent gradient: navigation selection, the logo, highlights.
+pub fn accent_gradient() -> Brush {
+    linear_gradient(
+        (0., 0.),
+        (1., 1.),
+        [ColorStop::new(0., ACCENT_A), ColorStop::new(1., ACCENT_B)],
+    )
 }
 
 pub fn background_color() -> Color {
@@ -189,18 +289,107 @@ pub fn mono(content: impl Into<Prop<Rc<str>>>) -> Node {
         .into_node()
 }
 
+// ----- Page entrance -----------------------------------------------------
+
+thread_local! {
+    /// Whether the page being built is the selected one, while it is built.
+    static BUILDING: std::cell::Cell<Option<ReadSignal<bool>>> = const { std::cell::Cell::new(None) };
+    static ORDER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Build one page; `active` tells whether it is the selected page. Its
+/// header and cards rise and fade in, one after another, whenever the page
+/// is opened.
+pub fn build_page(active: ReadSignal<bool>, build: impl FnOnce() -> Node) -> Node {
+    BUILDING.with(|page| page.set(Some(active)));
+    ORDER.with(|order| order.set(0));
+    let page = build();
+    BUILDING.with(|page| page.set(None));
+    page
+}
+
+/// Entrance progress (0 hidden, 1 shown) for the next block of the page
+/// being built. Blocks enter in order with a short stagger; they reset
+/// after the page has slid away, so they enter again next time.
+pub fn entrance() -> Prop<f32> {
+    let Some(active) = BUILDING.with(|page| page.get()) else {
+        return Prop::Static(1.);
+    };
+    let order = ORDER.with(|order| {
+        let value = order.get();
+        order.set(value + 1);
+        value
+    });
+    let shown = signal(false);
+    let delay = 0.06 + order.min(8) as f32 * 0.06;
+    let show = move || {
+        set_timeout(delay, move || {
+            if active.get_untracked() {
+                shown.set(true);
+            }
+        });
+    };
+    if active.get_untracked() {
+        show();
+    }
+    watch(active, move |active| {
+        if active.get() {
+            show();
+        } else {
+            // After the page has slid out of view.
+            set_timeout(0.6, move || {
+                if !active.get_untracked() {
+                    shown.set(false);
+                }
+            });
+        }
+    });
+    animated(
+        shown.map(|shown| if shown { 1. } else { 0. }),
+        shown.map(|shown| {
+            if shown { Transition::spring(0.55, 0.18) } else { Transition::Instant }
+        }),
+    )
+}
+
+/// Opacity and a rise of 24 design units that follow an entrance progress,
+/// plus an optional hover lift (0..1, raised by 3 units).
+fn entrance_style(enter: Prop<f32>, lift: Prop<f32>) -> mue_macroquad::style::Style {
+    let opacity = enter.clone().map(|enter| enter.clamp(0., 1.));
+    let transform = computed(move |_| {
+        let scale = responsive::scale();
+        let y = (1. - enter.get()) * 24. * scale - lift.get() * 3. * scale;
+        Transform(vec![TransformOp::Translate(Size::Px(0.), Size::Px(y))])
+    });
+    mue_macroquad::style! {
+        opacity: {opacity};
+        transform: {transform};
+    }
+}
+
 /// A page: an introduction followed by its cards.
 pub fn page_body(intro: &str, cards: impl IntoChildren) -> Node {
     stack()
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
-            gap: {u(16.)};
+            gap: {u(18.)};
         })
-        .children((hint(Rc::<str>::from(intro)), cards))
+        .children((
+            flexbox()
+                .style(entrance_style(entrance(), Prop::Static(0.)))
+                .style(mue_macroquad::style! { width: 100%; min-width: 0px; })
+                .children(text(Rc::<str>::from(intro)).style(mue_macroquad::style! {
+                    width: 100%; min-width: 0px;
+                    font-size: {f(15.)}; line-height: {u(23.)};
+                    color: {muted()};
+                })),
+            cards,
+        ))
         .into_node()
 }
 
-/// A titled card with a short description of what it demonstrates.
+/// A titled card with a short description of what it demonstrates. It
+/// enters with the page and lifts a little under the mouse.
 pub fn card(title: &str, description: &str, content: impl IntoChildren) -> Node {
     let mut header = vec![
         text(Rc::<str>::from(title))
@@ -214,15 +403,35 @@ pub fn card(title: &str, description: &str, content: impl IntoChildren) -> Node 
     if !description.is_empty() {
         header.push(hint(Rc::<str>::from(description)));
     }
+    let enter = entrance();
+    let shadow_tint = shadow_color();
     stack()
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
-            padding: {(u(16.),)};
-            gap: {u(12.)};
-            border-radius: {u(12.)};
+            padding: {(u(18.),)};
+            gap: {u(14.)};
+            border-radius: {u(16.)};
             border-width: 1px;
             border-color: {border()};
             background: {panel_brush()};
+        })
+        .with_hovered(move |view, hovered| {
+            let lift = animated(
+                hovered.map(|on| if on { 1. } else { 0. }),
+                Transition::spring(0.35, 0.1),
+            );
+            let shadow = {
+                let lift = lift.clone();
+                computed(move |_| {
+                    let lift = lift.get();
+                    let color = shadow_tint.get();
+                    BoxShadows::from([
+                        BoxShadow::new(0., 1., 2., Color::new(color.r, color.g, color.b, color.a * 0.6)),
+                        BoxShadow::new(0., 8. + 10. * lift, 24. + 16. * lift, color).spread(-6.),
+                    ])
+                })
+            };
+            view.style(entrance_style(enter, lift)).box_shadow(shadow)
         })
         .children((
             stack()
@@ -331,14 +540,17 @@ pub fn stat(label: &str, value: impl Into<Prop<Rc<str>>>) -> Node {
         .style(mue_macroquad::style! {
             flex: none;
             min-width: {u(132.)};
-            padding: {(u(12.), u(8.))};
+            padding: {(u(14.), u(10.))};
             gap: {u(2.)};
-            border-radius: {u(8.)};
+            border-radius: {u(12.)};
+            border-width: 1px;
+            border-color: {border()};
             background: {raised()};
         })
         .children((
             text(Rc::<str>::from(label)).style(mue_macroquad::style! {
                 font-size: {f(11.)}; line-height: {u(15.)};
+                font-weight: 600;
                 color: {muted()};
             }),
             text(value).style(mue_macroquad::style! {
@@ -520,12 +732,12 @@ pub fn checklist(page: &'static str, labels: &[&'static str]) -> Node {
                     align-items: center;
                 })
                 .with_hovered(move |view, hovered| {
+                    let tint = hover_tint();
                     view.style(mue_macroquad::style! {
-                        background: {hovered.map(|on| Brush::Solid(if on {
-                            Color::from_rgba(128, 140, 170, 30)
-                        } else {
-                            Color::TRANSPARENT
-                        }))};
+                        background: {computed(move |_| {
+                            if hovered.get() { tint.get_clone() } else { Brush::Solid(Color::TRANSPARENT) }
+                        })};
+                        transition: 120ms ease-out;
                     })
                 })
                 .on_activate(move || {
