@@ -57,3 +57,18 @@ impl From<Color> for macroquad::color::Color {
         Self::new(value.r, value.g, value.b, value.a)
     }
 }
+
+/// Exact: every 8-bit channel maps to `channel / 255`. There is no reverse
+/// conversion because a float color does not fit 8-bit channels losslessly.
+///
+/// ```
+/// use mue_macroquad::paint::color::Color;
+///
+/// let color = Color::from(cosmic_text::Color::rgba(255, 128, 0, 51));
+/// assert_eq!(color, Color::from_rgba(255, 128, 0, 51));
+/// ```
+impl From<cosmic_text::Color> for Color {
+    fn from(value: cosmic_text::Color) -> Self {
+        Self::from_rgba(value.r(), value.g(), value.b(), value.a())
+    }
+}
