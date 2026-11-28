@@ -42,12 +42,12 @@ fn options_card() -> Node {
     );
     let (friction, friction_control) =
         segmented("Friction", vec![("Normal", 8.), ("Low", 3.), ("High", 16.)]);
-    let (touch, touch_control) = switch("Touch drag", true);
-    let (mouse, mouse_control) = switch("Mouse drag", false);
-    let (wheel, wheel_control) = switch("Wheel", true);
-    let (momentum, momentum_control) = switch("Momentum", true);
-    let (bars, bars_control) = switch("Scrollbars", true);
-    let (chain, chain_control) = switch("Chain to page", true);
+    let (touch, touch_control) = option_switch("Touch drag", true);
+    let (mouse, mouse_control) = option_switch("Mouse drag", false);
+    let (wheel, wheel_control) = option_switch("Wheel", true);
+    let (momentum, momentum_control) = option_switch("Momentum", true);
+    let (bars, bars_control) = option_switch("Scrollbars", true);
+    let (chain, chain_control) = option_switch("Chain to page", true);
     let offset = signal(Vector::ZERO);
     let key = computed(move |_| {
         (
@@ -110,7 +110,7 @@ fn options_card() -> Node {
 fn handle_card() -> Node {
     let list = ScrollAreaHandle::new();
     let target = NodeHandle::new();
-    let (animated, animated_control) = switch("Animated", true);
+    let (animated, animated_control) = option_switch("Animated", true);
     let l = list.clone();
     let top = move || l.scroll_to_top(animated.get_untracked());
     let l = list.clone();

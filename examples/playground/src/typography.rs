@@ -61,12 +61,12 @@ fn layout_card() -> Node {
         ],
     );
     let (size, size_control) = segmented("Size", vec![("15", 15.), ("20", 20.), ("28", 28.)]);
-    let (bold, bold_control) = switch("Bold", false);
-    let (italic, italic_control) = switch("Italic", false);
-    let (underline, underline_control) = switch("Underline", false);
-    let (strike, strike_control) = switch("Strikethrough", false);
-    let (spacing, spacing_control) = switch("Letter spacing", false);
-    let (paragraphs, paragraph_control) = switch("Paragraph spacing", false);
+    let (bold, bold_control) = option_switch("Bold", false);
+    let (italic, italic_control) = option_switch("Italic", false);
+    let (underline, underline_control) = option_switch("Underline", false);
+    let (strike, strike_control) = option_switch("Strikethrough", false);
+    let (spacing, spacing_control) = option_switch("Letter spacing", false);
+    let (paragraphs, paragraph_control) = option_switch("Paragraph spacing", false);
     card(
         "Text layout",
         "One paragraph rendered with every text option. The box has a fixed height so overflow and vertical alignment are visible.",

@@ -319,7 +319,7 @@ pub fn segmented<T: Clone + PartialEq + 'static>(
 }
 
 /// A compact on/off switch with its label; several fit in one `row`.
-pub fn switch(label: &str, initial: bool) -> (Signal<bool>, Node) {
+pub fn option_switch(label: &str, initial: bool) -> (Signal<bool>, Node) {
     let value = signal(initial);
     let control = link_overlay()
         .style(mue_macroquad::style! {

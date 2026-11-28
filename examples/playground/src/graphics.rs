@@ -56,9 +56,9 @@ fn image_card() -> Node {
             ("Bottom right", vec2(1., 1.)),
         ],
     );
-    let (crop, crop_control) = switch("Crop region", false);
-    let (tint, tint_control) = switch("Tint", false);
-    let (round, round_control) = switch("Rounded", false);
+    let (crop, crop_control) = option_switch("Crop region", false);
+    let (tint, tint_control) = option_switch("Tint", false);
+    let (round, round_control) = option_switch("Rounded", false);
     card(
         "Images",
         "A photo decoded on a worker thread, then fitted into a fixed box. The box outline is the node's bounds.",
@@ -322,7 +322,7 @@ fn pair() -> FlexboxBuilder {
 fn effects_card() -> Node {
     let (density, density_control) =
         segmented("Halftone density", vec![("Fine", 0.3), ("Coarse", 0.08)]);
-    let (moving, moving_control) = switch("Animate shader", true);
+    let (moving, moving_control) = option_switch("Animate shader", true);
     let shader_view = halftone::halftone(density, moving).style(mue_macroquad::style! {
         width: 100%;
         height: {u(120.)};

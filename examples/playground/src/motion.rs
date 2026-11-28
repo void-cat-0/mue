@@ -23,13 +23,13 @@ fn transitions_card() -> Node {
             ("Instant", Transition::Instant),
         ],
     );
-    let (big, big_control) = switch("Size", false);
-    let (round, round_control) = switch("Radius", false);
-    let (warm, warm_control) = switch("Color", false);
-    let (faded, faded_control) = switch("Opacity", false);
-    let (moved, moved_control) = switch("Translate", false);
-    let (turned, turned_control) = switch("Rotate", false);
-    let (tilted, tilted_control) = switch("3D tilt", false);
+    let (big, big_control) = option_switch("Size", false);
+    let (round, round_control) = option_switch("Radius", false);
+    let (warm, warm_control) = option_switch("Color", false);
+    let (faded, faded_control) = option_switch("Opacity", false);
+    let (moved, moved_control) = option_switch("Translate", false);
+    let (turned, turned_control) = option_switch("Rotate", false);
+    let (tilted, tilted_control) = option_switch("3D tilt", false);
     let transform = computed(move |_| {
         Transform(vec![
             TransformOp::Perspective(700.),

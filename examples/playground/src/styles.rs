@@ -59,7 +59,7 @@ fn lengths_card() -> Node {
 }
 
 fn reactive_card() -> Node {
-    let (active, control) = switch("Accent state", false);
+    let (active, control) = option_switch("Accent state", false);
     card(
         "Reactive declarations",
         "Values in braces are Rust expressions; signals inside them keep the style live, and transitions animate the change.",
@@ -116,7 +116,7 @@ fn text_card() -> Node {
 }
 
 fn transform_card() -> Node {
-    let (spin, control) = switch("Animate", true);
+    let (spin, control) = option_switch("Animate", true);
     let time = ANIMATION_TIME.with(|time| **time);
     card(
         "3D transforms",

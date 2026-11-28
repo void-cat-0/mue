@@ -150,9 +150,9 @@ fn states_card() -> Node {
             ("Flushed", InputVariant::Flushed),
         ],
     );
-    let (invalid, invalid_control) = switch("Invalid", false);
-    let (disabled, disabled_control) = switch("Disabled", false);
-    let (read_only, read_only_control) = switch("Read only", false);
+    let (invalid, invalid_control) = option_switch("Invalid", false);
+    let (disabled, disabled_control) = option_switch("Disabled", false);
+    let (read_only, read_only_control) = option_switch("Read only", false);
     let fields = keyed(variant, move |variant| {
         let variant = *variant;
         stack()

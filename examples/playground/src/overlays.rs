@@ -19,7 +19,7 @@ const PAGE: &str = "Overlays & focus";
 
 fn dialog_card() -> Node {
     let open = signal(false);
-    let (dismissible, dismissible_control) = switch("Backdrop and back close it", true);
+    let (dismissible, dismissible_control) = option_switch("Backdrop and back close it", true);
     let name = signal(String::new());
     let dialog = keyed(dismissible, move |dismissible| {
         overlay_host(
