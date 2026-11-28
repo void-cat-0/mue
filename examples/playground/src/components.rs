@@ -335,7 +335,7 @@ fn slider_card() -> Node {
                     border-radius: {u(8.)};
                     opacity: {opacity};
                 })
-                .background(accent_gradient()),
+                .background(Palette::Blue.shade(500)),
         )),
     )
 }

@@ -1,30 +1,34 @@
 //! The playground's small design kit: theme tokens, page sections, option
 //! pickers, readouts, an event log, and manual test checklists.
+//!
+//! The chrome is deliberately plain: neutral surfaces from the gray palette,
+//! 1px borders, small radii, and one blue accent for the selection, focus,
+//! and primary actions. Only the demos themselves use more color.
 
 use super::responsive;
 use mue_components::*;
 use mue_core::prelude::*;
-use mue_components::system::{ControlSize, Palette};
+use mue_components::system::{self, ControlSize, Palette, hex, white_alpha, black_alpha};
 use mue_macroquad::{
-    BoxShadow, BoxShadows,
-    app::runtime::set_timeout,
-    motion::transition::{Transition, animated},
+    motion::transition::Transition,
     paint::color::Color,
-    paint::shader::{Brush, ColorStop, linear_gradient, radial_gradient},
-    style::{FontSize, Size, Styleable, StyleableExt, Transform, TransformOp},
+    paint::shader::{Brush, ColorStop, linear_gradient},
+    style::{FontSize, Size, Styleable, StyleableExt},
 };
 use std::{cell::RefCell, rc::Rc};
 use taffy::{AlignItems, FlexDirection};
 
-/// Accent colors that stay the same in every theme.
+/// Demo colors that stay the same in every theme.
 pub const BLUE: Color = Color::from_rgba(110, 160, 245, 255);
 pub const CORAL: Color = Color::from_rgba(245, 165, 112, 255);
-pub const GREEN: Color = Color::from_rgba(111, 207, 151, 255);
-pub const RED: Color = Color::from_rgba(235, 103, 103, 255);
+pub const GREEN: Color = Color::from_rgba(56, 161, 105, 255);
+pub const RED: Color = Color::from_rgba(229, 62, 62, 255);
 pub const SPRING: Transition = Transition::spring(0.3, 0.1);
-/// The two ends of the accent gradient (indigo to sky blue).
+/// The two ends of the demo gradient (indigo to sky blue).
 pub const ACCENT_A: Color = Color::from_rgba(124, 92, 255, 255);
 pub const ACCENT_B: Color = Color::from_rgba(59, 164, 255, 255);
+/// Hover, selection, and other state changes of the chrome.
+pub const QUICK: Transition = Transition::ease_out(0.16);
 
 /// One theme: the same token names, different values.
 struct ThemeValues {
@@ -47,56 +51,35 @@ impl ThemeValues {
     }
 }
 
-const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
-    Color::from_rgba(r, g, b, a)
+fn gray(shade: u16) -> Color {
+    Palette::Gray.shade(shade)
 }
 
-/// The app background: a diagonal gradient between two tints.
-fn backdrop(from: Color, to: Color) -> Brush {
-    linear_gradient((0., 0.), (1., 1.), [ColorStop::new(0., from), ColorStop::new(1., to)])
-}
-
-/// A soft colored glow that fades to transparent at its edge.
-fn glow(color: Color) -> Brush {
-    radial_gradient(
-        (0.5, 0.5),
-        0.5,
-        [
-            ColorStop::new(0., color),
-            ColorStop::new(0.55, Color::new(color.r, color.g, color.b, color.a * 0.35)),
-            ColorStop::new(1., Color::new(color.r, color.g, color.b, 0.)),
-        ],
-    )
-}
-
-/// A card's fill: slightly lighter at the top, like light from above.
-fn sheen(top: Color, bottom: Color) -> Brush {
-    linear_gradient((0., 0.), (0., 1.), [ColorStop::new(0., top), ColorStop::new(1., bottom)])
+fn blue(shade: u16) -> Color {
+    Palette::Blue.shade(shade)
 }
 
 fn light_palette() -> ThemeValues {
-    let canvas = rgba(243, 245, 251, 255);
+    let canvas = hex(0xFFFFFF);
     ThemeValues {
         brushes: token_set! {
             canvas: Brush::Solid(canvas),
-            backdrop: backdrop(rgba(246, 247, 253, 255), rgba(236, 239, 250, 255)),
-            "glow.a": glow(rgba(99, 102, 241, 60)),
-            "glow.b": glow(rgba(236, 72, 153, 40)),
-            glass: Brush::Solid(rgba(255, 255, 255, 150)),
-            panel: sheen(rgba(255, 255, 255, 235), rgba(250, 251, 255, 225)),
-            raised: Brush::Solid(rgba(235, 239, 247, 255)),
-            border: Brush::Solid(rgba(15, 23, 42, 22)),
-            foreground: Brush::Solid(rgba(30, 36, 52, 255)),
-            muted: Brush::Solid(rgba(92, 101, 122, 255)),
-            hover: Brush::Solid(rgba(79, 70, 229, 20)),
-            "tile.panel": Brush::Solid(rgba(228, 233, 242, 255)),
-            "tile.accent": Brush::Solid(CORAL),
+            chrome: Brush::Solid(gray(50)),
+            header: Brush::Solid(Color::new(1., 1., 1., 0.88)),
+            panel: Brush::Solid(canvas),
+            raised: Brush::Solid(gray(50)),
+            border: Brush::Solid(gray(200)),
+            foreground: Brush::Solid(gray(800)),
+            muted: Brush::Solid(gray(600)),
+            hover: Brush::Solid(black_alpha(0.04)),
+            "nav.selected": Brush::Solid(blue(50)),
+            "nav.selected.fg": Brush::Solid(blue(700)),
+            accent: Brush::Solid(blue(500)),
+            "tile.panel": Brush::Solid(gray(100)),
+            "tile.accent": Brush::Solid(blue(100)),
         },
         colors: token_set! {
             canvas: canvas,
-            stripes: rgba(79, 70, 229, 10),
-            shadow: rgba(30, 41, 90, 26),
-            accent: rgba(79, 70, 229, 255),
         },
         numbers: token_set! {
             "tile.scale.panel": 1.02_f32,
@@ -106,28 +89,26 @@ fn light_palette() -> ThemeValues {
 }
 
 fn dark_palette() -> ThemeValues {
-    let canvas = rgba(11, 15, 30, 255);
+    let canvas = gray(900);
     ThemeValues {
         brushes: token_set! {
             canvas: Brush::Solid(canvas),
-            backdrop: backdrop(rgba(10, 14, 28, 255), rgba(20, 22, 48, 255)),
-            "glow.a": glow(rgba(99, 102, 241, 80)),
-            "glow.b": glow(rgba(236, 72, 153, 46)),
-            glass: Brush::Solid(rgba(13, 18, 36, 140)),
-            panel: sheen(rgba(30, 37, 66, 200), rgba(21, 26, 49, 200)),
-            raised: Brush::Solid(rgba(37, 45, 76, 255)),
-            border: Brush::Solid(rgba(255, 255, 255, 20)),
-            foreground: Brush::Solid(rgba(233, 237, 248, 255)),
-            muted: Brush::Solid(rgba(150, 160, 190, 255)),
-            hover: Brush::Solid(rgba(255, 255, 255, 14)),
-            "tile.panel": Brush::Solid(rgba(38, 46, 63, 255)),
-            "tile.accent": Brush::Solid(BLUE),
+            chrome: Brush::Solid(canvas),
+            header: Brush::Solid(Color::new(canvas.r, canvas.g, canvas.b, 0.88)),
+            panel: Brush::Solid(gray(800)),
+            raised: Brush::Solid(white_alpha(0.04)),
+            border: Brush::Solid(white_alpha(0.1)),
+            foreground: Brush::Solid(white_alpha(0.92)),
+            muted: Brush::Solid(gray(400)),
+            hover: Brush::Solid(white_alpha(0.05)),
+            "nav.selected": Brush::Solid(Palette::Blue.alpha(200, 0.12)),
+            "nav.selected.fg": Brush::Solid(blue(200)),
+            accent: Brush::Solid(blue(300)),
+            "tile.panel": Brush::Solid(white_alpha(0.06)),
+            "tile.accent": Brush::Solid(Palette::Blue.alpha(200, 0.2)),
         },
         colors: token_set! {
             canvas: canvas,
-            stripes: rgba(255, 255, 255, 8),
-            shadow: rgba(0, 0, 0, 90),
-            accent: rgba(129, 140, 248, 255),
         },
         numbers: token_set! {
             "tile.scale.panel": 1_f32,
@@ -169,29 +150,27 @@ fn brush(name: &str) -> Prop<Brush> {
     THEME.with(|theme| theme.get(name))
 }
 
+/// The page background.
 pub fn background() -> Prop<Brush> {
     brush("canvas")
 }
 
-/// The gradient behind the whole app.
-pub fn backdrop_brush() -> Prop<Brush> {
-    brush("backdrop")
+/// The sidebar's fill.
+pub fn chrome() -> Prop<Brush> {
+    brush("chrome")
 }
 
-/// One of the two soft color glows behind the app ("a" or "b").
-pub fn glow_brush(which: &str) -> Prop<Brush> {
-    brush(&format!("glow.{which}"))
+/// The translucent fill of the header the pages scroll under.
+pub fn header_brush() -> Prop<Brush> {
+    brush("header")
 }
 
-/// The translucent fill of frosted (backdrop-blurred) chrome.
-pub fn glass() -> Prop<Brush> {
-    brush("glass")
-}
-
+/// Cards and dialogs.
 pub fn panel_brush() -> Prop<Brush> {
     brush("panel")
 }
 
+/// Wells inside cards: readouts, demo surfaces.
 pub fn raised() -> Prop<Brush> {
     brush("raised")
 }
@@ -213,26 +192,17 @@ pub fn hover_tint() -> Prop<Brush> {
     brush("hover")
 }
 
-fn color(name: &str) -> Prop<Color> {
-    THEME.with(|theme| theme.get(name))
+/// The selected navigation entry: its fill and its text.
+pub fn nav_selected() -> (Prop<Brush>, Prop<Brush>) {
+    (brush("nav.selected"), brush("nav.selected.fg"))
 }
 
-/// The color of the moving stripes behind the app.
-pub fn stripe_color() -> Prop<Color> {
-    color("stripes")
+/// The one accent of the chrome (blue).
+pub fn accent_brush() -> Prop<Brush> {
+    brush("accent")
 }
 
-/// Shadow color for cards and other raised surfaces.
-pub fn shadow_color() -> Prop<Color> {
-    color("shadow")
-}
-
-/// The accent color of the current theme (indigo).
-pub fn accent_color() -> Prop<Color> {
-    color("accent")
-}
-
-/// The accent gradient: navigation selection, the logo, highlights.
+/// A gradient for demos (never for the chrome).
 pub fn accent_gradient() -> Brush {
     linear_gradient(
         (0., 0.),
@@ -260,13 +230,13 @@ pub fn para(content: impl Into<Prop<Rc<str>>>) -> Node {
     text(content)
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
-            font-size: {f(15.)}; line-height: {u(22.)};
+            font-size: {f(14.)}; line-height: {u(21.)};
             color: {foreground()};
         })
         .into_node()
 }
 
-/// Secondary text: explanations and hints.
+/// Secondary text: captions and hints.
 pub fn hint(content: impl Into<Prop<Rc<str>>>) -> Node {
     text(content)
         .style(mue_macroquad::style! {
@@ -289,113 +259,28 @@ pub fn mono(content: impl Into<Prop<Rc<str>>>) -> Node {
         .into_node()
 }
 
-// ----- Page entrance -----------------------------------------------------
-
-thread_local! {
-    /// Whether the page being built is the selected one, while it is built.
-    static BUILDING: std::cell::Cell<Option<ReadSignal<bool>>> = const { std::cell::Cell::new(None) };
-    static ORDER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Build one page; `active` tells whether it is the selected page. Its
-/// header and cards rise and fade in, one after another, whenever the page
-/// is opened.
-pub fn build_page(active: ReadSignal<bool>, build: impl FnOnce() -> Node) -> Node {
-    BUILDING.with(|page| page.set(Some(active)));
-    ORDER.with(|order| order.set(0));
-    let page = build();
-    BUILDING.with(|page| page.set(None));
-    page
-}
-
-/// Entrance progress (0 hidden, 1 shown) for the next block of the page
-/// being built. Blocks enter in order with a short stagger; they reset
-/// after the page has slid away, so they enter again next time.
-pub fn entrance() -> Prop<f32> {
-    let Some(active) = BUILDING.with(|page| page.get()) else {
-        return Prop::Static(1.);
-    };
-    let order = ORDER.with(|order| {
-        let value = order.get();
-        order.set(value + 1);
-        value
-    });
-    let shown = signal(false);
-    let delay = 0.06 + order.min(8) as f32 * 0.06;
-    let show = move || {
-        set_timeout(delay, move || {
-            if active.get_untracked() {
-                shown.set(true);
-            }
-        });
-    };
-    if active.get_untracked() {
-        show();
-    }
-    watch(active, move |active| {
-        if active.get() {
-            show();
-        } else {
-            // After the page has slid out of view.
-            set_timeout(0.6, move || {
-                if !active.get_untracked() {
-                    shown.set(false);
-                }
-            });
-        }
-    });
-    animated(
-        shown.map(|shown| if shown { 1. } else { 0. }),
-        shown.map(|shown| {
-            if shown { Transition::spring(0.55, 0.18) } else { Transition::Instant }
-        }),
-    )
-}
-
-/// Opacity and a rise of 24 design units that follow an entrance progress,
-/// plus an optional hover lift (0..1, raised by 3 units).
-fn entrance_style(enter: Prop<f32>, lift: Prop<f32>) -> mue_macroquad::style::Style {
-    let opacity = enter.clone().map(|enter| enter.clamp(0., 1.));
-    let transform = computed(move |_| {
-        let scale = responsive::scale();
-        let y = (1. - enter.get()) * 24. * scale - lift.get() * 3. * scale;
-        Transform(vec![TransformOp::Translate(Size::Px(0.), Size::Px(y))])
-    });
-    mue_macroquad::style! {
-        opacity: {opacity};
-        transform: {transform};
-    }
-}
-
-/// A page: an introduction followed by its cards.
+/// A page: an optional one-line introduction followed by its cards.
 pub fn page_body(intro: &str, cards: impl IntoChildren) -> Node {
+    let mut children = Vec::new();
+    if !intro.is_empty() {
+        children.push(hint(Rc::<str>::from(intro)));
+    }
     stack()
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
-            gap: {u(18.)};
+            gap: {system::space(4.)};
         })
-        .children((
-            flexbox()
-                .style(entrance_style(entrance(), Prop::Static(0.)))
-                .style(mue_macroquad::style! { width: 100%; min-width: 0px; })
-                .children(text(Rc::<str>::from(intro)).style(mue_macroquad::style! {
-                    width: 100%; min-width: 0px;
-                    font-size: {f(15.)}; line-height: {u(23.)};
-                    color: {muted()};
-                })),
-            cards,
-        ))
+        .children((children, cards))
         .into_node()
 }
 
-/// A titled card with a short description of what it demonstrates. It
-/// enters with the page and lifts a little under the mouse.
+/// A titled card, with an optional one-line description.
 pub fn card(title: &str, description: &str, content: impl IntoChildren) -> Node {
     let mut header = vec![
         text(Rc::<str>::from(title))
             .style(mue_macroquad::style! {
-                font-size: {f(17.)}; line-height: {u(24.)};
-                font-weight: 700;
+                font-size: {f(15.)}; line-height: {u(22.)};
+                font-weight: 600;
                 color: {foreground()};
             })
             .into_node(),
@@ -403,39 +288,20 @@ pub fn card(title: &str, description: &str, content: impl IntoChildren) -> Node 
     if !description.is_empty() {
         header.push(hint(Rc::<str>::from(description)));
     }
-    let enter = entrance();
-    let shadow_tint = shadow_color();
+    let compact = responsive::compact();
     stack()
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
-            padding: {(u(18.),)};
-            gap: {u(14.)};
-            border-radius: {u(16.)};
+            padding: {(Prop::from(compact.map(|compact| system::space(if compact { 4. } else { 5. }))),)};
+            gap: {system::space(4.)};
+            border-radius: {system::radius::LG};
             border-width: 1px;
             border-color: {border()};
             background: {panel_brush()};
         })
-        .with_hovered(move |view, hovered| {
-            let lift = animated(
-                hovered.map(|on| if on { 1. } else { 0. }),
-                Transition::spring(0.35, 0.1),
-            );
-            let shadow = {
-                let lift = lift.clone();
-                computed(move |_| {
-                    let lift = lift.get();
-                    let color = shadow_tint.get();
-                    BoxShadows::from([
-                        BoxShadow::new(0., 1., 2., Color::new(color.r, color.g, color.b, color.a * 0.6)),
-                        BoxShadow::new(0., 8. + 10. * lift, 24. + 16. * lift, color).spread(-6.),
-                    ])
-                })
-            };
-            view.style(entrance_style(enter, lift)).box_shadow(shadow)
-        })
         .children((
             stack()
-                .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(2.)}; })
+                .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {system::space(0.5)}; })
                 .children(header),
             content,
         ))
@@ -507,7 +373,7 @@ pub fn picker<T: Clone + PartialEq + 'static>(
         .index(index)
         .variant(TabsVariant::SoftRounded)
         .size(ControlSize::Sm)
-        .palette(Palette::Blue)
+        .palette(Palette::Gray)
         .on_change(move |at: &usize| model.set(options[*at].1.clone()))
         .children(tab_list().style(mue_macroquad::style! { flex-wrap: wrap; }).children(labels))
         .into_node()
@@ -539,22 +405,21 @@ pub fn stat(label: &str, value: impl Into<Prop<Rc<str>>>) -> Node {
     stack()
         .style(mue_macroquad::style! {
             flex: none;
-            min-width: {u(132.)};
-            padding: {(u(14.), u(10.))};
+            min-width: {u(128.)};
+            padding: {(system::space(3.), system::space(2.))};
             gap: {u(2.)};
-            border-radius: {u(12.)};
+            border-radius: {system::radius::MD};
             border-width: 1px;
             border-color: {border()};
             background: {raised()};
         })
         .children((
             text(Rc::<str>::from(label)).style(mue_macroquad::style! {
-                font-size: {f(11.)}; line-height: {u(15.)};
-                font-weight: 600;
+                font-size: {f(12.)}; line-height: {u(16.)};
                 color: {muted()};
             }),
             text(value).style(mue_macroquad::style! {
-                font-size: {f(15.)}; line-height: {u(21.)};
+                font-size: {f(14.)}; line-height: {u(20.)};
                 font-family: monospace;
                 color: {foreground()};
             }),
@@ -566,7 +431,9 @@ pub fn stat(label: &str, value: impl Into<Prop<Rc<str>>>) -> Node {
 pub fn surface() -> FlexboxBuilder {
     flexbox().style(mue_macroquad::style! {
         width: 100%; min-width: 0px;
-        border-radius: {u(10.)};
+        border-radius: {system::radius::MD};
+        border-width: 1px;
+        border-color: {border()};
         background: {raised()};
     })
 }
@@ -602,9 +469,11 @@ pub fn event_log() -> Node {
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
             min-height: {u(60.)};
-            padding: {(u(12.), u(8.))};
+            padding: {(system::space(3.), system::space(2.))};
             gap: {u(2.)};
-            border-radius: {u(8.)};
+            border-radius: {system::radius::MD};
+            border-width: 1px;
+            border-color: {border()};
             background: {raised()};
         })
         .children((
@@ -616,7 +485,7 @@ pub fn event_log() -> Node {
                 })
             }))
             .style(mue_macroquad::style! {
-                font-size: {f(11.)}; line-height: {u(15.)};
+                font-size: {f(12.)}; line-height: {u(16.)};
                 color: {muted()};
             }),
             map_keyed(log, |entry| entry.0, |entry| mono(entry.1.clone())),
@@ -717,17 +586,18 @@ pub fn checklist(page: &'static str, labels: &[&'static str]) -> Node {
                     Check::Fail => "✗",
                 })
             });
-            let tint = state.map(|state| match state {
-                Check::Untested => Brush::Solid(Color::from_rgba(146, 157, 178, 255)),
+            let untested = muted();
+            let tint = computed(move |_| match state.get() {
+                Check::Untested => untested.get_clone(),
                 Check::Pass => Brush::Solid(GREEN),
                 Check::Fail => Brush::Solid(RED),
             });
             link_overlay()
                 .style(mue_macroquad::style! {
                     width: 100%; min-width: 0px;
-                    padding: {(u(10.), u(6.))};
-                    gap: {u(10.)};
-                    border-radius: {u(8.)};
+                    padding: {(system::space(2.), system::space(1.5))};
+                    gap: {system::space(2.5)};
+                    border-radius: {system::radius::MD};
                     flex-direction: row;
                     align-items: center;
                 })

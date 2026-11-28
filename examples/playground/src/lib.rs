@@ -7,7 +7,7 @@
 //!
 //! Run with `cargo run --manifest-path examples/Cargo.toml --example playground`.
 use mue_components::*;
-use mue_components::system::ControlSize;
+use mue_components::system::{self, ControlSize};
 mod assets;
 mod components;
 mod controls;
@@ -33,12 +33,12 @@ use controls::*;
 use macroquad::prelude::{clear_background, get_time, next_frame};
 use mue_core::prelude::*;
 use mue_macroquad::{
-    App, BoxShadow, BoxShadows,
+    App,
     font::{self, fontdb},
     motion::transition::Transition,
     node::NodeHandle,
     paint::{color::Color, shader::Brush},
-    style::{Size, Styleable, StyleableExt, Transform, TransformOp},
+    style::{Size, Styleable, StyleableExt},
 };
 use std::rc::Rc;
 
@@ -76,86 +76,66 @@ pub fn open_page(index: usize) {
     SELECTED.with(|selected| selected.set(index.min(PAGES.len() - 1)));
 }
 
-/// Space above a page's content: the frosted header floats over it.
+/// Space above a page's content: the header floats over it.
 fn header_inset(header: ReadSignal<f32>) -> Prop<Size> {
-    computed(move |_| Size::Px(header.get() + 20. * responsive::scale())).into()
+    let compact = responsive::compact();
+    computed(move |_| {
+        let gap = if compact.get() { 16. } else { 24. };
+        Size::Px(header.get() + gap * responsive::scale())
+    })
+    .into()
 }
 
-fn destination(index: usize, selected: Signal<usize>, header: ReadSignal<f32>) -> Node {
-    let active = selected.map(move |page| page == index);
-    build_page(active, || {
-        let (title, section) = PAGES[index];
-        let enter = entrance();
-        let rise = enter.clone().map(|enter| {
-            Transform(vec![TransformOp::Translate(Size::Px(0.), Size::Px((1. - enter) * 16.))])
-        });
-        let page_header = stack()
-            .style(mue_macroquad::style! {
-                width: 100%; min-width: 0px;
-                gap: {u(4.)};
-                opacity: {enter};
-                transform: {rise};
-            })
-            .children((
-                text(section.to_uppercase()).style(mue_macroquad::style! {
-                    font-size: {f(12.)}; line-height: {u(16.)};
-                    font-weight: 700;
-                    color: {accent_color().map(Brush::Solid)};
-                }),
-                heading(title).style(mue_macroquad::style! {
-                    font-size: {f(30.)};
-                    line-height: {u(38.)};
-                    color: {foreground()};
-                }),
-                // A short accent bar under the title.
-                flexbox()
-                    .style(mue_macroquad::style! {
-                        width: {u(48.)}; height: {u(4.)};
-                        margin-top: {u(6.)};
-                        border-radius: 9999px;
-                    })
-                    .background(accent_gradient()),
-            ));
-        let content = match index {
-            0 => overview::page(),
-            1 => selftest::page(),
-            2 => components::page(),
-            3 => layout::page(),
-            4 => typography::page(),
-            5 => graphics::page(),
-            6 => motion::page(),
-            7 => text_input::page(),
-            8 => pointer::page(),
-            9 => scrolling::page(),
-            10 => overlays::page(),
-            11 => feedback::page(),
-            12 => theming::page(),
-            13 => styles::page(),
-            _ => fonts::licenses(),
-        };
-        scroll_area()
-            .style(mue_macroquad::style! { width: 100%; height: 100%; })
-            .options(ScrollOptions {
-                touch: true,
-                ..Default::default()
-            })
-            .children(
-                container()
-                    .style(mue_macroquad::style! {
-                        width: 100%;
-                        max-width: {u(980.)};
-                        min-width: 0px;
-                        padding: {(u(20.), u(20.))};
-                        padding-top: {header_inset(header)};
-                        padding-bottom: {u(40.)};
-                        gap: {u(14.)};
-                        // Components without their own size (buttons, inputs) inherit this.
-                        font-size: {f(15.)};
-                    })
-                    .children((page_header, content)),
-            )
-            .into_node()
-    })
+fn destination(index: usize, header: ReadSignal<f32>) -> Node {
+    let title = PAGES[index].0;
+    let page_header = heading(title).style(mue_macroquad::style! {
+        font-size: {f(24.)};
+        line-height: {u(32.)};
+        font-weight: 600;
+        color: {foreground()};
+    });
+    let content = match index {
+        0 => overview::page(),
+        1 => selftest::page(),
+        2 => components::page(),
+        3 => layout::page(),
+        4 => typography::page(),
+        5 => graphics::page(),
+        6 => motion::page(),
+        7 => text_input::page(),
+        8 => pointer::page(),
+        9 => scrolling::page(),
+        10 => overlays::page(),
+        11 => feedback::page(),
+        12 => theming::page(),
+        13 => styles::page(),
+        _ => fonts::licenses(),
+    };
+    let compact = responsive::compact();
+    let side = computed(move |_| Size::Px(responsive::scale() * if compact.get() { 16. } else { 24. }));
+    scroll_area()
+        .style(mue_macroquad::style! { width: 100%; height: 100%; })
+        .options(ScrollOptions {
+            touch: true,
+            ..Default::default()
+        })
+        .children(
+            container()
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    max-width: {u(960.)};
+                    min-width: 0px;
+                    padding-left: {side};
+                    padding-right: {side};
+                    padding-top: {header_inset(header)};
+                    padding-bottom: {u(48.)};
+                    gap: {u(16.)};
+                    // Components without their own size (buttons, inputs) inherit this.
+                    font-size: {f(14.)};
+                })
+                .children((page_header, content)),
+        )
+        .into_node()
 }
 
 #[cfg(target_os = "android")]
@@ -218,14 +198,15 @@ pub async fn run() {
     }
 }
 
-/// One navigation entry. The selection pill is drawn by [`nav_list`]
+/// One navigation entry. The selection is drawn by [`nav_list`]
 /// underneath; the entry itself only tints while hovered.
 fn nav_item(index: usize, selected: Signal<usize>, handle: NodeHandle, compact: bool) -> Node {
     let active = selected.map(move |page| page == index);
     let ink = foreground();
+    let (_, selected_ink) = nav_selected();
     let label = computed(move |_| {
         if active.get() {
-            Brush::Solid(Color::WHITE)
+            selected_ink.get_clone()
         } else {
             ink.get_clone()
         }
@@ -234,12 +215,12 @@ fn nav_item(index: usize, selected: Signal<usize>, handle: NodeHandle, compact: 
         .node_handle(handle)
         .style(mue_macroquad::style! {
             flex: none;
-            padding: {(u(12.), u(8.))};
-            min-height: {u(36.)};
-            border-radius: {u(10.)};
+            padding: {(system::space(3.), system::space(1.5))};
+            min-height: {u(32.)};
+            border-radius: {system::radius::MD};
             align-items: center;
             flex-direction: row;
-            transition: 160ms ease-out;
+            transition: 150ms ease-out;
         })
         .style(if compact {
             mue_macroquad::style! {}
@@ -269,14 +250,15 @@ fn nav_item(index: usize, selected: Signal<usize>, handle: NodeHandle, compact: 
         .into_node()
 }
 
-/// The navigation entries with a gradient selection pill that slides (with
-/// a spring) to the selected entry. Vertical lists group the entries under
-/// their section names.
+/// The navigation entries over a selection that slides to the selected
+/// entry: a tinted pill with a bar on its left in the sidebar, an underline
+/// in the tab strip. Vertical lists group the entries under their section
+/// names.
 fn nav_list(selected: Signal<usize>, horizontal: bool) -> (Node, Rc<Vec<NodeHandle>>) {
     let list = NodeHandle::new();
     let handles: Rc<Vec<NodeHandle>> = Rc::new((0..PAGES.len()).map(|_| NodeHandle::new()).collect());
-    // The selected entry's box relative to the list (tracked, so the pill
-    // follows the selection and every layout change).
+    // The selected entry's box relative to the list (tracked, so the
+    // selection follows every layout change).
     let geometry = {
         let handles = handles.clone();
         computed(move |_| {
@@ -288,43 +270,66 @@ fn nav_list(selected: Signal<usize>, horizontal: bool) -> (Node, Rc<Vec<NodeHand
     let part = move |pick: fn((f32, f32, f32, f32)) -> f32| {
         geometry.map(move |geometry| Size::Px(geometry.map_or(0., pick)))
     };
-    // Slide only once the pill has been placed, so it does not fly in.
+    // Slide only once the selection has been placed, so it does not fly in.
     let ready = signal(false);
-    let accent = accent_color();
-    let pill = flexbox()
+    let (fill, _) = nav_selected();
+    let mark = flexbox()
+        .absolute()
+        .background(accent_brush())
+        .style(if horizontal {
+            mue_macroquad::style! {
+                left: {u(12.)}; right: {u(12.)}; bottom: 0px;
+                height: 2px;
+                border-radius: 1px;
+            }
+        } else {
+            mue_macroquad::style! {
+                left: 0px; top: {u(8.)}; bottom: {u(8.)};
+                width: 3px;
+                border-radius: 2px;
+            }
+        });
+    let indicator = flexbox()
         .absolute()
         .inset_left(part(|g| g.0))
         .inset_top(part(|g| g.1))
         .width(part(|g| g.2))
         .height(part(|g| g.3))
-        .background(accent_gradient())
-        .box_shadow(computed(move |_| {
-            let accent = accent.get();
-            BoxShadows::from(BoxShadow::new(0., 4., 16., Color::new(accent.r, accent.g, accent.b, 0.45)))
-        }))
         .opacity(ready.map(|ready| if ready { 1. } else { 0. }))
-        .transition(ready.map(|ready| {
-            if ready { Transition::spring(0.42, 0.16) } else { Transition::Instant }
-        }))
+        .transition(ready.map(|ready| if ready { QUICK } else { Transition::Instant }))
         .on_update(move |_| {
             if !ready.get_untracked() && geometry.get_untracked().is_some() {
                 ready.set(true);
             }
         })
-        .style(mue_macroquad::style! { border-radius: {u(10.)}; });
-    let mut children: Vec<Node> = vec![pill.into_node()];
+        .style(if horizontal {
+            mue_macroquad::style! {}
+        } else {
+            mue_macroquad::style! {
+                border-radius: {system::radius::MD};
+                background: {fill};
+            }
+        })
+        .children(mark);
+    let mut children: Vec<Node> = vec![indicator.into_node()];
     let mut section = "";
     for (index, (_, group)) in PAGES.iter().enumerate() {
         if !horizontal && *group != section {
             section = group;
+            // A section of one page needs no heading of the same name.
+            if *group == PAGES[index].0 {
+                children.push(flexbox().style(mue_macroquad::style! { height: {u(14.)}; }).into_node());
+                children.push(nav_item(index, selected, handles[index], horizontal));
+                continue;
+            }
             children.push(
-                text(group.to_uppercase())
+                text(*group)
                     .style(mue_macroquad::style! {
-                        padding: {(u(12.), u(4.))};
-                        margin-top: {u(if index == 0 { 0. } else { 12. })};
-                        font-size: {f(11.)};
+                        padding: {(system::space(3.), system::space(1.))};
+                        margin-top: {u(if index == 0 { 0. } else { 14. })};
+                        font-size: {f(12.)};
                         line-height: {u(16.)};
-                        font-weight: 700;
+                        font-weight: 600;
                         color: {muted()};
                     })
                     .into_node(),
@@ -336,10 +341,10 @@ fn nav_list(selected: Signal<usize>, horizontal: bool) -> (Node, Rc<Vec<NodeHand
         .node_handle(list)
         .style(mue_macroquad::style! {
             position: relative;
-            gap: {u(2.)};
+            gap: {u(1.)};
         })
         .style(if horizontal {
-            mue_macroquad::style! { flex-direction: row; align-items: center; }
+            mue_macroquad::style! { height: 100%; flex-direction: row; align-items: center; }
         } else {
             mue_macroquad::style! { width: 100%; flex-direction: column; }
         })
@@ -348,22 +353,21 @@ fn nav_list(selected: Signal<usize>, horizontal: bool) -> (Node, Rc<Vec<NodeHand
     (node, handles)
 }
 
-/// The frosted sidebar for wide windows, grouped by section.
+/// The sidebar for wide windows, grouped by section.
 fn sidebar(selected: Signal<usize>, header: ReadSignal<f32>) -> Node {
     let (list, _) = nav_list(selected, false);
     scroll_area()
         .style(mue_macroquad::style! {
-            width: {u(216.)};
+            width: {u(220.)};
             height: 100%;
             flex: none;
-            background: {glass()};
-            backdrop-filter: blur(18px);
+            background: {chrome()};
             border-right-width: 1px;
             border-color: {border()};
         })
         .content_style(mue_macroquad::style! {
-            padding: {(u(10.), u(10.))};
-            padding-top: {header_inset(header)};
+            padding: {(system::space(3.), system::space(3.))};
+            padding-top: {computed(move |_| Size::Px(header.get() + 12. * responsive::scale()))};
         })
         .children(list)
         .into_node()
@@ -387,7 +391,7 @@ fn tab_strip(selected: Signal<usize>) -> Node {
         .handle(strip)
         .style(mue_macroquad::style! {
             width: 100%;
-            height: {u(50.)};
+            height: {u(44.)};
             flex: none;
         })
         .options(ScrollOptions {
@@ -396,70 +400,50 @@ fn tab_strip(selected: Signal<usize>) -> Node {
             ..Default::default()
         })
         .content_style(mue_macroquad::style! {
-            padding: {(u(10.), u(0.))};
-            align-items: center;
+            height: 100%;
+            padding: {(system::space(2.), u(0.))};
+            align-items: stretch;
         })
         .children(list)
         .into_node()
 }
 
-/// The app's logo: a gradient tile whose glow breathes slowly.
+/// The app's mark: a small tile in the text color.
 fn logo() -> Node {
-    let time = styles::animation_time();
     center()
         .style(mue_macroquad::style! {
             flex: none;
-            width: {u(30.)}; height: {u(30.)};
-            border-radius: {u(9.)};
+            width: {u(24.)}; height: {u(24.)};
+            border-radius: {system::radius::MD};
+            background: {foreground()};
         })
-        .background(accent_gradient())
-        .box_shadow(time.map(|time| {
-            let pulse = 0.5 + 0.5 * (time * 1.6).sin();
-            BoxShadows::from(BoxShadow::new(
-                0.,
-                2.,
-                10. + 8. * pulse,
-                Color::new(ACCENT_A.r, ACCENT_A.g, ACCENT_A.b, 0.35 + 0.25 * pulse),
-            ))
-        }))
         .children(text("m").style(mue_macroquad::style! {
-            font-size: {f(17.)}; line-height: {u(20.)};
-            font-weight: 800;
-            color: #ffffff;
+            font-size: {f(14.)}; line-height: {u(18.)};
+            font-weight: 700;
+            color: {background()};
         }))
         .into_node()
-}
-
-/// A small rounded readout in the top bar.
-fn pill(label: impl Into<Prop<Rc<str>>>) -> FlexboxBuilder {
-    flexbox()
-        .style(mue_macroquad::style! {
-            flex: none;
-            padding: {(u(8.), u(2.))};
-            border-radius: 9999px;
-            border-width: 1px;
-            border-color: {border()};
-            background: {hover_tint()};
-        })
-        .children(text(label).style(mue_macroquad::style! {
-            font-size: {f(12.)}; line-height: {u(18.)};
-            font-family: monospace;
-            color: {muted()};
-            text-wrap: {false};
-        }))
 }
 
 fn top_bar(selected: Signal<usize>, compact: ReadSignal<bool>) -> Node {
     let zoom = responsive::zoom();
     let color = use_color_mode();
     let wide = compact.map(|compact| !compact);
+    // The switch and the color mode follow each other.
+    let dark = signal(color.scheme.get_untracked() == ColorScheme::Dark);
+    watch(color.scheme, move |scheme| {
+        let on = scheme.get() == ColorScheme::Dark;
+        if dark.get_untracked() != on {
+            dark.set(on);
+        }
+    });
     hstack()
         .style(mue_macroquad::style! {
             width: 100%;
             flex: none;
-            min-height: {u(56.)};
-            padding: {(u(16.), u(8.))};
-            gap: {u(10.)};
+            min-height: {u(52.)};
+            padding: {(system::space(4.), system::space(2.))};
+            gap: {system::space(2.)};
             align-items: center;
         })
         .children((
@@ -468,23 +452,27 @@ fn top_bar(selected: Signal<usize>, compact: ReadSignal<bool>) -> Node {
                 .style(mue_macroquad::style! { flex: none; gap: {u(6.)}; align-items: baseline; })
                 .children((
                     text("mue").style(mue_macroquad::style! {
-                        font-size: {f(17.)};
-                        line-height: {u(22.)};
-                        font-weight: 800;
+                        font-size: {f(15.)};
+                        line-height: {u(20.)};
+                        font-weight: 600;
                         color: {foreground()};
                     }),
                     text("playground")
                         .style(mue_macroquad::style! {
                             font-size: {f(15.)};
-                            line-height: {u(22.)};
+                            line-height: {u(20.)};
                             color: {muted()};
                         })
                         .show_if(wide),
                 )),
-            pill(selected.map(|index| Rc::<str>::from(format!("{} / {}", index + 1, PAGES.len()))))
-                .show_if(wide),
             flexbox().style(mue_macroquad::style! { flex: 1; min-width: 0px; }),
-            pill(fps().map(|fps| Rc::<str>::from(format!("{fps} fps")))),
+            text(fps().map(|fps| Rc::<str>::from(format!("{fps} fps")))).style(mue_macroquad::style! {
+                flex: none;
+                font-size: {f(12.)}; line-height: {u(16.)};
+                font-family: monospace;
+                color: {muted()};
+                text-wrap: {false};
+            }),
             // Narrow windows navigate with the tabs and back.
             hstack()
                 .style(mue_macroquad::style! { flex: none; gap: {u(2.)}; align-items: center; })
@@ -492,12 +480,14 @@ fn top_bar(selected: Signal<usize>, compact: ReadSignal<bool>) -> Node {
                     tooltip(
                         "Previous page",
                         icon_button(text("‹"))
+                            .variant(ButtonVariant::Ghost)
                             .size(ControlSize::Sm)
                             .on_activate(move || selected.update(|index| *index = index.saturating_sub(1))),
                     ),
                     tooltip(
                         "Next page",
                         icon_button(text("›"))
+                            .variant(ButtonVariant::Ghost)
                             .size(ControlSize::Sm)
                             .on_activate(move || {
                                 selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1))
@@ -506,54 +496,18 @@ fn top_bar(selected: Signal<usize>, compact: ReadSignal<bool>) -> Node {
                 ))
                 .show_if(wide),
             tooltip(
-                "Zoom: design units and rem scale with it",
+                "Zoom",
                 button(zoom.map(|zoom| Rc::<str>::from(format!("{:.0}%", zoom * 100.))))
                     .variant(ButtonVariant::Ghost)
                     .size(ControlSize::Sm)
                     .on_activate(responsive::cycle_zoom),
             ),
-            button(color.scheme.map(|scheme| {
-                Rc::<str>::from(match scheme {
-                    ColorScheme::Dark => "Dark",
-                    ColorScheme::Light => "Light",
-                })
-            }))
-            .variant(ButtonVariant::Outline)
-            .size(ControlSize::Sm)
-            .on_activate(move || color.toggle()),
-        ))
-        .into_node()
-}
-
-/// The animated background behind everything: a gradient, two soft color
-/// glows, and Phira's moving blinds.
-fn backdrop() -> Node {
-    let glow_box = |which: &str| {
-        flexbox()
-            .absolute()
-            .width(Size::Vh(90.))
-            .height(Size::Vh(90.))
-            .background(glow_brush(which))
-    };
-    stack()
-        .style(mue_macroquad::style! {
-            position: absolute;
-            left: 0px; top: 0px; width: 100%; height: 100%;
-            overflow: hidden;
-            background: {backdrop_brush()};
-        })
-        .children((
-            glow_box("a").inset_left(Size::Vh(-30.)).inset_top(Size::Vh(-35.)),
-            glow_box("b").inset_right(Size::Vh(-30.)).inset_bottom(Size::Vh(-40.)),
-            stripes()
-                .angle(0.66)
-                .period(56.)
-                .duty(0.5)
-                .speed(10.)
-                .color(stripe_color())
-                .style(mue_macroquad::style! {
-                    position: absolute;
-                    left: 0px; top: 0px; width: 100%; height: 100%;
+            switch()
+                .checked(dark)
+                .label("Dark")
+                .size(ControlSize::Sm)
+                .on_change(move |on: &bool| {
+                    color.mode.set(if *on { ColorMode::Dark } else { ColorMode::Light })
                 }),
         ))
         .into_node()
@@ -593,13 +547,13 @@ fn build_ui() -> impl IntoNode + 'static {
     })
 }
 
-/// The navigation chrome around the pages: the animated backdrop, a
-/// frosted header (top bar, plus tabs on narrow windows) that the pages
-/// scroll under, and a frosted sidebar on wide windows.
+/// The navigation chrome around the pages: a translucent header (top bar,
+/// plus tabs on narrow windows) that the pages scroll under, and a sidebar
+/// on wide windows.
 fn app_shell() -> Node {
     let selected = SELECTED.with(|selected| *selected);
     // Tabs replace the sidebar when it would leave the page less than
-    // 560 design units (narrow phones, or a high zoom setting).
+    // 540 design units (narrow phones, or a high zoom setting).
     let viewport = mue_macroquad::app::viewport::use_viewport();
     let zoom = responsive::zoom();
     let compact = computed(move |_| {
@@ -615,10 +569,10 @@ fn app_shell() -> Node {
     });
     let page_view = pages(
         selected,
-        (0..PAGES.len()).map(|index| destination(index, selected, header_height)),
+        (0..PAGES.len()).map(|index| destination(index, header_height)),
     )
     .page_transition(PagesTransition::Slide)
-    .transition_curve(SPRING)
+    .transition_curve(Transition::ease_out(0.2))
     .into_node();
     // Back steps to the previous page before the app closes.
     mue_macroquad::input::back::use_back_handler(selected.map(|index| index > 0), move || {
@@ -632,7 +586,6 @@ fn app_shell() -> Node {
             background: {background()};
         })
         .children((
-            backdrop(),
             hstack()
                 .style(mue_macroquad::style! {
                     width: 100%;
@@ -660,8 +613,8 @@ fn app_shell() -> Node {
                     left: 0px; top: 0px;
                     width: 100%;
                     gap: 0px;
-                    background: {glass()};
-                    backdrop-filter: blur(20px);
+                    background: {header_brush()};
+                    backdrop-filter: blur(12px);
                     border-bottom-width: 1px;
                     border-color: {border()};
                 })
@@ -675,18 +628,6 @@ fn loading_screen() -> Node {
         .style(mue_macroquad::style! {
             width: 100%; height: 100%;
             background: {background()};
-            align-items: center;
-            justify-content: center;
         })
-        .children(
-            flexbox()
-                .style(mue_macroquad::style! {
-                    width: 48px;
-                    height: 48px;
-                    border-radius: 24px;
-                    background: {panel_brush()};
-                })
-                .into_node(),
-        )
         .into_node()
 }
