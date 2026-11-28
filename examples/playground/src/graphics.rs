@@ -1,5 +1,7 @@
 use super::{assets, controls::*, halftone};
+use mue_components::system::{ControlSize, Palette};
 use mue_components::*;
+use mue_core::prelude::*;
 use mue_macroquad::{
     BoxShadow, BoxShadows,
     math::{Rect, Vector, vec2},
@@ -8,6 +10,7 @@ use mue_macroquad::{
     paint::shader::{ColorStop, linear_gradient, radial_gradient, solid},
     style::{Styleable, StyleableExt},
 };
+use std::rc::Rc;
 
 const PAGE: &str = "Graphics";
 
@@ -365,9 +368,135 @@ fn effects_card() -> Node {
     )
 }
 
+fn stripes_card() -> Node {
+    // Phira's defaults.
+    const ANGLE: f32 = 38.;
+    const PERIOD: f32 = 48.;
+    const DUTY: f32 = 0.5;
+    const SPEED: f32 = 18.;
+    const INTENSITY: f32 = 0.07;
+    let angle = signal(ANGLE);
+    let period = signal(PERIOD);
+    let duty = signal(DUTY);
+    let speed = signal(SPEED);
+    let intensity = signal(INTENSITY);
+    let tint = signal(Color::WHITE);
+    let color = computed(move |_| {
+        let tint = tint.get();
+        Color::new(tint.r, tint.g, tint.b, intensity.get())
+    });
+    let reset = move || {
+        angle.set(ANGLE);
+        period.set(PERIOD);
+        duty.set(DUTY);
+        speed.set(SPEED);
+        intensity.set(INTENSITY);
+        tint.set(Color::WHITE);
+    };
+    let control = |label: &'static str, value: Signal<f32>, min: f32, max: f32, step: f32, unit: &'static str| {
+        field(
+            label,
+            hstack()
+                .style(mue_macroquad::style! { width: 100%; gap: {u(12.)}; align-items: center; })
+                .children((
+                    flexbox()
+                        .style(mue_macroquad::style! { flex: 1; min-width: 0px; })
+                        .children(slider().range(min, max).step(step).value(value).palette(Palette::Purple)),
+                    text(value.map(move |value| {
+                        Rc::<str>::from(if step < 1. { format!("{value:.2}{unit}") } else { format!("{value:.0}{unit}") })
+                    }))
+                    .style(mue_macroquad::style! {
+                        flex: none; width: {u(64.)};
+                        font-size: {f(13.)}; line-height: {u(18.)};
+                        font-family: monospace;
+                        text-align: right;
+                        color: {foreground()};
+                    }),
+                )),
+        )
+    };
+    let code = computed(move |_| {
+        Rc::<str>::from(format!(
+            "stripes()\n    .angle({:.2})  // {:.0}°\n    .period({:.0}.)\n    .duty({:.2})\n    .speed({:.0}.)\n    .intensity({:.2})",
+            angle.get().to_radians(),
+            angle.get(),
+            period.get(),
+            duty.get(),
+            speed.get(),
+            intensity.get(),
+        ))
+    });
+    card(
+        "Blinds (stripes)",
+        "The moving diagonal stripes of Phira's home screen, a built-in shader component; the app background uses it too. Every parameter is reactive, so the sliders change it live.",
+        (
+            stack()
+                .style(mue_macroquad::style! {
+                    position: relative;
+                    width: 100%;
+                    height: {u(220.)};
+                    border-radius: {u(14.)};
+                    overflow: hidden;
+                    align-items: center;
+                    justify-content: center;
+                })
+                .background(linear_gradient(
+                    vec2(0., 0.),
+                    vec2(1., 1.),
+                    [
+                        ColorStop::new(0., Color::from_rgba(42, 50, 60, 255)),
+                        ColorStop::new(0.55, Color::from_rgba(38, 33, 74, 255)),
+                        ColorStop::new(1., Color::from_rgba(76, 34, 78, 255)),
+                    ],
+                ))
+                .children((
+                    stripes()
+                        .angle(angle.map(|degrees| degrees.to_radians()))
+                        .period(period)
+                        .duty(duty)
+                        .speed(speed)
+                        .color(color)
+                        .style(mue_macroquad::style! {
+                            position: absolute;
+                            left: 0px; top: 0px; width: 100%; height: 100%;
+                        }),
+                    text("PHIRA").style(mue_macroquad::style! {
+                        font-size: {f(40.)}; line-height: {u(48.)};
+                        font-weight: 800;
+                        color: #ffffff;
+                    }),
+                )),
+            control("Angle", angle, 0., 180., 1., "°"),
+            control("Period", period, 8., 160., 1., " px"),
+            control("Duty", duty, 0.05, 0.95, 0.01, ""),
+            control("Speed", speed, -80., 80., 1., " px/s"),
+            control("Intensity", intensity, 0., 0.4, 0.01, ""),
+            field(
+                "Color",
+                picker(
+                    vec![
+                        ("White", Color::WHITE),
+                        ("Sky", Color::from_rgba(120, 190, 255, 255)),
+                        ("Pink", Color::from_rgba(255, 120, 200, 255)),
+                        ("Black", Color::BLACK),
+                    ],
+                    tint,
+                ),
+            ),
+            row((button("Phira's defaults").size(ControlSize::Sm).on_activate(reset),)),
+            code_block(code).style(mue_macroquad::style! {
+                width: 100%; min-width: 0px;
+                font-size: {f(13.)}; line-height: {u(19.)};
+                padding: {(u(12.),)};
+                border-radius: {u(8.)};
+            }),
+        ),
+    )
+}
+
 pub fn page() -> Node {
     page_body(
-        "Images, paint, shadows, vectors, layer effects, and custom shaders.",
+        "Images, paint, shadows, vectors, layer effects, custom shaders, and the built-in blinds effect.",
         (
             image_card(),
             paint_card(),
@@ -375,6 +504,7 @@ pub fn page() -> Node {
             shadow_card(),
             vector_card(),
             effects_card(),
+            stripes_card(),
             checklist(
                 PAGE,
                 &[
@@ -383,6 +513,7 @@ pub fn page() -> Node {
                     "Shadows are soft with no bright halo",
                     "Group opacity shows no darker overlap; blur and grayscale apply",
                     "The halftone shader animates smoothly",
+                    "The blinds follow every slider live and move smoothly; speed 0 stops them",
                 ],
             ),
         ),
