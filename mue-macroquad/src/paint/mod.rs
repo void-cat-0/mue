@@ -115,6 +115,12 @@ pub(crate) fn rect_visible(clip: Option<Rect>, rect: &Rect) -> bool {
     clip.is_none_or(|clip| clip.intersect(rect).is_some())
 }
 
+/// [`with_clip`] when `clip` is true; otherwise draw unclipped. A clip
+/// starts a new draw call, so skip it when nothing can overflow.
+pub(crate) fn with_clip_if<R>(clip: bool, rect: Rect, draw: impl FnOnce() -> R) -> R {
+    if clip { with_clip(rect, draw) } else { draw() }
+}
+
 /// Restrict drawing to an axis-aligned rectangle, preserving an enclosing clip.
 pub fn with_clip<R>(rect: Rect, draw: impl FnOnce() -> R) -> R {
     let transform = DRAW_TRANSFORM.get();

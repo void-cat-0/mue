@@ -1253,7 +1253,20 @@ impl BuildNode for TextEditBuilder {
                         let blink_on = (((miniquad::date::now() - field.state.borrow().blink_epoch)
                             / BLINK) as u64)
                             .is_multiple_of(2);
-                        crate::paint::with_clip(content, || {
+                        // Clip only text that can leave the box: a scrolled
+                        // field, or text (plus the caret) wider or taller than
+                        // the content. Short fields then batch with the frame.
+                        let overflows = scroll != Vector::ZERO || {
+                            let (width, height) = buffer.layout_runs().fold((0_f32, 0_f32), |(w, h), run| {
+                                (w.max(run.line_w), h.max(run.line_top + run.line_height))
+                            });
+                            let width = width.max(if empty { placeholder_buffer.borrow().layout_runs().map(|run| run.line_w).fold(0., f32::max) } else { 0. });
+                            origin.x < content.x - 0.5
+                                || origin.y < content.y - 0.5
+                                || origin.x + width + 2. > content.right() + 0.5
+                                || origin.y + height > content.bottom() + 0.5
+                        };
+                        crate::paint::with_clip_if(overflows, content, || {
                             paint.draw(|p| {
                                 // Selection.
                                 if focused && !value.selection.is_collapsed() {
