@@ -1161,6 +1161,28 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
                 border.get()
             };
             if !widths.is_zero() && !matches!(&border_brush, Brush::Solid(color) if color.a <= 0.) {
+                let uniform = widths.top == widths.right
+                    && widths.top == widths.bottom
+                    && widths.top == widths.left;
+                if radii.is_zero() && !uniform {
+                    // Square corners with some sides thinner (often zero, as
+                    // in a bottom-only border): draw each side on its own. A
+                    // ring would put antialiasing fringes on both contours
+                    // where they coincide, leaving a hairline on bare sides.
+                    let inner_h = (rect.h - widths.top - widths.bottom).max(0.);
+                    let sides = [
+                        Rect::new(rect.x, rect.y, rect.w, widths.top),
+                        Rect::new(rect.x, rect.y + rect.h - widths.bottom, rect.w, widths.bottom),
+                        Rect::new(rect.x, rect.y + widths.top, widths.left, inner_h),
+                        Rect::new(rect.x + rect.w - widths.right, rect.y + widths.top, widths.right, inner_h),
+                    ];
+                    for side in sides {
+                        if side.w > 0. && side.h > 0. {
+                            p.fill_rect(side, border_brush.shader(rect));
+                        }
+                    }
+                    return;
+                }
                 let inner = rect.deflate(widths);
                 p.fill_shaped_ring(
                     (rect, radii),
