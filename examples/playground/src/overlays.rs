@@ -27,13 +27,15 @@ fn dialog_card() -> Node {
             stack()
                 .style(mue_macroquad::style! {
                     width: {u(340.)};
-                    // Teleported content does not inherit the page's font size.
                     font-size: {f(15.)};
                     padding: {(u(20.),)};
                     gap: {u(12.)};
                     border-radius: {u(14.)};
+                    border-width: 1px;
+                    border-color: {border()};
                     background: {panel_brush()};
                 })
+                .box_shadow(BoxShadows::elevation(24.))
                 .children((
                     heading("Dialog")
                         .level(HeadingLevel::H4)
@@ -77,8 +79,9 @@ fn menu_item(label: &'static str, open: Signal<bool>) -> Node {
         .focusable(true)
         .cursor(Cursor::Pointer)
         .with_hovered(|view, hovered| {
+            let tint = hover_tint();
             view.style(mue_macroquad::style! {
-                background: {hovered.map(|on| Brush::Solid(if on { Color::from_rgba(128, 140, 170, 40) } else { Color::TRANSPARENT }))};
+                background: {computed(move |_| if hovered.get() { tint.get_clone() } else { Brush::Solid(Color::TRANSPARENT) })};
             })
         })
         .focus_ring(2., BLUE, -2.)
@@ -112,8 +115,8 @@ fn popover_card() -> Node {
     let tip_trigger = NodeHandle::new();
     let tip_visible = signal(false);
     card(
-        "Popover menu and tooltip",
-        "The menu is anchored to its button, flips when it would leave the window, and closes on a press outside it (ClickOutside) or on back.",
+        "Popover and tooltip from primitives",
+        "The library's menu and tooltip (see Components) are built from these parts: teleport into a layer, anchored to a node with a placement that flips to stay in the window, presence for the enter and exit animation, and ClickOutside and the back handler to close.",
         (
             placement_control,
             row((
@@ -256,7 +259,7 @@ fn back_card() -> Node {
 
 pub fn page() -> Node {
     page_body(
-        "Modal dialogs, anchored popovers, tooltips, keyboard focus, and the back handler stack.",
+        "The overlay machinery under the library's dialogs, menus, and tooltips: modal layers, anchored popovers, keyboard focus, and the back handler stack.",
         (
             dialog_card(),
             popover_card(),

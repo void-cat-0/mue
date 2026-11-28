@@ -79,7 +79,7 @@ fn tokens_card() -> Node {
     let selected = signal(true);
     card(
         "Theme tokens",
-        "Each tile picks between two token handles. Switching the scheme rewrites every token in place, so no component rebuilds.",
+        "Each tile picks between two token handles. Switching the scheme rewrites every token in place, so no component rebuilds; this app's backdrop, glass, and card colors are tokens too.",
         (
             row((button("Toggle selected").on_activate(move || selected.toggle()),)),
             row((

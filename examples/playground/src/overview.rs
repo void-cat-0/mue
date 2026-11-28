@@ -172,8 +172,8 @@ pub fn page() -> Node {
                     .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: {u(4.)}; })
                     .children((
                         para("1. Open Self tests and confirm every automated check passes."),
-                        para("2. Visit each page and mark its manual checks."),
-                        para("3. Text input and Pointer & gestures cover the platform bridges (IME, soft keyboard, multi-touch)."),
+                        para("2. Open Components and try every control in light and dark mode (the button at the top right) and at a few zoom levels."),
+                        para("3. Visit each page and mark its manual checks; Text input and Pointer & gestures cover the platform bridges (IME, soft keyboard, multi-touch)."),
                         para("4. Come back here and read the totals."),
                     )),
             ),
