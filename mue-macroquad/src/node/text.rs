@@ -875,7 +875,8 @@ pub fn use_spans(style: &mut Style, content: Prop<Vec<Span>>) {
                 let attrs = Attrs::new()
                     .family(family.as_family())
                     .weight(font_weight.get())
-                    .letter_spacing(letter_spacing.get())
+                    // cosmic-text takes letter spacing in em; the style is in pixels.
+                    .letter_spacing(letter_spacing.get() / metrics.get().font_size.max(1.))
                     .style(if font_italic.get() {
                         cosmic_text::Style::Italic
                     } else {

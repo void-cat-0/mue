@@ -967,7 +967,8 @@ impl BuildNode for TextEditBuilder {
                         let attrs = Attrs::new()
                             .family(family.as_family())
                             .weight(weight)
-                            .letter_spacing(spacing)
+                            // cosmic-text takes letter spacing in em.
+                            .letter_spacing(spacing / metrics.font_size.max(1.))
                             .style(if italic {
                                 cosmic_text::Style::Italic
                             } else {
