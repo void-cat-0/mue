@@ -9,6 +9,7 @@ mod spinner;
 mod switch;
 mod tabs;
 mod tag;
+mod tooltip;
 
 pub use badge::*;
 pub use button::*;
@@ -21,3 +22,4 @@ pub use spinner::*;
 pub use switch::*;
 pub use tabs::*;
 pub use tag::*;
+pub use tooltip::*;
