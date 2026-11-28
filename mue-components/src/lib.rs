@@ -153,6 +153,7 @@ pub mod controls;
 pub mod directive;
 pub mod graphics;
 pub mod layout;
+pub mod motion;
 pub mod overlay;
 pub mod state;
 pub mod system;
@@ -163,6 +164,7 @@ pub use controls::*;
 pub use directive::*;
 pub use graphics::*;
 pub use layout::*;
+pub use motion::*;
 pub use mue_macroquad::node::{
     BuildNode, Callback, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
     KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ScopedSlot, ShapeBuilder, Slot, Span,
@@ -175,7 +177,6 @@ pub use mue_macroquad::{
     input::cursor::Cursor,
     input::feedback::{HapticStyle, SoundCue},
     input::focus::FocusScope,
-    motion::presence::{PresenceAnimation, presence, use_presence},
     node::{NodeHandle, shader_box},
     overlay::anchor::{Placement, anchored, use_anchor},
     overlay::layer::{Layer, layer_host, teleport},

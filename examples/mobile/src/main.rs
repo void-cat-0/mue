@@ -17,8 +17,9 @@ use mue_components::prelude::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     App, app::runtime::set_timeout, input::back::use_back_handler,
-    motion::presence::PresenceAnimation, motion::transition_group::transition_group,
-};
+    };
+use mue_components::motion::transition_group::transition_group;
+use mue_components::motion::presence::PresenceAnimation;
 
 #[derive(Clone, PartialEq)]
 struct Message {

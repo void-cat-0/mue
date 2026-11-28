@@ -2,12 +2,12 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    motion::presence::{PresenceAnimation, presence},
     motion::transition::Transition,
-    motion::transition_group::transition_group,
     paint::shader::Brush,
     style::{Size, Styleable, Transform, TransformOp},
 };
+use mue_components::motion::transition_group::transition_group;
+use mue_components::motion::presence::{PresenceAnimation, presence};
 use std::rc::Rc;
 
 const PAGE: &str = "Motion";

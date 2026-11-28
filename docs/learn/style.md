@@ -227,7 +227,7 @@ a break" banner. `presence` mounts its content when a condition becomes true,
 animates it in, and animates it out before removing it:
 
 ```rust
-use mue::{prelude::*, renderer::motion::presence::PresenceAnimation};
+use mue::{prelude::*, components::motion::presence::PresenceAnimation};
 
 #[component]
 fn break_banner(#[model] finished: bool) -> impl Component {

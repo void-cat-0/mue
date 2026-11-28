@@ -10,7 +10,6 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     App, BoxShadows,
     math::{Rect, Vector, vec2},
-    motion::presence::{PresenceAnimation, presence},
     node::{NodeHandle, shader_box},
     overlay::anchor::{Placement, anchored},
     overlay::layer::{Layer, teleport},
@@ -18,6 +17,7 @@ use mue_macroquad::{
     paint::offscreen::{Filter, offscreen},
     paint::shader::linear_gradient,
 };
+use mue_components::motion::presence::{PresenceAnimation, presence};
 
 const ICON: &str = r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round">

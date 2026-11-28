@@ -1,6 +1,5 @@
-//! Animation: property transitions, presence (enter and exit), and animated
-//! keyed lists.
+//! Animation: property transitions and their curves. Enter and exit
+//! animations (`presence`) and animated keyed lists (`transition_group`)
+//! are components in `mue-components`.
 
-pub mod presence;
 pub mod transition;
-pub mod transition_group;

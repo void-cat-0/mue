@@ -43,7 +43,7 @@ pub mod guide;
 
 /// Common imports for application UI and custom components.
 pub mod prelude {
-    pub use crate::components::{button, center, heading, hstack, stack, vstack};
+    pub use crate::components::{button, center, heading, hstack, presence, stack, vstack};
     pub use crate::core::{
         effect::computed,
         prop::Prop,
@@ -53,7 +53,6 @@ pub mod prelude {
     pub use crate::renderer::{
         input::cursor::Cursor,
         input::focus::FocusScope,
-        motion::presence::presence,
         node::{
             Component, IntoNode, Node, NodeContext, NodeHandle, NodeRef, flexbox, path, svg, text,
         },

@@ -135,7 +135,7 @@ slide from their old positions to their new ones (FLIP), timed by
 
 ```rust
 use mue::prelude::*;
-use mue::renderer::{motion::presence::PresenceAnimation, motion::transition_group::transition_group};
+use mue::components::{motion::presence::PresenceAnimation, motion::transition_group::transition_group};
 use std::rc::Rc;
 
 let owner = OwnedScope::new();

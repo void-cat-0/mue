@@ -10,10 +10,10 @@
 //! use mue_core::prelude::*;
 //! use mue_macroquad::{
 //!     node::flexbox,
-//!     motion::presence::{PresenceAnimation, presence},
 //!     style::Styleable,
 //!     motion::transition::Transition,
 //! };
+//! use mue_components::motion::presence::{PresenceAnimation, presence};
 //!
 //! # let owner = mue_core::scope::OwnedScope::new();
 //! # owner.run(|| {
@@ -34,7 +34,7 @@ use mue_core::{
     signal::{Access, ReadSignal, Signal, signal},
 };
 
-use crate::{
+use mue_macroquad::{
     motion::transition::{Transition, animated},
     node::{BuildNode, IntoNode, Node, NodeContext, NodeRef, flexbox::use_container, set_children},
     style::{Style, Styleable, Transform, TransformOp, values::Display},
@@ -213,8 +213,8 @@ where
                 let mut ops = Vec::new();
                 if animation.offset != (0., 0.) {
                     ops.push(TransformOp::Translate(
-                        crate::style::Size::Px(animation.offset.0 * hidden),
-                        crate::style::Size::Px(animation.offset.1 * hidden),
+                        mue_macroquad::style::Size::Px(animation.offset.0 * hidden),
+                        mue_macroquad::style::Size::Px(animation.offset.1 * hidden),
                     ));
                 }
                 if animation.scale != 1. {

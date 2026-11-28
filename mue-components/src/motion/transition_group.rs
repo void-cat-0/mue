@@ -1,7 +1,7 @@
 //! Animated keyed lists (Vue's `<TransitionGroup>`).
 //!
 //! [`transition_group`] maps a reactive list to nodes like
-//! [`map_keyed`](crate::node::map_keyed), and animates the changes:
+//! [`map_keyed`](mue_macroquad::node::map_keyed), and animates the changes:
 //!
 //! - **enter**: a new item fades/scales/slides in with its
 //!   [`PresenceAnimation`];
@@ -19,10 +19,10 @@
 //! use mue_core::prelude::*;
 //! use mue_macroquad::{
 //!     node::{IntoNode, text},
-//!     motion::presence::PresenceAnimation,
 //!     style::StyleableExt,
-//!     motion::transition_group::transition_group,
 //! };
+//! use mue_components::motion::transition_group::transition_group;
+//! use mue_components::motion::presence::PresenceAnimation;
 //! use std::rc::Rc;
 //!
 //! # let owner = mue_core::scope::OwnedScope::new();
@@ -49,9 +49,9 @@ use mue_core::{
     signal::{Access, Signal, signal},
 };
 
-use crate::{
+use crate::motion::presence::PresenceAnimation;
+use mue_macroquad::{
     math::{Rect, Vector},
-    motion::presence::PresenceAnimation,
     motion::transition::Transition,
     node::{
         BuildNode, IntoChildren, IntoNode, Node, NodeContext, NodeHandle, NodeRef, flexbox,
@@ -264,7 +264,7 @@ where
             }
             set_children(computed(move |_| refs.get_clone()).owned());
             use_container(style);
-            group_rect.replace(Some(crate::node::use_rect()));
+            group_rect.replace(Some(mue_macroquad::node::use_rect()));
 
             // Advance enter, leave, and move animations.
             style.on_update.append({

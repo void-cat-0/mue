@@ -5,7 +5,6 @@ use mue_macroquad::{
     BoxShadows,
     input::back::{can_go_back, dispatch_back, use_back_handler},
     input::cursor::Cursor,
-    motion::presence::{PresenceAnimation, presence},
     node::NodeHandle,
     overlay::anchor::{Placement, anchored},
     overlay::layer::{Layer, teleport},
@@ -13,6 +12,7 @@ use mue_macroquad::{
     paint::shader::Brush,
     style::{Styleable, StyleableExt},
 };
+use mue_components::motion::presence::{PresenceAnimation, presence};
 use std::rc::Rc;
 
 const PAGE: &str = "Overlays & focus";

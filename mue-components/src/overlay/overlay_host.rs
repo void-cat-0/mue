@@ -3,10 +3,11 @@
 use std::{cell::RefCell, rc::Rc};
 
 use mue_core::prelude::*;
+
+use crate::motion::presence::{PresenceAnimation, presence, use_presence};
 use mue_macroquad::{
     input::focus::FocusScope,
     input::keyboard::KeyCode,
-    motion::presence::{PresenceAnimation, presence, use_presence},
     motion::transition::Transition,
     node::{BuildNode, IntoNode, Node, NodeContext, flexbox},
     overlay::layer::{Layer, teleport},

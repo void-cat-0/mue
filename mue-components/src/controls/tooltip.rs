@@ -22,16 +22,14 @@
 //! # });
 //! ```
 
+use crate::motion::presence::{PresenceAnimation, presence};
 use std::{cell::RefCell, rc::Rc};
 
 use mue_core::prelude::*;
 use mue_macroquad::{
     app::runtime::{TimeoutHandle, set_timeout},
     input::pointer::{PointerAction, PointerType},
-    motion::{
-        presence::{PresenceAnimation, presence},
-        transition::Transition,
-    },
+    motion::transition::Transition,
     node::{BuildNode, IntoNode, Node, NodeContext, NodeHandle, flexbox, text},
     overlay::{
         anchor::{Placement, anchored, use_anchor},
