@@ -328,7 +328,7 @@ fn slider_card() -> Node {
             flexbox()
                 .style(mue_macroquad::style! {
                     width: 100%; height: {u(28.)};
-                    border-radius: {u(8.)};
+                    border-radius: {mue_components::system::radius::MD};
                     opacity: {opacity};
                 })
                 .background(Palette::Blue.shade(500)),
@@ -642,13 +642,13 @@ fn dialog_card() -> Node {
                 max-width: 92vw;
                 padding: {(u(22.),)};
                 gap: {u(14.)};
-                border-radius: {u(18.)};
+                border-radius: {mue_components::system::radius::LG};
                 border-width: 1px;
                 border-color: {border()};
                 background: {panel_brush()};
                 font-size: {f(15.)};
             })
-            .box_shadow(mue_macroquad::BoxShadows::elevation(24.))
+            .box_shadow(mue_macroquad::BoxShadows::elevation(8.))
             .children((
                 hstack()
                     .style(mue_macroquad::style! { width: 100%; gap: {u(10.)}; align-items: center; })

@@ -84,7 +84,7 @@ fn layout_card() -> Node {
                     width: 100%; min-width: 0px;
                     height: {u(190.)};
                     padding: {(u(12.),)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                     color: {foreground()};
                     text-wrap-mode: {wrap_mode};
@@ -113,7 +113,7 @@ fn scripts_card() -> Node {
                 width: 100%; min-width: 0px;
                 gap: {u(12.)};
                 padding: {(u(10.), u(6.))};
-                border-radius: {u(8.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {raised()};
                 align-items: center;
             })

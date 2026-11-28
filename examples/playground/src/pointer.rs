@@ -167,11 +167,21 @@ fn touch_card() -> Node {
                 position: relative;
                 width: 100%;
                 height: {u(260.)};
-                border-radius: {u(10.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {raised()};
                 overflow: hidden;
+                align-items: center;
+                justify-content: center;
             })
-            .children(dots),
+            .children((
+                text("Touch with several fingers")
+                    .style(mue_macroquad::style! {
+                        font-size: {f(13.)}; line-height: {u(19.)};
+                        color: {muted()};
+                    })
+                    .show_if(touches.map(|list| list.is_empty())),
+                dots,
+            )),
             mono(readout),
             row((button("Reset peak")
                 .on_activate(move || peak.set(touches.get_clone_untracked().len())),)),
@@ -191,7 +201,7 @@ fn press_card() -> Node {
                 width: 100%; min-width: 0px;
                 padding: {(u(16.),)};
                 gap: {u(6.)};
-                border-radius: {u(10.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {raised()};
             })
             .use_pressed(pressed)
@@ -240,7 +250,7 @@ fn gestures_card() -> Node {
                 flex: 1;
                 min-width: {u(150.)};
                 height: {u(120.)};
-                border-radius: {u(10.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {raised()};
             })
             .children(text(label).style(mue_macroquad::style! {
@@ -298,7 +308,7 @@ fn map_card() -> Node {
                 .style(mue_macroquad::style! {
                     width: 100%;
                     height: {u(300.)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                 })
                 .options(ScrollOptions {

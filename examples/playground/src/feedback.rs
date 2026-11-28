@@ -5,7 +5,6 @@ use mue_core::prelude::*;
 use mue_macroquad::{
     input::feedback::{haptic, set_haptic_handler, set_sound_handler, sound},
     input::keyboard::KeyCode,
-    paint::color::Color,
     style::{Styleable, StyleableExt},
 };
 use std::rc::Rc;
@@ -123,7 +122,7 @@ fn directives_card() -> Node {
                         flexbox()
                             .style(mue_macroquad::style! {
                                 padding: {(u(12.), u(8.))};
-                                border-radius: {u(8.)};
+                                border-radius: {mue_components::system::radius::MD};
                                 background: {raised()};
                             })
                             .directive(Haptic::on(FeedbackTrigger::LongPress, HapticStyle::Heavy))
@@ -139,14 +138,14 @@ fn directives_card() -> Node {
                     "Hotkey",
                     flexbox()
                         .focusable(true)
-                        .focus_ring(2., BLUE, 2.)
+                        .focus_ring(2., mue_components::system::Palette::Blue.shade(400), 2.)
                         .directive(Hotkey::command(KeyCode::S, move || {
                             saves.update(|n| *n += 1);
                             log_event(format!("hotkey {SAVE_KEYS}"));
                         }))
                         .style(mue_macroquad::style! {
                             padding: {(u(12.), u(8.))};
-                            border-radius: {u(8.)};
+                            border-radius: {mue_components::system::radius::MD};
                             background: {raised()};
                         })
                         .children(
@@ -165,9 +164,9 @@ fn directives_card() -> Node {
                         .directive(ClickOutside::new(move || outside.update(|n| *n += 1)))
                         .style(mue_macroquad::style! {
                             padding: {(u(12.), u(8.))};
-                            border-radius: {u(8.)};
-                            border-width: 2px;
-                            border-color: {Color::from_rgba(127, 209, 168, 255)};
+                            border-radius: {mue_components::system::radius::MD};
+                            border-width: 1px;
+                            border-color: {border()};
                         })
                         .children(
                             text(outside.map(|n| {

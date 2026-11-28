@@ -16,8 +16,10 @@ fn stripe(n: usize, wide: bool) -> Node {
         .style(mue_macroquad::style! {
             flex: none;
             height: {u(48.)};
-            border-radius: {u(8.)};
-            background: {if n.is_multiple_of(2) { BLUE } else { CORAL }};
+            border-radius: {mue_components::system::radius::MD};
+            border-width: 1px;
+            border-color: {border()};
+            background: {if n.is_multiple_of(2) { raised() } else { panel_brush() }};
         })
         .style(if wide {
             mue_macroquad::style! { width: {u(900.)}; }
@@ -26,7 +28,7 @@ fn stripe(n: usize, wide: bool) -> Node {
         })
         .children(text(format!("Row {}", n + 1)).style(mue_macroquad::style! {
             font-size: {f(15.)}; line-height: {u(22.)};
-            color: #131720;
+            color: {foreground()};
         }))
         .into_node()
 }
@@ -83,7 +85,7 @@ fn options_card() -> Node {
             .style(mue_macroquad::style! {
                 width: 100%;
                 height: {u(240.)};
-                border-radius: {u(10.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {raised()};
             })
             .content_style(mue_macroquad::style! { gap: {u(8.)}; padding: {(u(12.),)}; })
@@ -131,12 +133,12 @@ fn handle_card() -> Node {
                     .style(mue_macroquad::style! {
                         width: 100%; flex: none;
                         height: {u(48.)};
-                        border-radius: {u(8.)};
-                        background: #7fd1a8;
+                        border-radius: {mue_components::system::radius::MD};
+                        background: {nav_selected().0};
                     })
                     .children(text("Row 30, the target").style(mue_macroquad::style! {
                         font-size: {f(15.)}; line-height: {u(22.)};
-                        color: #131720;
+                        color: {nav_selected().1};
                     }))
                     .into_node()
             } else {
@@ -159,7 +161,7 @@ fn handle_card() -> Node {
                 .style(mue_macroquad::style! {
                     width: 100%;
                     height: {u(220.)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                 })
                 .content_style(mue_macroquad::style! { gap: {u(8.)}; padding: {(u(12.),)}; })
@@ -265,7 +267,7 @@ fn feed_card() -> Node {
                 .style(mue_macroquad::style! {
                     width: 100%;
                     height: {u(320.)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                 })
                 .children(map_keyed(mails, |mail| mail.id, row_view)),
@@ -280,13 +282,15 @@ fn nested_card() -> Node {
                 flex: none;
                 width: {u(150.)};
                 height: {u(100.)};
-                border-radius: {u(10.)};
-                background: {if n.is_multiple_of(2) { BLUE } else { CORAL }};
+                border-radius: {mue_components::system::radius::MD};
+                border-width: 1px;
+                border-color: {border()};
+                background: {raised()};
             })
             .children(
                 text(format!("Card {}", n + 1)).style(mue_macroquad::style! {
                     font-size: {f(15.)}; line-height: {u(22.)};
-                    color: #131720;
+                    color: {foreground()};
                 }),
             )
             .into_node()

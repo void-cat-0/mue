@@ -427,7 +427,7 @@ fn stripes_card() -> Node {
                     position: relative;
                     width: 100%;
                     height: {u(220.)};
-                    border-radius: {u(14.)};
+                    border-radius: {mue_components::system::radius::LG};
                     overflow: hidden;
                     align-items: center;
                     justify-content: center;
@@ -480,7 +480,7 @@ fn stripes_card() -> Node {
                 width: 100%; min-width: 0px;
                 font-size: {f(13.)}; line-height: {u(19.)};
                 padding: {(u(12.),)};
-                border-radius: {u(8.)};
+                border-radius: {mue_components::system::radius::MD};
             }),
         ),
     )

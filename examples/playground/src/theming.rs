@@ -22,7 +22,7 @@ fn tile(caption: Rc<str>, #[default] accent: bool, #[default] selected: bool) ->
             flex: 1;
             min-width: {u(120.)};
             height: {u(64.)};
-            border-radius: {u(10.)};
+            border-radius: {mue_components::system::radius::MD};
             background: {accent.pick(token!("tile.accent"), token!("tile.panel"))};
             transform: {scale.map(|scale| Transform(vec![TransformOp::Scale(scale, scale)]))};
             transition: 220ms spring;

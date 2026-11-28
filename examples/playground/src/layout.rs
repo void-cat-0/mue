@@ -16,7 +16,7 @@ fn tile(n: usize) -> Node {
             flex: none;
             width: {u(64.)};
             height: {u(44.)};
-            border-radius: {u(8.)};
+            border-radius: {mue_components::system::radius::MD};
             background: {if n.is_multiple_of(2) { BLUE } else { CORAL }};
         })
         .children(text(format!("{}", n + 1)).style(mue_macroquad::style! {
@@ -85,7 +85,7 @@ fn flex_card() -> Node {
                     width: 100%; min-width: 0px;
                     height: {u(220.)};
                     padding: {(u(12.),)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                     flex-direction: {direction};
                     flex-wrap: {wrapping};
@@ -121,7 +121,7 @@ fn grid_card() -> Node {
             .style(mue_macroquad::style! {
                 min-height: {u(44.)};
                 padding: {(u(6.),)};
-                border-radius: {u(8.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {fill};
             })
             .children(text(label).style(mue_macroquad::style! {
@@ -191,7 +191,7 @@ fn ratio_card() -> Node {
                         .ratio(ratio)
                         .style(mue_macroquad::style! {
                             width: 70%;
-                            border-radius: {u(10.)};
+                            border-radius: {mue_components::system::radius::MD};
                             background: {raised()};
                         })
                         .children((

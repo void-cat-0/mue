@@ -2,7 +2,6 @@ use super::controls::*;
 use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
-    BoxShadow,
     app::runtime::set_timeout,
     motion::transition::{Transition, animated},
     paint::shader::Brush,
@@ -88,7 +87,7 @@ fn presence_card() -> Node {
                     width: 100%;
                     height: {u(72.)};
                     padding: {(u(12.),)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {BLUE};
                 })
                 .children(
@@ -189,7 +188,7 @@ fn list_card() -> Node {
                     width: 100%;
                     padding: {(u(12.), u(8.))};
                     gap: {u(10.)};
-                    border-radius: {u(8.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                     align-items: center;
                 })
@@ -263,8 +262,7 @@ fn springs_card() -> Node {
                                 .transform_list(progress.map(|p| {
                                     // Keep the ball inside the track: shift it back by its own width at the end.
                                     Transform(vec![TransformOp::Translate(Size::Percent(-100. * p), Size::Px(0.))])
-                                }))
-                                .box_shadow(BoxShadow::new(0., 0., 12., mue_macroquad::paint::color::Color::new(color.r, color.g, color.b, 0.6))),
+                                })),
                         ),
                 ))
                 .into_node()
@@ -315,7 +313,7 @@ fn stagger_card() -> Node {
             flexbox()
                 .style(mue_macroquad::style! {
                     height: {u(36.)};
-                    border-radius: {u(9.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {color};
                 })
                 .opacity(enter.clone().map(|enter| enter.clamp(0., 1.)))
@@ -413,7 +411,7 @@ fn clock_card() -> Node {
                         position: relative;
                         flex: none;
                         width: {u(150.)}; height: {u(150.)};
-                        border-radius: {u(16.)};
+                        border-radius: {mue_components::system::radius::LG};
                         background: {raised()};
                     })
                     .children(dots),
@@ -425,7 +423,7 @@ fn clock_card() -> Node {
                         padding: {(u(14.),)};
                         gap: {u(5.)};
                         align-items: flex-end;
-                        border-radius: {u(16.)};
+                        border-radius: {mue_components::system::radius::LG};
                         background: {raised()};
                     })
                     .children(bars),

@@ -330,7 +330,7 @@ fn inspector_card() -> Node {
                 .style(mue_macroquad::style! {
                     width: 100%;
                     padding: {(u(12.), u(10.))};
-                    border-radius: {u(8.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                     font-size: {f(18.)}; line-height: {u(26.)};
                     color: {foreground()};

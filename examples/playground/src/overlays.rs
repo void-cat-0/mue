@@ -30,12 +30,12 @@ fn dialog_card() -> Node {
                     font-size: {f(15.)};
                     padding: {(u(20.),)};
                     gap: {u(12.)};
-                    border-radius: {u(14.)};
+                    border-radius: {mue_components::system::radius::LG};
                     border-width: 1px;
                     border-color: {border()};
                     background: {panel_brush()};
                 })
-                .box_shadow(BoxShadows::elevation(24.))
+                .box_shadow(BoxShadows::elevation(8.))
                 .children((
                     heading("Dialog")
                         .level(HeadingLevel::H4)
@@ -82,7 +82,7 @@ fn menu_item(label: &'static str, open: Signal<bool>) -> Node {
                 background: {computed(move |_| if hovered.get() { tint.get_clone() } else { Brush::Solid(Color::TRANSPARENT) })};
             })
         })
-        .focus_ring(2., BLUE, -2.)
+        .focus_ring(2., mue_components::system::Palette::Blue.shade(400), -2.)
         .style(mue_macroquad::style! {
             padding: {(u(12.), u(8.))};
             border-radius: {u(6.)};
@@ -124,7 +124,7 @@ fn popover_card() -> Node {
                     .node_handle(tip_trigger)
                     .style(mue_macroquad::style! {
                         padding: {(u(12.), u(8.))};
-                        border-radius: {u(8.)};
+                        border-radius: {mue_components::system::radius::MD};
                         background: {raised()};
                     })
                     .with_hovered(move |view, hovered| {
@@ -146,12 +146,12 @@ fn popover_card() -> Node {
                             padding: {(u(6.),)};
                             min-width: {u(180.)};
                             flex-direction: column;
-                            border-radius: {u(10.)};
+                            border-radius: {mue_components::system::radius::MD};
                             border-width: 1px;
                             border-color: {border()};
                             background: {panel_brush()};
                         })
-                        .box_shadow(BoxShadows::elevation(10.))
+                        .box_shadow(BoxShadows::elevation(4.))
                         .children((
                             menu_item("Rename", open),
                             menu_item("Duplicate", open),
@@ -240,7 +240,7 @@ fn back_card() -> Node {
                 .style(mue_macroquad::style! {
                     width: 100%;
                     height: {u(80.)};
-                    border-radius: {u(10.)};
+                    border-radius: {mue_components::system::radius::MD};
                     background: {raised()};
                     justify-content: center;
                     padding-left: {u(16.)};

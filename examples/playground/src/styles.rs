@@ -33,7 +33,7 @@ fn lengths_card() -> Node {
                 flex-grow: 1;
                 min-width: {u(140.)};
                 min-height: {u(80.)};
-                border-radius: {u(10.)};
+                border-radius: {mue_components::system::radius::MD};
                 border-width: 1px;
                 border-color: {border()};
                 background: {raised()};
@@ -159,7 +159,7 @@ fn text_card() -> Node {
             .style(mue_macroquad::style! {
                 width: 100%;
                 padding: {(u(20.), u(16.))};
-                border-radius: {u(10.)};
+                border-radius: {mue_components::system::radius::MD};
                 background: {raised()};
                 color: {CORAL};
                 font-size: {f(15.)};
@@ -185,7 +185,7 @@ fn transform_card() -> Node {
                         .style(mue_macroquad::style! {
                             width: 60%;
                             height: {u(140.)};
-                            border-radius: {u(16.)};
+                            border-radius: {mue_components::system::radius::LG};
                             transform: {computed(move |_| {
                                 let t = if spin.get() { time.get() } else { 0. };
                                 Transform(vec![
@@ -198,7 +198,7 @@ fn transform_card() -> Node {
                             })};
                         })
                         .background(accent_gradient())
-                        .box_shadow(mue_macroquad::BoxShadow::new(0., 12., 32., Color::new(0.3, 0.2, 0.9, 0.45)))
+                        .box_shadow(mue_macroquad::BoxShadow::new(0., 12., 32., Color::new(0., 0., 0., 0.3)))
                         .children(text("perspective(900px) rotateX rotateY").style(
                             mue_macroquad::style! {
                                 font-size: {f(15.)}; line-height: {u(22.)};
