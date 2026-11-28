@@ -12,6 +12,22 @@ pub(crate) const DEFAULT_PAGE_SIZE: i32 = 1024;
 const MAX_PAGES: usize = 8;
 const PADDING: i32 = 1;
 
+/// Side of the white block reserved at the origin of every page. Untextured
+/// shapes sample it (their UVs are 0, 0), so shapes and short text share one
+/// texture and batch into the same draw calls.
+const WHITE_BLOCK: i32 = 4;
+
+thread_local! {
+    /// Page 0's texture once its white block is uploaded.
+    static SOLID: std::cell::RefCell<Option<SharedTexture>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The texture untextured shapes should draw with: the first atlas page,
+/// whose texels at UV (0, 0) are white. `None` before any text was drawn.
+pub(crate) fn solid_texture() -> Option<SharedTexture> {
+    SOLID.with(|solid| solid.borrow().clone())
+}
+
 /// Bound on remembered blank glyphs (one entry per font, size, and subpixel bin).
 const MAX_EMPTY_GLYPHS: usize = 4096;
 
@@ -90,11 +106,13 @@ struct Page {
     last_used: u64,
     /// Payloads on this page when the pass's eviction queue was built.
     candidates: Vec<Key>,
+    /// The white block at the origin is reserved (and staged once assets exist).
+    white: bool,
 }
 
 impl Page {
     fn new(page_size: i32) -> Self {
-        Self {
+        let mut page = Self {
             side: page_size as usize,
             allocator: AtlasAllocator::new(size2(page_size, page_size)),
             texture: None,
@@ -102,12 +120,33 @@ impl Page {
             pending: Vec::new(),
             last_used: 0,
             candidates: Vec::new(),
-        }
+            white: false,
+        };
+        page.reserve_white();
+        page
+    }
+
+    /// Keep glyphs out of the white block at the origin.
+    fn reserve_white(&mut self) {
+        self.white = self
+            .allocator
+            .allocate(size2(WHITE_BLOCK, WHITE_BLOCK))
+            .is_some_and(|allocation| {
+                allocation.rectangle.min.x == 0 && allocation.rectangle.min.y == 0
+            });
     }
 
     fn ensure_assets(&mut self) {
         if self.staging.is_none() {
-            self.staging = Some(vec![0; self.side * self.side * 4]);
+            let mut staging = vec![0; self.side * self.side * 4];
+            if self.white {
+                for y in 0..WHITE_BLOCK as usize {
+                    let row = y * self.side * 4;
+                    staging[row..row + WHITE_BLOCK as usize * 4].fill(255);
+                }
+                self.mark_dirty(0, 0, WHITE_BLOCK, WHITE_BLOCK);
+            }
+            self.staging = Some(staging);
         }
         if self.texture.is_none() {
             let texture: SharedTexture = Texture2D::from_image(&Image {
@@ -260,9 +299,14 @@ impl Atlas {
     /// geometry is submitted; a later call is a no-op when nothing is staged.
     pub(super) fn end_pass(&mut self) {
         let (pages, stats) = (&mut self.pages, &mut self.stats);
-        for page in pages {
+        for page in pages.iter_mut() {
             page.upload(stats);
         }
+        let solid = pages
+            .first()
+            .filter(|page| page.white && page.pending.is_empty() && page.staging.is_some())
+            .and_then(|page| page.texture.clone());
+        SOLID.with(|current| *current.borrow_mut() = solid);
     }
 
     pub(super) fn cache_glyph(
@@ -436,6 +480,8 @@ impl Atlas {
             }
             let data = &mut self.pages[page];
             data.allocator.clear();
+            // The block's texels are still white in the mirror and texture.
+            data.reserve_white();
             // No current-pass allocations/hits means no current staged writes.
             data.pending.clear();
             let allocation = data.allocator.allocate(requested)?;

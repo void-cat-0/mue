@@ -413,7 +413,15 @@ impl Default for Shape {
 impl Shape {
     fn draw(&self) {
         let gl = unsafe { get_internal_gl() }.quad_gl;
-        gl.texture(self.texture.as_deref());
+        match self.texture.as_deref() {
+            Some(texture) => gl.texture(Some(texture)),
+            // Untextured geometry has UV 0, 0, which is white on the glyph
+            // atlas too: drawing with it keeps shapes and text in one batch.
+            None => match crate::node::atlas::solid_texture() {
+                Some(atlas) => gl.texture(Some(&*atlas)),
+                None => gl.texture(None),
+            },
+        }
         gl.draw_mode(DrawMode::Triangles);
         gl.geometry(&self.buffers.vertices, &self.buffers.indices);
     }
