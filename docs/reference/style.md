@@ -16,7 +16,7 @@
 
 ## Box sizes and edges
 
-A length literal accepts `px`, `vw`, and `vh`, or a unitless `0`. The table lists the additional forms. A braced value, for example `width: {panel_width}`, passes a Rust value or reactive property to the setter. Use `Size::Percent(50.)` for `50%`. Viewport units resolve against the logical window dimensions, while percentages resolve according to the property and the relevant box.
+A length literal accepts `px`, `vw`, `vh`, and `rem`, or a unitless `0`. The table lists the additional forms. A braced value, for example `width: {panel_width}`, passes a Rust value or reactive property to the setter. Use `Size::Percent(50.)` for `50%`. Viewport units resolve against the logical window dimensions, `rem` against the root font size (the App root's computed `font-size`, 16 px by default, readable as `root_font_size()`), and percentages according to the property and the relevant box. Sizing controls in `rem` makes them follow the application's text scale.
 
 | Declaration | Additional literal forms | Meaning |
 | --- | --- | --- |
@@ -116,7 +116,7 @@ let banner = flexbox().style(style! { grid-column: 1 / -1; });
 | --- | --- |
 | `background`, `background-color`, `color` | A color literal or a Rust value convertible to `Prop<Brush>` |
 | `corner-shape` | `round` (default), `squircle`, `bevel`, `scoop`, `notch`, `square`, `superellipse(K)`, or `{CornerShape}` |
-| `border-radius` | One to four nonnegative lengths in `px`, `vw`, or `vh` (clockwise from top-left), or one `{Size}` for all corners |
+| `border-radius` | One to four nonnegative lengths in `px`, `vw`, `vh`, or `rem` (clockwise from top-left), or one `{Size}` for all corners |
 | `border-{top-left,top-right,bottom-right,bottom-left}-radius` | One nonnegative length or `{Size}` |
 | `border-color` | A color literal or `{Brush}`; paints the area set by `border-width` |
 | `border` | `none`, or a width, an optional `solid`, and a color in any order: `border: 2px solid #6fa8ff` |
@@ -152,7 +152,7 @@ Named colors are `transparent`, `black`, `white`, `red`, `lime`, `blue`, `yellow
 | `font-weight` | `normal` (400), `bold` (700), integer 1–1000, or `{Weight}` |
 | `font-style`, `font-italic` | `font-style` accepts `normal` and `italic`. Both can take a braced `bool`. |
 | `line-height` | Length, nonnegative multiplier, percent, `em`, `normal` (1.2), or `{Size}` for a length |
-| `letter-spacing` | Signed length in `px`, `vw`, or `vh` |
+| `letter-spacing` | Signed length in `px`, `vw`, `vh`, or `rem` |
 | `paragraph-spacing` | Nonnegative length, including `%` |
 | `text-align` | `left`, `right`, `center`, `justify`, or `{Option<TextAlign>}` |
 | `white-space`, `text-wrap` | `normal` and `pre-wrap` enable wrapping. `nowrap` and `pre` disable it. Use `text-wrap: {bool_property}` for a Rust binding. |

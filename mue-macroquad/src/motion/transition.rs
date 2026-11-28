@@ -185,6 +185,7 @@ impl Interpolatable for Size {
             (Self::Percent(a), Self::Percent(b)) => Self::Percent(f32::interpolate(a, b, progress)),
             (Self::Vw(a), Self::Vw(b)) => Self::Vw(f32::interpolate(a, b, progress)),
             (Self::Vh(a), Self::Vh(b)) => Self::Vh(f32::interpolate(a, b, progress)),
+            (Self::Rem(a), Self::Rem(b)) => Self::Rem(f32::interpolate(a, b, progress)),
             // Unit changes, including a transition to or from `Auto`, are
             // discrete. The declaration is never implicitly converted.
             _ => *to,

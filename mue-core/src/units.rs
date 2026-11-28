@@ -27,6 +27,9 @@ pub enum Size {
     Percent(f32),
     Vw(f32),
     Vh(f32),
+    /// Multiples of the root font size (CSS `rem`), so lengths follow the
+    /// application's text scale.
+    Rem(f32),
     Auto,
 }
 
@@ -42,6 +45,9 @@ impl Size {
     }
     pub const fn vh(value: f32) -> Self {
         Self::Vh(value)
+    }
+    pub const fn rem(value: f32) -> Self {
+        Self::Rem(value)
     }
     pub const fn auto() -> Self {
         Self::Auto

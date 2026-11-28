@@ -13,7 +13,9 @@ pub use rect::IntoRectProp;
 pub use transform::{IntoTransformProp, Transform, TransformOp, TransformOrigin, TransformProp};
 pub mod units;
 
-pub use units::{FontSize, FontSizeExt, Size, SizeExt, percent, px, vh, vw};
+pub use units::{
+    FontSize, FontSizeExt, Size, SizeExt, percent, px, rem, root_font_size, vh, vw,
+};
 
 pub use crate::paint::path::CornerShape;
 pub use crate::paint::shadow::{BoxShadow, BoxShadows, ShadowCache};

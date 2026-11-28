@@ -471,6 +471,10 @@ impl NodeRef {
             if changed {
                 computed.set(size);
             }
+            if root.is_none() && !transparent {
+                // The tree's root font: what `rem` lengths resolve against.
+                crate::style::units::set_root_font_size(size);
+            }
             // A transparent wrapper leaves the `rem` root to its first child.
             let root = if transparent && root.is_none() {
                 None

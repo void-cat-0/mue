@@ -202,6 +202,7 @@ fn zero(size: Size) -> Size {
         Size::Percent(_) => Size::Percent(0.),
         Size::Vw(_) => Size::Vw(0.),
         Size::Vh(_) => Size::Vh(0.),
+        Size::Rem(_) => Size::Rem(0.),
         Size::Auto => Size::Auto,
     }
 }

@@ -132,12 +132,12 @@ pub(super) fn length_value(
         "vw" => "Vw",
         "vh" => "Vh",
         "em" if font => "Em",
-        "rem" if font => "Rem",
+        "rem" => "Rem",
         "" if value == 0. => "Px",
         _ => {
             return Err(syn::Error::new(
                 span,
-                "unsupported length unit for this property; use px, %, vw, vh (also em/rem for font-size), or {Rust expression}",
+                "unsupported length unit for this property; use px, %, vw, vh, rem (also em for font-size), or {Rust expression}",
             ));
         }
     };

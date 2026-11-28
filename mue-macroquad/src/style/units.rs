@@ -4,7 +4,12 @@
 //! not read the viewport or create signals. Use `signal(Size::Px(...))` when a
 //! component needs to change both the value and its unit.
 
-use mue_core::{effect::computed, prop::Prop, signal::Access};
+use mue_core::{
+    effect::computed,
+    prop::Prop,
+    scope::Scope,
+    signal::{Access, ReadSignal, Signal, signal},
+};
 use taffy::{Dimension, LengthPercentage, LengthPercentageAuto};
 
 use crate::app::viewport;
@@ -26,6 +31,29 @@ pub const fn vw(value: f32) -> Size {
 /// Construct a percentage of the logical viewport height.
 pub const fn vh(value: f32) -> Size {
     Size::Vh(value)
+}
+/// Construct a multiple of the root font size (CSS `rem`).
+pub const fn rem(value: f32) -> Size {
+    Size::Rem(value)
+}
+
+thread_local! {
+    static ROOT_FONT_SIZE: Signal<f32> = Scope::null().run(|| signal(FontSize::DEFAULT_PX));
+}
+
+/// The root font size in logical pixels: the computed font size of the
+/// App's root node (16 until a root sets one). `rem` lengths resolve against
+/// it, and layout follows its changes. Tracked.
+pub fn root_font_size() -> ReadSignal<f32> {
+    ROOT_FONT_SIZE.with(|size| **size)
+}
+
+pub(crate) fn set_root_font_size(size: f32) {
+    ROOT_FONT_SIZE.with(|signal| {
+        if signal.get_untracked() != size {
+            signal.set(size);
+        }
+    });
 }
 
 fn finite(value: f32, property: &str) -> f32 {
@@ -103,6 +131,7 @@ impl SizeExt for Size {
             Size::Px(value) => finite(value, property),
             Size::Vw(value) => relative(value, viewport::read().get().width, 100.0, property),
             Size::Vh(value) => relative(value, viewport::read().get().height, 100.0, property),
+            Size::Rem(value) => relative(value, root_font_size().get(), 1.0, property),
             Size::Percent(value) => {
                 finite(value, property);
                 panic!("{property} cannot resolve Size::Percent without a containing block")
@@ -141,7 +170,7 @@ impl FontSizeExt for FontSize {
 /// Resolve a scalar `Size` at its consuming property boundary.
 pub fn resolve_length(value: Prop<Size>, property: &'static str) -> Prop<f32> {
     match value {
-        Prop::Static(Size::Vw(_) | Size::Vh(_)) | Prop::Dynamic(_) => {
+        Prop::Static(Size::Vw(_) | Size::Vh(_) | Size::Rem(_)) | Prop::Dynamic(_) => {
             computed(move |_| value.get().resolve(property)).into()
         }
         Prop::Static(value) => Prop::Static(value.resolve(property)),
