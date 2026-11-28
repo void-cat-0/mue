@@ -9,6 +9,7 @@
 use mue_components::*;
 use mue_components::system::ControlSize;
 mod assets;
+mod components;
 mod controls;
 mod feedback;
 mod fonts;
@@ -42,9 +43,10 @@ use mue_macroquad::{
 use std::rc::Rc;
 
 /// Every page: its title and the section of the navigation it belongs to.
-const PAGES: [(&str, &str); 14] = [
+const PAGES: [(&str, &str); 15] = [
     ("Overview", "Start"),
     ("Self tests", "Start"),
+    ("Components", "Components"),
     ("Layout", "Rendering"),
     ("Typography", "Rendering"),
     ("Graphics", "Rendering"),
@@ -117,17 +119,18 @@ fn destination(index: usize, selected: Signal<usize>, header: ReadSignal<f32>) -
         let content = match index {
             0 => overview::page(),
             1 => selftest::page(),
-            2 => layout::page(),
-            3 => typography::page(),
-            4 => graphics::page(),
-            5 => motion::page(),
-            6 => text_input::page(),
-            7 => pointer::page(),
-            8 => scrolling::page(),
-            9 => overlays::page(),
-            10 => feedback::page(),
-            11 => theming::page(),
-            12 => styles::page(),
+            2 => components::page(),
+            3 => layout::page(),
+            4 => typography::page(),
+            5 => graphics::page(),
+            6 => motion::page(),
+            7 => text_input::page(),
+            8 => pointer::page(),
+            9 => scrolling::page(),
+            10 => overlays::page(),
+            11 => feedback::page(),
+            12 => theming::page(),
+            13 => styles::page(),
             _ => fonts::licenses(),
         };
         scroll_area()
