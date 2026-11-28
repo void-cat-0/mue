@@ -4,6 +4,7 @@
 use super::responsive;
 use mue_components::*;
 use mue_core::prelude::*;
+use mue_components::system::{ControlSize, Palette};
 use mue_macroquad::{
     motion::transition::Transition,
     paint::color::Color,
@@ -11,6 +12,7 @@ use mue_macroquad::{
     style::{FontSize, Size, Styleable, StyleableExt},
 };
 use std::{cell::RefCell, rc::Rc};
+use taffy::{AlignItems, FlexDirection};
 
 /// Accent colors that stay the same in every theme.
 pub const BLUE: Color = Color::from_rgba(110, 160, 245, 255);
@@ -19,16 +21,14 @@ pub const GREEN: Color = Color::from_rgba(111, 207, 151, 255);
 pub const RED: Color = Color::from_rgba(235, 103, 103, 255);
 pub const SPRING: Transition = Transition::spring(0.3, 0.1);
 
-const INK: Color = Color::from_rgba(19, 23, 32, 255);
-
 /// One theme: the same token names, different values.
-struct Palette {
+struct ThemeValues {
     brushes: TokenSet<Brush>,
     colors: TokenSet<Color>,
     numbers: TokenSet<f32>,
 }
 
-impl Palette {
+impl ThemeValues {
     fn register(&self, theme: &Theme) {
         theme.register(&self.brushes);
         theme.register(&self.colors);
@@ -42,9 +42,9 @@ impl Palette {
     }
 }
 
-fn light_palette() -> Palette {
+fn light_palette() -> ThemeValues {
     let canvas = Color::from_rgba(240, 243, 248, 255);
-    Palette {
+    ThemeValues {
         brushes: token_set! {
             canvas: Brush::Solid(canvas),
             panel: Brush::Solid(Color::WHITE),
@@ -63,9 +63,9 @@ fn light_palette() -> Palette {
     }
 }
 
-fn dark_palette() -> Palette {
+fn dark_palette() -> ThemeValues {
     let canvas = Color::from_rgba(17, 21, 30, 255);
-    Palette {
+    ThemeValues {
         brushes: token_set! {
             canvas: Brush::Solid(canvas),
             panel: Brush::Solid(Color::from_rgba(27, 33, 46, 255)),
@@ -245,46 +245,21 @@ pub fn row(children: impl IntoChildren) -> Node {
         .into_node()
 }
 
-/// A rounded, theme-aware chip that can be selected.
-pub fn chip(
-    label: impl Into<Prop<Rc<str>>>,
-    selected: impl Into<Prop<bool>>,
-    action: impl FnMut() + 'static,
-) -> Node {
-    let selected = selected.into();
-    link_overlay()
-        .style(mue_macroquad::style! {
-            flex: none;
-            padding: {(u(10.), u(5.))};
-            min-height: {u(30.)};
-            border-radius: {u(15.)};
-            background: {selected.clone().pick(Brush::Solid(BLUE), raised())};
-            align-items: center;
-            justify-content: center;
-            transition: 120ms ease-out;
-        })
-        .hit_slop(4.)
-        .on_activate(action)
-        .children(text(label).style(mue_macroquad::style! {
-            font-size: {f(13.)}; line-height: {u(18.)};
-            color: {selected.pick(Brush::Solid(INK), foreground())};
-            text-wrap: {false};
-        }))
-        .into_node()
-}
-
-/// A labeled control row: the label on the left, the control after it.
+/// A labeled control row: the label on the left, the control after it. On
+/// narrow windows the label sits above the control.
 pub fn field(label: &str, control: impl IntoNode + 'static) -> Node {
-    hstack()
+    let compact = responsive::compact();
+    flexbox()
         .style(mue_macroquad::style! {
             width: 100%; min-width: 0px;
-            gap: {u(12.)};
-            align-items: center;
+            flex-direction: {compact.map(|compact| if compact { FlexDirection::Column } else { FlexDirection::Row })};
+            gap: {compact.map(|compact| Size::Px(if compact { 4. } else { 12. }))};
+            align-items: {compact.map(|compact| Some(if compact { AlignItems::Stretch } else { AlignItems::Center }))};
         })
         .children((
             text(Rc::<str>::from(label)).style(mue_macroquad::style! {
                 flex: none;
-                width: {u(110.)};
+                width: {compact.map(|compact| if compact { Size::Auto } else { Size::Rem(7.) })};
                 font-size: {f(13.)}; line-height: {u(18.)};
                 color: {muted()};
             }),
@@ -295,66 +270,57 @@ pub fn field(label: &str, control: impl IntoNode + 'static) -> Node {
         .into_node()
 }
 
-/// Pick one of several values; every option is visible.
+/// A segmented picker bound to `model`: soft-rounded [`tabs`] without
+/// panels, so the selection pill slides between the options. The options
+/// wrap onto more lines on narrow windows.
+pub fn picker<T: Clone + PartialEq + 'static>(
+    options: Vec<(&'static str, T)>,
+    model: Signal<T>,
+) -> Node {
+    let options = Rc::new(options);
+    let find = {
+        let options = options.clone();
+        move |value: &T| options.iter().position(|(_, option)| option == value).unwrap_or(0)
+    };
+    let index = signal(find(&model.get_clone_untracked()));
+    // Follow changes of the model made elsewhere.
+    watch(*model, move |model| {
+        let at = find(&model.get_clone());
+        if index.get_untracked() != at {
+            index.set(at);
+        }
+    });
+    let labels = options
+        .iter()
+        .map(|(name, _)| tab(*name))
+        .collect::<Vec<_>>();
+    tabs()
+        .index(index)
+        .variant(TabsVariant::SoftRounded)
+        .size(ControlSize::Sm)
+        .palette(Palette::Blue)
+        .on_change(move |at: &usize| model.set(options[*at].1.clone()))
+        .children(tab_list().style(mue_macroquad::style! { flex-wrap: wrap; }).children(labels))
+        .into_node()
+}
+
+/// Pick one of several values with a labeled [`picker`]; every option is
+/// visible and the first one starts selected.
 pub fn segmented<T: Clone + PartialEq + 'static>(
     label: &str,
     options: Vec<(&'static str, T)>,
 ) -> (ReadSignal<T>, Node) {
-    let index = signal(0usize);
-    let options = Rc::new(options);
-    let value = index.map({
-        let options = options.clone();
-        move |i| options[i].1.clone()
-    });
-    let chips = options
-        .iter()
-        .enumerate()
-        .map(|(i, (name, _))| {
-            chip(*name, index.map(move |current| current == i), move || {
-                index.set(i)
-            })
-        })
-        .collect::<Vec<_>>();
-    (value, field(label, row(chips)))
+    let model = signal(options[0].1.clone());
+    (*model, field(label, picker(options, model)))
 }
 
-/// A compact on/off switch with its label; several fit in one `row`.
+/// A small labeled [`switch`]; several fit in one `row`.
 pub fn option_switch(label: &str, initial: bool) -> (Signal<bool>, Node) {
     let value = signal(initial);
-    let control = link_overlay()
-        .style(mue_macroquad::style! {
-            flex: none;
-            flex-direction: row;
-            align-items: center;
-            gap: {u(8.)};
-            padding: {(u(4.), u(4.))};
-        })
-        .min_hit_size(44.)
-        .on_activate(move || value.toggle())
-        .children((
-            flexbox()
-                .style(mue_macroquad::style! {
-                    flex: none;
-                    width: {u(40.)};
-                    height: {u(24.)};
-                    padding: {(u(3.),)};
-                    padding-left: {responsive::ui(value.select(19., 3.))};
-                    border-radius: {u(12.)};
-                    background: {value.pick(Brush::Solid(BLUE), raised())};
-                    transition: 150ms ease-out;
-                })
-                .children(flexbox().style(mue_macroquad::style! {
-                    width: {u(18.)};
-                    height: {u(18.)};
-                    border-radius: {u(9.)};
-                    background: #ffffff;
-                })),
-            text(Rc::<str>::from(label)).style(mue_macroquad::style! {
-                font-size: {f(13.)}; line-height: {u(18.)};
-                color: {foreground()};
-                text-wrap: {false};
-            }),
-        ))
+    let control = switch()
+        .checked(value)
+        .label(Rc::<str>::from(label))
+        .size(ControlSize::Sm)
         .into_node();
     (value, control)
 }

@@ -55,14 +55,9 @@ fn haptics_card() -> Node {
         "Haptics",
         "Android performHapticFeedback, iOS feedback generators, and navigator.vibrate on the web. Desktops have no haptics; the log still shows each call.",
         (
-            field(
-                "Haptics",
-                chip(
-                    on.map(|on| Rc::<str>::from(if on { "On" } else { "Muted" })),
-                    on,
-                    move || on.toggle(),
-                ),
-            ),
+            switch()
+                .checked(on)
+                .label(on.map(|on| Rc::<str>::from(if on { "Haptics on" } else { "Haptics muted" }))),
             row(styles
                 .into_iter()
                 .map(|(label, style)| button(label).on_activate(move || haptic(style)).into_node())

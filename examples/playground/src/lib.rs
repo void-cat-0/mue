@@ -7,6 +7,7 @@
 //!
 //! Run with `cargo run --manifest-path examples/Cargo.toml --example playground`.
 use mue_components::*;
+use mue_components::system::ControlSize;
 mod assets;
 mod controls;
 mod feedback;
@@ -311,27 +312,27 @@ fn top_bar(selected: Signal<usize>) -> Node {
                     text-wrap: {false};
                 },
             ),
-            chip("‹", false, move || {
-                selected.update(|index| *index = index.saturating_sub(1))
-            }),
-            chip("›", false, move || {
-                selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1))
-            }),
-            chip(
-                zoom.map(|zoom| Rc::<str>::from(format!("Zoom {:.0}%", zoom * 100.))),
-                false,
-                responsive::cycle_zoom,
-            ),
-            chip(
-                color.scheme.map(|scheme| {
-                    Rc::<str>::from(match scheme {
-                        ColorScheme::Dark => "Dark",
-                        ColorScheme::Light => "Light",
-                    })
+            icon_button(text("‹"))
+                .size(ControlSize::Sm)
+                .on_activate(move || selected.update(|index| *index = index.saturating_sub(1))),
+            icon_button(text("›"))
+                .size(ControlSize::Sm)
+                .on_activate(move || {
+                    selected.update(|index| *index = (*index + 1).min(PAGES.len() - 1))
                 }),
-                false,
-                move || color.toggle(),
-            ),
+            button(zoom.map(|zoom| Rc::<str>::from(format!("Zoom {:.0}%", zoom * 100.))))
+                .variant(ButtonVariant::Ghost)
+                .size(ControlSize::Sm)
+                .on_activate(responsive::cycle_zoom),
+            button(color.scheme.map(|scheme| {
+                Rc::<str>::from(match scheme {
+                    ColorScheme::Dark => "Dark",
+                    ColorScheme::Light => "Light",
+                })
+            }))
+            .variant(ButtonVariant::Ghost)
+            .size(ControlSize::Sm)
+            .on_activate(move || color.toggle()),
         ))
         .into_node()
 }

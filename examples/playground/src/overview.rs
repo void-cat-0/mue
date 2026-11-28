@@ -1,5 +1,6 @@
 use super::controls::*;
 use mue_components::*;
+use mue_components::system::ControlSize;
 use mue_core::prelude::*;
 use mue_macroquad::{input::hover::hover_capable, style::Styleable};
 use std::rc::Rc;
@@ -137,7 +138,10 @@ fn results() -> Node {
                 .position(|entry| entry.0 == page)
                 .unwrap_or(0);
             row((
-                chip(page, false, move || super::open_page(index)),
+                button(page)
+                    .variant(ButtonVariant::Outline)
+                    .size(ControlSize::Sm)
+                    .on_activate(move || super::open_page(index)),
                 mono(line),
             ))
         },

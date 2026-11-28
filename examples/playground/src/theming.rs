@@ -53,39 +53,18 @@ fn color_mode_card() -> Node {
         ("System", ColorMode::System),
     ];
     let system = signal(ColorScheme::Dark);
+    watch(*system, |system| set_system_color_scheme(system.get()));
     card(
         "Color mode",
         "use_color_mode: a light, dark, or system preference and the resolved scheme. Hosts report the system scheme; here you can simulate it.",
         (
-            field(
-                "Preference",
-                row(modes
-                    .into_iter()
-                    .map(|(label, mode)| {
-                        chip(
-                            label,
-                            color.mode.map(move |current| current == mode),
-                            move || color.mode.set(mode),
-                        )
-                    })
-                    .collect::<Vec<_>>()),
-            ),
+            field("Preference", picker(modes.to_vec(), color.mode)),
             field(
                 "System scheme",
-                row((
-                    chip(
-                        "Light",
-                        system.map(|s| s == ColorScheme::Light),
-                        move || {
-                            system.set(ColorScheme::Light);
-                            set_system_color_scheme(ColorScheme::Light);
-                        },
-                    ),
-                    chip("Dark", system.map(|s| s == ColorScheme::Dark), move || {
-                        system.set(ColorScheme::Dark);
-                        set_system_color_scheme(ColorScheme::Dark);
-                    }),
-                )),
+                picker(
+                    vec![("Light", ColorScheme::Light), ("Dark", ColorScheme::Dark)],
+                    system,
+                ),
             ),
             mono(
                 color
@@ -168,23 +147,10 @@ fn media_card() -> Node {
             stack()
                 .style(mue_macroquad::style! { width: 100%; min-width: 0px; gap: 0px; })
                 .children(rows),
-            field(
-                "Reduced motion",
-                chip(
-                    reduced.map(|on| {
-                        Rc::<str>::from(if on {
-                            "Simulated: reduce"
-                        } else {
-                            "Simulated: no preference"
-                        })
-                    }),
-                    reduced,
-                    move || {
-                        reduced.toggle();
-                        set_prefers_reduced_motion(reduced.get_untracked());
-                    },
-                ),
-            ),
+            switch()
+                .checked(reduced)
+                .label("Simulate prefers-reduced-motion: reduce")
+                .on_change(|on: &bool| set_prefers_reduced_motion(*on)),
         ),
     )
 }
