@@ -163,7 +163,7 @@ Named colors are `transparent`, `black`, `white`, `red`, `lime`, `blue`, `yellow
 | `text-decoration`, `text-decoration-line` | `none`, `underline`, `line-through`, or both marks in one declaration |
 | `text-underline`, `text-strikethrough` | Braced `bool` for independent marks |
 
-Use a known width to test wrapping and a line cap. `white-space` selects wrapping only. It does not implement browser whitespace collapsing modes. A numeric `line-height` multiplies the current font size. For example, `1.3`, `130%`, and `1.3em` have the same effect.
+Use a known width to test wrapping and a line cap. `white-space` selects wrapping only. It does not implement browser whitespace collapsing modes. A numeric `line-height` multiplies the current font size. Without a declaration, text uses 1.375 times its font size. For example, `1.3`, `130%`, and `1.3em` have the same effect.
 
 ```rust
 use mue::{prelude::*, renderer::node::{TextVerticalAlign, TextWrap}};

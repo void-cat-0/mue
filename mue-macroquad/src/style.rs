@@ -167,9 +167,10 @@ define_style! {
     /// Set glyph size; percent/em use the parent computed size, rem uses the root.
     /// Unspecified sizes inherit; the root defaults to 32 logical pixels.
     font_size: FontSize = FontSize::Em(1.);
-    /// Set baseline spacing in pixels.
+    /// Set baseline spacing in pixels. Without one, text uses 1.375 times
+    /// its font size.
     line_height: Size = Size::Px(44.);
-    line_height_multiplier: Option<f32>;
+    line_height_multiplier: Option<f32> = Some(1.375);
     /// Choose a registered font family or a generic family.
     font_family: FamilyOwned = FamilyOwned::SansSerif;
     /// Choose a font weight; the matching face must be registered or installed.
