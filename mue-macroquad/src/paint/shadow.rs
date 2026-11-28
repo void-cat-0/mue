@@ -328,15 +328,30 @@ pub(crate) fn draw_box_shadows(
     shadows: &BoxShadows,
     cache: ShadowCache,
     masks: &mut Vec<ShadowMaskState>,
+    opaque: bool,
 ) {
     masks.resize_with(shadows.len(), ShadowMaskState::default);
     for (shadow, mask) in shadows.iter().zip(masks.iter_mut()).rev() {
         match ShadowShape::resolve(shadow, rect, radii) {
+            // An opaque node hides the shadow's interior, so a small blur can
+            // be drawn as feathered geometry: it batches with the rest of the
+            // frame instead of costing a shader pass of its own. Larger
+            // blurs and translucent nodes keep the exact analytic shader.
+            Some(shape) if opaque && shadow.blur <= FAST_BLUR => {
+                mask.reset();
+                paint.draw(|p| {
+                    p.fill_feathered_rounded_rect(shape.rect, shape.radius, shadow.blur, shape.color)
+                });
+            }
             Some(shape) => draw_shape(paint, &shape, cache, mask),
             None => mask.reset(),
         }
     }
 }
+
+/// Blur radius (logical pixels) up to which shadows under opaque nodes use
+/// feathered geometry instead of the analytic shader.
+const FAST_BLUR: f32 = 8.;
 
 fn draw_shape(paint: &Paint, shape: &ShadowShape, cache: ShadowCache, mask: &mut ShadowMaskState) {
     let transform = current_transform();

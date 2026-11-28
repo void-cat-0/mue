@@ -748,6 +748,84 @@ impl<'a> ShapesBuilder<'a> {
 }
 
 impl ShapesBuilder<'_> {
+    /// A rounded rectangle whose edge fades over `feather` on each side: full
+    /// `color` inside `rect` shrunk by `feather`, half at `rect`, transparent
+    /// at `rect` grown by `feather`. A cheap, batchable stand-in for a small
+    /// Gaussian blur (box shadows under opaque nodes).
+    pub(crate) fn fill_feathered_rounded_rect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        feather: f32,
+        color: crate::paint::color::Color,
+    ) {
+        let feather = feather.max(0.5);
+        let scale = device_scale(self.inner.transform);
+        let segments = crate::paint::path::corner_segments(radius + feather, scale).max(2);
+        let ring = |offset: f32| -> Vec<Vector> {
+            let r = (radius + offset).max(0.);
+            let grown = Rect::new(
+                rect.x - offset,
+                rect.y - offset,
+                (rect.w + 2. * offset).max(0.),
+                (rect.h + 2. * offset).max(0.),
+            );
+            let r = r.min(grown.w.min(grown.h) / 2.);
+            let corners = [
+                (vec2(grown.right() - r, grown.y + r), -std::f32::consts::FRAC_PI_2),
+                (vec2(grown.right() - r, grown.bottom() - r), 0.),
+                (vec2(grown.x + r, grown.bottom() - r), std::f32::consts::FRAC_PI_2),
+                (vec2(grown.x + r, grown.y + r), std::f32::consts::PI),
+            ];
+            let mut points = Vec::with_capacity(4 * (segments + 1));
+            for (center, start) in corners {
+                for i in 0..=segments {
+                    let angle = start + std::f32::consts::FRAC_PI_2 * i as f32 / segments as f32;
+                    points.push(center + vec2(angle.cos(), angle.sin()) * r);
+                }
+            }
+            points
+        };
+        // A piecewise-linear erf: 1, 0.5, 0 across the blurred edge.
+        let rings = [(ring(-feather), 1.), (ring(0.), 0.5), (ring(feather), 0.)];
+        let count = rings[0].0.len();
+        let vertex_count = 1 + count * rings.len();
+        let index_count = count * 3 + (rings.len() - 1) * count * 6;
+        if vertex_count > MAX_SHAPE_VERTICES || index_count > MAX_SHAPE_INDICES {
+            return;
+        }
+        let shape = self.shapes.shape_for_texture(None);
+        if shape.buffers.vertices.len() + vertex_count > MAX_SHAPE_VERTICES
+            || shape.buffers.indices.len() + index_count > MAX_SHAPE_INDICES
+        {
+            self.shapes.shapes.push(Shape::default());
+        }
+        let shape = self.shapes.shape_for_texture(None);
+        let (transform, alpha) = (self.inner.transform, self.inner.alpha);
+        let vertex = |point: Vector, weight: f32| {
+            crate::paint::color::Color { a: color.a * weight, ..color }.new_vertex(&transform, &point, alpha)
+        };
+        let base = shape.buffers.vertices.len() as u16;
+        shape.buffers.vertices.push(vertex(rect.center(), 1.));
+        for (points, weight) in &rings {
+            for point in points {
+                shape.buffers.vertices.push(vertex(*point, *weight));
+            }
+        }
+        let n = count as u16;
+        let at = |ring: u16, i: usize| base + 1 + ring * n + (i % count) as u16;
+        for i in 0..count {
+            shape.buffers.indices.extend([base, at(0, i), at(0, i + 1)]);
+        }
+        for ring in 0..rings.len() as u16 - 1 {
+            for i in 0..count {
+                let (a, b) = (at(ring, i), at(ring, i + 1));
+                let (c, d) = (at(ring + 1, i), at(ring + 1, i + 1));
+                shape.buffers.indices.extend([a, c, b, b, c, d]);
+            }
+        }
+    }
+
     pub fn draw_texture<S: IntoShader>(
         &mut self,
         draw_rect: Rect,
@@ -1126,6 +1204,8 @@ fn is_transparent(brush: &Prop<Brush>) -> bool {
 /// node's layout (`border` widths); `border_color` paints them.
 pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
     let background = style.take_background();
+    // Small shadows under an opaque background take the batched fast path.
+    let opaque = background.clone();
     let radii = take_corner_radii(style);
     let corner_shape = style.take_corner_shape();
     let border_color = style.take_border_color();
@@ -1241,6 +1321,7 @@ pub fn use_background(style: &mut Style, rect: ReadSignal<Rect>) {
                 &list,
                 shadow_cache.get(),
                 &mut shadow_masks,
+                matches!(opaque.try_get_clone(), Some(Brush::Solid(color)) if color.a >= 0.999),
             ),
             _ => shadow_masks.clear(),
         }
