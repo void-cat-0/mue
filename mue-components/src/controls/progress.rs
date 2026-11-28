@@ -203,6 +203,68 @@ impl BuildNode for Stripes {
     }
 }
 
+/// Paints the indeterminate segment sliding across its own rect, clamped
+/// to it so its rounded ends match the track. Painting instead of moving a
+/// node keeps the layout still while it animates.
+struct Sliding {
+    shown: Prop<bool>,
+    color: Prop<Brush>,
+    radius: f32,
+    style: Style,
+}
+
+impl Styleable for Sliding {
+    fn style_mut(&mut self) -> &mut Style {
+        &mut self.style
+    }
+}
+
+impl BuildNode for Sliding {
+    fn build(self, mut ctx: NodeContext) -> Node {
+        let Self {
+            shown,
+            color,
+            radius,
+            style,
+        } = self;
+        ctx.push_style(style);
+        ctx.finish(Style::new(), move |style| {
+            let rect = use_layout(style).rect;
+            let paint = use_paint(style);
+            let rem = root_font_size();
+            let mut phase = 0_f32;
+            style.on_update.append(move |dt| {
+                if shown.get_untracked() {
+                    phase = (phase + dt) % 1.;
+                }
+            });
+            style.on_render.append(move |_| {
+                let rect = rect.get_untracked();
+                if !shown.get_untracked() || rect.w <= 0. || rect.h <= 0. {
+                    return;
+                }
+                // 40 % of the track slides from -40 % to 100 % once a second.
+                let start = rect.x + rect.w * (-0.4 + 1.4 * phase);
+                let left = start.max(rect.x);
+                let right = (start + rect.w * 0.4).min(rect.right());
+                if right <= left {
+                    return;
+                }
+                let segment = mue_macroquad::math::Rect::new(left, rect.y, right - left, rect.h);
+                let radius = (radius * rem.get_untracked()).min(segment.h / 2.).min(segment.w / 2.);
+                let brush = color.get_clone_untracked();
+                paint.draw(|p| {
+                    p.fill(
+                        &PathData::rounded_rect(segment, radius),
+                        crate::FillRule::NonZero,
+                        brush.shader(segment),
+                    );
+                });
+            });
+        })
+    }
+}
+
 impl BuildNode for ProgressBuilder {
     fn build(self, ctx: NodeContext) -> Node {
         let Self {
@@ -218,26 +280,9 @@ impl BuildNode for ProgressBuilder {
         } = self;
         let height = [0.25, 0.5, 0.75, 1.][size as usize];
         let fraction = fraction(value, min, max);
-        // Phase of the indeterminate segment, 0..1 once a second.
-        let phase = signal(0_f32);
-        // The indeterminate segment slides from -40 % to 100 %; it is clamped
-        // to the track instead of clipped, which keeps the same rounded ends
-        // and lets the bar batch with the rest of the frame.
-        let segment = move || {
-            let start = -40. + 140. * phase.get();
-            (start.max(0.), (start + 40.).min(100.))
-        };
-        let left = computed(move |_| {
-            if indeterminate.get() {
-                Size::Percent(segment().0)
-            } else {
-                Size::Percent(0.)
-            }
-        });
         let width = computed(move |_| {
             if indeterminate.get() {
-                let (start, end) = segment();
-                Size::Percent((end - start).max(0.))
+                Size::Percent(0.)
             } else {
                 Size::Percent(fraction.get() * 100.)
             }
@@ -246,10 +291,11 @@ impl BuildNode for ProgressBuilder {
             if indeterminate { Transition::Instant } else { Transition::ease_out(0.3) }
         });
         let fill = system::accent(palette);
+        let fill_segment = fill.clone();
         let indicator = flexbox()
             .absolute()
             .inset_top(Size::Px(0.))
-            .inset_left(left)
+            .inset_left(Size::Px(0.))
             .height(Size::Percent(100.))
             .width(width)
             .background(fill)
@@ -280,12 +326,17 @@ impl BuildNode for ProgressBuilder {
             .flex_shrink(0.)
             .background(track_color())
             .radius(Size::Rem(height / 2.))
-            .on_update(move |dt| {
-                if indeterminate.get_untracked() {
-                    phase.set((phase.get_untracked() + dt) % 1.);
+            .children((
+                indicator,
+                Sliding {
+                    shown: indeterminate,
+                    color: fill_segment,
+                    radius: height / 2.,
+                    style: Style::new(),
                 }
-            })
-            .children(indicator)
+                .absolute()
+                .inset((Size::Px(0.),)),
+            ))
             .style(style)
             .build(ctx)
     }
