@@ -211,9 +211,22 @@ backdrop fades while the content rises and scales.
 `mue_macroquad::paint::path::PathData` is an immutable, cheaply cloned path with cached
 bounds. Build one with `PathData::parse` (SVG path data with every command,
 relative forms, and compact numbers), the geometry constructors `rect`,
-`rounded_rect`, `circle`, `ellipse`, `line`, `polyline`, and `polygon`, or
-`PathData::from(lyon_path)`. `transformed(matrix)` applies an affine matrix.
-Equality is identity, so a newly parsed path always repaints.
+`rounded_rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`,
+`regular_polygon`, `star`, `arc`, and `sector` (pie or ring segment), or
+`PathData::from(lyon_path)`. `transformed(matrix)` applies an affine matrix
+and `trimmed(start, end)` keeps a fraction of the path's length. Equality is
+identity, so a newly parsed path always repaints.
+
+Shape nodes draw common shapes without path data: `ellipse()`, `circle()`,
+`rectangle(radius)`, `regular_polygon(sides)`, `star(points, inner_ratio)`,
+`arc(start, sweep)`, `sector(start, sweep, inner_ratio)`, `line(from, to)`,
+`polyline(points)`, and `polygon(points)` (points as fractions of the box).
+Their geometry follows the node's content box, strokes stay inside it at
+their logical width, and every parameter takes a reactive value, so a
+signal or a transition animates the shape. `.trim(start, end)` on any path
+or shape node draws part of the outline: animate `end` from 0 to 1 to draw
+a stroke on. `arc`, `line`, and `polyline` are stroked with the foreground
+color by default; the others are filled like `path`.
 
 The `path(data)` node fits a path into its content box with `PathFit`
 (`Contain` by default, also `Cover`, `Fill`, and `None`). Its view box defaults to

@@ -168,8 +168,9 @@ pub use motion::*;
 pub use mue_macroquad::node::{
     BuildNode, Callback, Children, ChildrenPlan, Component, FlexboxBuilder, IntoChildren, IntoNode,
     KeyedItem, Node, NodeContext, NodeRef, PathBuilder, ScopedSlot, ShapeBuilder, Slot, Span,
-    SpanStyle, SvgBuilder, TextOverflow, TextVerticalAlign, TextWrap, flexbox, join_children,
-    keyed, map_keyed, map_keyed_prop, path, shape, show_if, svg, text,
+    SpanStyle, SvgBuilder, TextOverflow, TextVerticalAlign, TextWrap, arc, circle, ellipse,
+    flexbox, join_children, keyed, line, map_keyed, map_keyed_prop, path, polygon, polyline,
+    rectangle, regular_polygon, sector, shape, show_if, star, svg, text,
 };
 pub use mue_macroquad::paint::path::{FillRule, PathData, PathFit, StrokeStyle};
 pub use mue_macroquad::paint::svg::SvgDocument;

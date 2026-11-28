@@ -135,6 +135,76 @@ impl PathData {
         Self::poly(points, true)
     }
 
+    /// A regular polygon with `sides` corners (at least 3) inscribed in a
+    /// circle of `radius`, the first corner at `rotation` radians (0 points
+    /// right; -π/2 points up).
+    pub fn regular_polygon(center: Vector, radius: f32, sides: u32, rotation: f32) -> Self {
+        let sides = sides.max(3);
+        Self::polygon((0..sides).map(|i| {
+            let angle = rotation + std::f32::consts::TAU * i as f32 / sides as f32;
+            center + vec2(angle.cos(), angle.sin()) * radius
+        }))
+    }
+
+    /// A star with `points` tips (at least 2) on a circle of `outer` radius
+    /// and inner corners on `inner`, the first tip at `rotation` radians.
+    pub fn star(center: Vector, outer: f32, inner: f32, points: u32, rotation: f32) -> Self {
+        let points = points.max(2);
+        Self::polygon((0..points * 2).map(|i| {
+            let angle = rotation + std::f32::consts::PI * i as f32 / points as f32;
+            let radius = if i % 2 == 0 { outer } else { inner };
+            center + vec2(angle.cos(), angle.sin()) * radius
+        }))
+    }
+
+    /// An open elliptical arc from `start` through `sweep` radians
+    /// (clockwise on screen for positive sweeps); stroke it.
+    pub fn arc(center: Vector, radii: Vector, start: f32, sweep: f32) -> Self {
+        let steps = arc_steps(radii, sweep);
+        Self::polyline((0..=steps).map(|i| {
+            let angle = start + sweep * i as f32 / steps as f32;
+            center + vec2(angle.cos() * radii.x, angle.sin() * radii.y)
+        }))
+    }
+
+    /// A pie slice from `start` through `sweep` radians; with `inner_ratio`
+    /// above 0 the center is cut out (a ring segment, 0..1 of the radii).
+    /// A full turn with `inner_ratio` 0 is an ellipse.
+    pub fn sector(center: Vector, radii: Vector, inner_ratio: f32, start: f32, sweep: f32) -> Self {
+        let inner_ratio = inner_ratio.clamp(0., 1.);
+        let steps = arc_steps(radii, sweep);
+        let at = |angle: f32, scale: f32| {
+            center + vec2(angle.cos() * radii.x, angle.sin() * radii.y) * scale
+        };
+        let outer = (0..=steps).map(|i| at(start + sweep * i as f32 / steps as f32, 1.));
+        if inner_ratio <= 0. {
+            return Self::polygon(std::iter::once(center).chain(outer));
+        }
+        let inner = (0..=steps)
+            .rev()
+            .map(|i| at(start + sweep * i as f32 / steps as f32, inner_ratio));
+        Self::polygon(outer.chain(inner))
+    }
+
+    /// The part of the path between `start` and `end`, as fractions (0..1)
+    /// of its length: animate `end` from 0 to 1 to draw a stroke on.
+    pub fn trimmed(&self, start: f32, end: f32) -> Self {
+        let (start, end) = (start.clamp(0., 1.), end.clamp(0., 1.));
+        if start <= 0. && end >= 1. {
+            return self.clone();
+        }
+        if end <= start {
+            return Self::default();
+        }
+        use lyon::algorithms::measure::{PathMeasurements, SampleType};
+        let measurements = PathMeasurements::from_path(&self.path, 0.05);
+        let path: &Path = &self.path;
+        let mut sampler = measurements.create_sampler(path, SampleType::Normalized);
+        let mut builder = Path::builder();
+        sampler.split_range(start..end, &mut builder);
+        Self::new(builder.build())
+    }
+
     fn poly(points: impl IntoIterator<Item = Vector>, close: bool) -> Self {
         let mut builder = Path::builder();
         let mut points = points.into_iter();
@@ -716,4 +786,10 @@ pub(crate) fn polygon_contains(points: &[Vector], point: Vector) -> bool {
         j = i;
     }
     inside
+}
+
+/// Segments for a smooth arc: about one per 4 logical pixels of length.
+fn arc_steps(radii: Vector, sweep: f32) -> u32 {
+    let length = sweep.abs() * radii.x.max(radii.y).max(0.);
+    ((length / 4.).ceil() as u32).clamp(4, 256)
 }

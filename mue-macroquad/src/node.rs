@@ -22,7 +22,10 @@ pub use shape::{ShapeBuilder, shape};
 pub use slot::{Callback, ScopedSlot, Slot};
 pub use text::{Span, SpanStyle, TextBuilder, TextOverflow, TextVerticalAlign, TextWrap, text};
 pub use text_edit::{TextEditBuilder, TextEditHandle, text_edit};
-pub use vector::{PathBuilder, SvgBuilder, path, svg};
+pub use vector::{
+    PathBuilder, SvgBuilder, arc, circle, ellipse, line, path, polygon, polyline, rectangle,
+    regular_polygon, sector, star, svg,
+};
 
 use std::{cell::RefCell, marker::PhantomData, ops::Deref, rc::Rc};
 
