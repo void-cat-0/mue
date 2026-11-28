@@ -178,7 +178,6 @@ pub use mue_macroquad::{
     input::feedback::{HapticStyle, SoundCue},
     input::focus::FocusScope,
     node::{NodeHandle, shader_box},
-    overlay::anchor::{Placement, anchored, use_anchor},
     overlay::layer::{Layer, layer_host, teleport},
     paint::offscreen::{Filter, offscreen},
 };

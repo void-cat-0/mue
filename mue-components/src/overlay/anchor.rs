@@ -7,16 +7,16 @@
 //! point, all in window logical pixels. Children can read the final placement
 //! and an arrow offset with [`use_anchor`].
 //!
-//! Put anchored content in a [`teleport`](crate::overlay::layer::teleport) so it draws
+//! Put anchored content in a [`teleport`](mue_macroquad::overlay::layer::teleport) so it draws
 //! above everything and is not clipped by scroll areas.
 //!
 //! ```
 //! use mue_macroquad::{
-//!     overlay::anchor::{Placement, anchored},
 //!     overlay::layer::{Layer, teleport},
 //!     node::{NodeHandle, flexbox},
 //!     style::{Styleable, StyleableExt},
 //! };
+//! use mue_components::overlay::anchor::{Placement, anchored};
 //!
 //! # let owner = mue_core::scope::OwnedScope::new();
 //! # owner.run(|| {
@@ -38,7 +38,7 @@ use mue_core::{
     signal::{Access, ReadSignal, Signal, signal},
 };
 
-use crate::{
+use mue_macroquad::{
     layout::use_layout,
     math::{Rect, Vector, vec2},
     node::{BuildNode, Node, NodeContext, NodeHandle, NodeRef},
@@ -376,8 +376,8 @@ impl BuildNode for AnchoredBuilder {
             let layout = use_layout(style);
             let rect = layout.rect;
             use_background(style, rect);
-            let viewport = crate::app::viewport::read();
-            let host = crate::overlay::layer::LayerHost::current();
+            let viewport = mue_macroquad::app::viewport::use_viewport();
+            let host = mue_macroquad::overlay::layer::LayerHost::current();
             // Layout hooks may update layout inputs; preparation repeats until
             // the position is stable.
             style.on_layout.append(move |_| {

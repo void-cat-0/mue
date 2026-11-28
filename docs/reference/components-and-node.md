@@ -17,7 +17,7 @@ The component crate owns reusable behavior.
 - controls: `button`;
 - overlay: `overlay_host`;
 - graphics: `image`, `icon`/`icon_named`, and the renderer's `path`, `svg`, `shader_box`, and `shape` nodes;
-- layers and effects (re-exported from the renderer): `teleport`, `anchored`, `presence`, and `offscreen`;
+- motion and overlays: `presence`, `transition_group`, and `anchored` (in `mue_components::motion` and `mue_components::overlay`), plus `teleport` and `offscreen` re-exported from the renderer;
 - state and behavior: `Controllable`, `provide_part`/`use_part`, composables such as `use_disclosure`, and directives such as `Hotkey`;
 - typography: `text`, `document`, `markdown`, headings, links, lists, code, and quotations.
 

@@ -22,6 +22,7 @@
 //! # });
 //! ```
 
+use crate::overlay::anchor::{Placement, anchored, use_anchor};
 use crate::motion::presence::{PresenceAnimation, presence};
 use std::{cell::RefCell, rc::Rc};
 
@@ -31,10 +32,7 @@ use mue_macroquad::{
     input::pointer::{PointerAction, PointerType},
     motion::transition::Transition,
     node::{BuildNode, IntoNode, Node, NodeContext, NodeHandle, flexbox, text},
-    overlay::{
-        anchor::{Placement, anchored, use_anchor},
-        layer::{Layer, teleport},
-    },
+    overlay::layer::{Layer, teleport},
     paint::shader::Brush,
     style::{BoxShadow, BoxShadows, Size, Style, Styleable, StyleableExt, Transform, TransformOp, root_font_size},
 };

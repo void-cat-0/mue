@@ -1,5 +1,4 @@
-//! Content above the page: layer hosts and teleports, and anchored
-//! positioning for popovers, menus, and tooltips.
+//! Content above the page: layer hosts and teleports. Anchored popovers
+//! (`anchored`) are a component in `mue-components`.
 
-pub mod anchor;
 pub mod layer;

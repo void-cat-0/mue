@@ -33,6 +33,7 @@
 //! # });
 //! ```
 
+use crate::overlay::anchor::{Placement, anchored};
 use crate::motion::presence::{PresenceAnimation, presence};
 use std::{cell::RefCell, rc::Rc};
 
@@ -49,10 +50,7 @@ use mue_macroquad::{
     math::{Vector, vec2},
     motion::transition::Transition,
     node::{BuildNode, IntoNode, Node, NodeContext, NodeHandle, NodeRef, flexbox, text},
-    overlay::{
-        anchor::{Placement, anchored},
-        layer::{Layer, teleport},
-    },
+    overlay::layer::{Layer, teleport},
     paint::{
         color::Color,
         path::{PathData, StrokeStyle},

@@ -13,7 +13,7 @@
 //!
 //! Each teleported subtree is placed in a full-size, pointer-transparent
 //! surface over the host, so `position: absolute`, `center`, or
-//! [`anchored`](crate::overlay::anchor::anchored) position the content inside it.
+//! `anchored` (in `mue-components`) position the content inside it.
 //! Surfaces are ordered by layer, then `z_index`, then insertion order.
 //!
 //! ```

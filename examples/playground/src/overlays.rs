@@ -6,12 +6,12 @@ use mue_macroquad::{
     input::back::{can_go_back, dispatch_back, use_back_handler},
     input::cursor::Cursor,
     node::NodeHandle,
-    overlay::anchor::{Placement, anchored},
     overlay::layer::{Layer, teleport},
     paint::color::Color,
     paint::shader::Brush,
     style::{Styleable, StyleableExt},
 };
+use mue_components::overlay::anchor::{Placement, anchored};
 use mue_components::motion::presence::{PresenceAnimation, presence};
 use std::rc::Rc;
 
