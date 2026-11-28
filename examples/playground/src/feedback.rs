@@ -36,8 +36,11 @@ fn install_handlers() {
             });
         }
     });
-    // The playground ships no audio; an application maps cues to its samples.
-    set_sound_handler(|cue| log_event(format!("sound {cue:?}")));
+    // Play the built-in sample and show the cue in the log.
+    set_sound_handler(|cue| {
+        mue_macroquad::input::feedback::play_sound(cue);
+        log_event(format!("sound {cue:?}"));
+    });
 }
 
 fn haptics_card() -> Node {

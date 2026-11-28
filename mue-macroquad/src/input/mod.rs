@@ -26,6 +26,8 @@
 pub mod back;
 pub mod cursor;
 pub mod feedback;
+#[cfg(all(feature = "sound", not(target_arch = "wasm32")))]
+mod sound;
 pub mod focus;
 pub mod gesture;
 pub mod hit_test;

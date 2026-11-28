@@ -2,10 +2,15 @@
 //!
 //! Components and directives call [`haptic`] and [`sound`] at meaningful
 //! moments (a tap, a toggle, a long press). Haptics go to the platform by
-//! default (Android, iOS, and browsers that support vibration); sounds do
-//! nothing until the application installs a handler with
-//! [`set_sound_handler`], since the sounds belong to the application. Either
-//! handler can be replaced, for example to respect a settings toggle.
+//! default (Android, iOS, and browsers that support vibration). With the
+//! `sound` feature, sounds play built-in samples through
+//! [sasa](https://github.com/Mivik/sasa) on desktop, Android, and iOS;
+//! `set_sound_sample` replaces a cue's sample with the application's own
+//! file and `set_sound_volume` scales them all. Without the feature (and on
+//! the web) sounds are silent unless the application installs a handler.
+//! Either handler can be replaced with [`set_haptic_handler`] and
+//! [`set_sound_handler`], for example to respect a settings toggle;
+//! `play_sound` still plays the built-in sample from inside a handler.
 //!
 //! ```
 //! use mue_macroquad::input::feedback::{HapticStyle, SoundCue, haptic, set_sound_handler, sound};
@@ -20,6 +25,9 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+#[cfg(all(feature = "sound", not(target_arch = "wasm32")))]
+pub use super::sound::{play_sound, set_sound_sample, set_sound_volume};
+
 /// A haptic pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HapticStyle {
@@ -33,7 +41,8 @@ pub enum HapticStyle {
     Error,
 }
 
-/// A UI sound the application maps to its own samples.
+/// A UI sound: a built-in sample with the `sound` feature, or the
+/// application's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SoundCue {
     Click,
@@ -59,12 +68,24 @@ pub fn haptic(style: HapticStyle) {
     }
 }
 
-/// Play a UI sound through the installed handler (silent by default).
+/// Play a UI sound through the installed handler, or the built-in sample
+/// with the `sound` feature (silent otherwise).
 pub fn sound(cue: SoundCue) {
-    if let Some(handler) = SOUND.with(|handler| handler.borrow().clone()) {
-        handler(cue);
+    match SOUND.with(|handler| handler.borrow().clone()) {
+        Some(handler) => handler(cue),
+        None => platform_sound(cue),
     }
 }
+
+#[cfg(all(feature = "sound", not(target_arch = "wasm32")))]
+fn platform_sound(cue: SoundCue) {
+    if crate::input::text_input::platform::host_available() {
+        play_sound(cue);
+    }
+}
+
+#[cfg(not(all(feature = "sound", not(target_arch = "wasm32"))))]
+fn platform_sound(_cue: SoundCue) {}
 
 /// Replace how haptics are played (for example to honor a settings toggle).
 pub fn set_haptic_handler(handler: impl Fn(HapticStyle) + 'static) {

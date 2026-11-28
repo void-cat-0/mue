@@ -28,3 +28,15 @@ smallvec = { workspace = true }
 taffy = { workspace = true }
 unicode-segmentation = "1.12"
 thiserror.workspace = true
+
+# UI sounds (feature "sound"): cpal on desktop and iOS, oboe on Android.
+[target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]
+sasa = { git = "https://github.com/Mivik/sasa", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+sasa = { git = "https://github.com/Mivik/sasa", optional = true, default-features = false, features = ["oboe"] }
+
+[features]
+default = []
+# Play built-in UI sounds (and application samples) through sasa.
+sound = ["dep:sasa"]

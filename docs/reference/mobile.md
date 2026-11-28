@@ -113,8 +113,16 @@ IME][text-input-reference] for input methods.
 - `haptic(HapticStyle)` uses the platform by default: Android
   `performHapticFeedback`, iOS feedback generators, and `navigator.vibrate`
   on the web. It does nothing on desktop.
-- `sound(SoundCue)` is silent until the application installs its sounds
-  with `set_sound_handler`.
+- `sound(SoundCue)` plays a short built-in sample with the `sound` feature
+  (of `mue` or `mue-macroquad`), through [sasa](https://github.com/Mivik/sasa):
+  cpal on Windows, macOS, Linux, and iOS, oboe on Android. The output opens
+  on the first sound. `set_sound_sample(cue, bytes)` replaces a sample with
+  the application's own file (WAV, OGG, FLAC, MP3, AAC) and
+  `set_sound_volume` scales them all. On Android, oboe needs the shared C++
+  runtime: package `libc++_shared.so` from the NDK with the app. The web
+  and builds without the feature stay silent unless the application
+  installs a handler with `set_sound_handler`; a handler can still call
+  `play_sound` for the built-in sample.
 - `set_haptic_handler` replaces haptics, for example to honor a settings
   switch.
 

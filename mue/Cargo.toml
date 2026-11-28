@@ -8,6 +8,8 @@ rust-version.workspace = true
 
 [features]
 i18n = ["dep:mue-i18n"]
+# Built-in UI sounds through sasa (desktop, Android, iOS).
+sound = ["mue-macroquad/sound"]
 
 [dependencies]
 macroquad.workspace = true
