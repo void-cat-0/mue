@@ -216,6 +216,7 @@ impl Runtime {
     }
 
     pub fn on_update(&self, signal_id: SignalId) {
+        CHANGES.with(|changes| changes.set(changes.get().wrapping_add(1)));
         let mut signal = self.signal_mut(signal_id);
         signal.revision = signal.revision.wrapping_add(1);
         let mut subscribers = mem::take(&mut signal.subscribers);
@@ -553,6 +554,18 @@ pub fn batch(f: impl FnOnce()) {
     Runtime::with(|rt| rt.batch(f))
 }
 
+thread_local! {
+    static CHANGES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A counter of signal changes on this thread: it grows whenever a signal
+/// takes a new value (sets of an equal value do not count). Compare two
+/// readings to learn whether anything reactive changed in between, for
+/// example to skip work that only depends on signals.
+pub fn change_count() -> u64 {
+    CHANGES.with(std::cell::Cell::get)
+}
+
 /// Live arena entry counts for current-thread lifecycle instrumentation.
 /// This reports live entries, not cumulative allocations or memory usage.
 #[doc(hidden)]
@@ -600,6 +613,19 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
     };
+
+    #[test]
+    fn change_count_counts_only_real_changes() {
+        let owner = crate::scope::OwnedScope::new();
+        owner.run(|| {
+            let value = signal(1);
+            let start = change_count();
+            value.set(1);
+            assert_eq!(change_count(), start, "an equal value is not a change");
+            value.set(2);
+            assert_eq!(change_count(), start + 1);
+        });
+    }
 
     fn assert_context_restored() {
         Runtime::with(|rt| {

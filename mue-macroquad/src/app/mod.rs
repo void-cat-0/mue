@@ -444,6 +444,7 @@ impl App {
         self.layout.collect(scene, &frame)?;
         self.layout.prepare()?;
         if update_nodes {
+            let changes = mue_core::runtime::change_count();
             batch(|| {
                 Runtime::with(|rt| {
                     for node in self
@@ -456,8 +457,13 @@ impl App {
                     }
                 })
             });
-            self.layout.collect(scene, &frame)?;
-            self.layout.prepare()?;
+            // Layout depends only on signals: when the update hooks changed
+            // none (a static screen, or animations that only repaint), the
+            // geometry prepared above is still current.
+            if mue_core::runtime::change_count() != changes {
+                self.layout.collect(scene, &frame)?;
+                self.layout.prepare()?;
+            }
         }
         Ok(())
     }
