@@ -220,16 +220,24 @@ impl BuildNode for ProgressBuilder {
         let fraction = fraction(value, min, max);
         // Phase of the indeterminate segment, 0..1 once a second.
         let phase = signal(0_f32);
+        // The indeterminate segment slides from -40 % to 100 %; it is clamped
+        // to the track instead of clipped, which keeps the same rounded ends
+        // and lets the bar batch with the rest of the frame.
+        let segment = move || {
+            let start = -40. + 140. * phase.get();
+            (start.max(0.), (start + 40.).min(100.))
+        };
         let left = computed(move |_| {
             if indeterminate.get() {
-                Size::Percent(-40. + 140. * phase.get())
+                Size::Percent(segment().0)
             } else {
                 Size::Percent(0.)
             }
         });
         let width = computed(move |_| {
             if indeterminate.get() {
-                Size::Percent(40.)
+                let (start, end) = segment();
+                Size::Percent((end - start).max(0.))
             } else {
                 Size::Percent(fraction.get() * 100.)
             }
@@ -245,7 +253,16 @@ impl BuildNode for ProgressBuilder {
             .height(Size::Percent(100.))
             .width(width)
             .background(fill)
-            .clip_radius(Size::Rem(height / 2.))
+            .radius(Size::Rem(height / 2.))
+            // Clip only the stripes; a plain fill is a rounded rectangle and
+            // batches with the rest of the frame.
+            .clip_radius(computed(move |_| {
+                if has_stripe.get() && !indeterminate.get() {
+                    Size::Rem(height / 2.)
+                } else {
+                    Size::Px(0.)
+                }
+            }))
             .transition(glide)
             .children(
                 Stripes {
@@ -263,7 +280,6 @@ impl BuildNode for ProgressBuilder {
             .flex_shrink(0.)
             .background(track_color())
             .radius(Size::Rem(height / 2.))
-            .clip_radius(Size::Rem(height / 2.))
             .on_update(move |dt| {
                 if indeterminate.get_untracked() {
                     phase.set((phase.get_untracked() + dt) % 1.);

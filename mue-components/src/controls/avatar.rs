@@ -260,9 +260,18 @@ impl BuildNode for AvatarBuilder {
             }
             .absolute()
             .inset((Size::Px(0.),))
-            .opacity(has_name.map(|shown| if shown { 0. } else { 1. }))
+            .display(has_name.map(|shown| {
+                if shown { mue_macroquad::style::values::Display::None } else { mue_macroquad::style::values::Display::Flex }
+            }))
             .into_node(),
         ];
+        // Only an image or the silhouette needs the circular clip; initials
+        // sit inside the circle, and an unclipped avatar batches with the
+        // rest of the frame.
+        let has_image = src.is_some();
+        let clip = has_name.map(move |named| {
+            if has_image || !named { Size::Rem(diameter / 2.) } else { Size::Px(0.) }
+        });
         if let Some(src) = src {
             face.push(
                 image(src)
@@ -281,7 +290,7 @@ impl BuildNode for AvatarBuilder {
             .width(Size::Percent(100.))
             .height(Size::Percent(100.))
             .radius(system::radius::FULL)
-            .clip_radius(Size::Rem(diameter / 2.))
+            .clip_radius(clip)
             .background(background)
             .children(face);
         let mut children: Vec<Node> = vec![circle.into_node()];
