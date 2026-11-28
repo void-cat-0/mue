@@ -336,66 +336,90 @@ fn top_bar(selected: Signal<usize>) -> Node {
         .into_node()
 }
 
-/// The whole UI. It is built lazily inside `App::new`, after the App's layer
-/// host exists, so teleported overlays find it and cover the whole window.
+/// Builds a view when it is converted into a node, not when it is created.
+struct Deferred<F>(F);
+
+impl<F: FnOnce() -> Node> IntoNode for Deferred<F> {
+    fn into_node(self) -> Node {
+        (self.0)()
+    }
+}
+
+/// The whole UI. It is built lazily inside `App::new`.
+///
+/// The App's layer host makes each of its children a `rem` root, and its
+/// layer surfaces have the default font size, so a teleported overlay there
+/// would reset the `rem` base. The UI therefore brings its own layer host,
+/// below the node that sets the root font size, and builds everything inside
+/// it (`Deferred`), so teleports find that host.
 fn build_ui() -> impl IntoNode + 'static {
     mue_macroquad::inherit::provide_foreground(foreground(), || {
         Theme::install(&theme());
-        let selected = SELECTED.with(|selected| *selected);
-        // Tabs replace the sidebar when it would leave the page less than
-        // 560 design units (narrow phones, or a high zoom setting).
-        let viewport = mue_macroquad::app::viewport::use_viewport();
-        let zoom = responsive::zoom();
-        let compact = computed(move |_| {
-            let viewport = viewport.get();
-            viewport.width / zoom.get() < 760.
-        });
         // The app follows use_color_mode (light, dark, or the system scheme).
         let color = use_color_mode();
         watch(color.scheme, |scheme| {
             set_dark(scheme.get() == ColorScheme::Dark)
         });
-        let page_view = pages(selected, (0..PAGES.len()).map(destination))
-            .page_transition(PagesTransition::Slide)
-            .transition_curve(SPRING)
-            .into_node();
-        // Back steps to the previous page before the app closes.
-        mue_macroquad::input::back::use_back_handler(selected.map(|index| index > 0), move || {
-            selected.update(|index| *index = index.saturating_sub(1))
-        });
-        stack()
+        flexbox()
             .style(mue_macroquad::style! {
                 width: 100%; height: 100%;
                 font-size: {responsive::root_font()};
-                gap: 0px;
-                background: {background()};
             })
-            .children((
-                top_bar(selected),
-                tab_strip(selected).show_if(compact),
-                hstack()
-                    .style(mue_macroquad::style! {
-                        width: 100%;
-                        flex: 1;
-                        min-width: 0px;
-                        min-height: 0px;
-                        gap: 0px;
-                        align-items: stretch;
-                    })
-                    .children((
-                        sidebar(selected).show_if(compact.map(|compact| !compact)),
-                        flexbox()
-                            .style(mue_macroquad::style! {
-                                flex: 1;
-                                min-width: 0px;
-                                min-height: 0px;
-                                height: 100%;
-                            })
-                            .children(page_view),
-                    )),
-            ))
+            .children(layer_host(Deferred(app_shell)))
             .into_node()
     })
+}
+
+/// The navigation chrome around the pages.
+fn app_shell() -> Node {
+    let selected = SELECTED.with(|selected| *selected);
+    // Tabs replace the sidebar when it would leave the page less than
+    // 560 design units (narrow phones, or a high zoom setting).
+    let viewport = mue_macroquad::app::viewport::use_viewport();
+    let zoom = responsive::zoom();
+    let compact = computed(move |_| {
+        let viewport = viewport.get();
+        viewport.width / zoom.get() < 760.
+    });
+    let page_view = pages(selected, (0..PAGES.len()).map(destination))
+        .page_transition(PagesTransition::Slide)
+        .transition_curve(SPRING)
+        .into_node();
+    // Back steps to the previous page before the app closes.
+    mue_macroquad::input::back::use_back_handler(selected.map(|index| index > 0), move || {
+        selected.update(|index| *index = index.saturating_sub(1))
+    });
+    stack()
+        .style(mue_macroquad::style! {
+            width: 100%; height: 100%;
+            gap: 0px;
+            background: {background()};
+        })
+        .children((
+            top_bar(selected),
+            tab_strip(selected).show_if(compact),
+            hstack()
+                .style(mue_macroquad::style! {
+                    width: 100%;
+                    flex: 1;
+                    min-width: 0px;
+                    min-height: 0px;
+                    gap: 0px;
+                    align-items: stretch;
+                })
+                .children((
+                    sidebar(selected).show_if(compact.map(|compact| !compact)),
+                    flexbox()
+                        .style(mue_macroquad::style! {
+                            flex: 1;
+                            min-width: 0px;
+                            min-height: 0px;
+                            height: 100%;
+                        })
+                        .children(page_view),
+                )),
+        ))
+        .into_node()
 }
 
 fn loading_screen() -> Node {
