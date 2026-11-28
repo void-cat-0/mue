@@ -7,6 +7,7 @@ mod radio;
 mod slider;
 mod spinner;
 mod switch;
+mod tabs;
 mod tag;
 
 pub use badge::*;
@@ -18,4 +19,5 @@ pub use radio::*;
 pub use slider::*;
 pub use spinner::*;
 pub use switch::*;
+pub use tabs::*;
 pub use tag::*;
