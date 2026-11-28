@@ -123,6 +123,7 @@ pub extern "C" fn quad_main() {
     macroquad::Window::from_config(
         macroquad::window::Conf {
             window_title: "mue - playground".into(),
+            high_dpi: true,
             ..Default::default()
         },
         run(),
@@ -347,8 +348,7 @@ fn build_ui() -> impl IntoNode + 'static {
         let zoom = responsive::zoom();
         let compact = computed(move |_| {
             let viewport = viewport.get();
-            let scale = (viewport.width.min(viewport.height) / 480.).max(0.75) * zoom.get();
-            viewport.width / scale < 760.
+            viewport.width / zoom.get() < 760.
         });
         // The app follows use_color_mode (light, dark, or the system scheme).
         let color = use_color_mode();

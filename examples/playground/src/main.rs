@@ -9,6 +9,7 @@ fn main() {
             window_title: "mue - playground".into(),
             window_width: 1100,
             window_height: 640,
+            high_dpi: true,
             ..Default::default()
         },
         run(),

@@ -1,4 +1,6 @@
-//! Example typography uses a 480-unit short edge, independent of window orientation.
+//! Example sizing: design units are logical pixels (density-independent on
+//! phones with `high_dpi`), times a zoom setting. The App root's font size is
+//! 16 units, so controls sized in rem follow the zoom too.
 #![allow(dead_code)]
 use macroquad::window::{screen_height, screen_width};
 use mue_core::{
@@ -15,27 +17,28 @@ struct Metrics {
 }
 
 impl Metrics {
-    fn for_viewport(width: f32, height: f32) -> Self {
-        let short_edge = width.max(1.).min(height.max(1.));
-        let scale = (short_edge / 480.).max(0.75);
+    fn for_viewport(width: f32, _height: f32, zoom: f32) -> Self {
         Self {
-            scale,
-            compact: width / scale < 600.,
+            scale: zoom,
+            compact: width / zoom < 600.,
         }
     }
 }
 
 thread_local! {
     // Pages can be constructed in short-lived scopes; shared viewport state must outlive them.
-    static METRICS: Signal<Metrics> = Scope::null().run(|| signal(Metrics::for_viewport(480., 800.)));
+    static METRICS: Signal<Metrics> = Scope::null().run(|| signal(Metrics::for_viewport(480., 800., 1.)));
     static COMPACT: ReadSignal<bool> = Scope::null().run(|| METRICS.with(|metrics| metrics.map(|m| m.compact)));
-    static ZOOM: Signal<f32> = Scope::null().run(|| signal(0.75));
+    static ZOOM: Signal<f32> = Scope::null().run(|| signal(1.));
 }
 
 pub fn sync() {
-    let mut metrics = Metrics::for_viewport(screen_width(), screen_height());
-    metrics.scale *= ZOOM.with(|zoom| zoom.get());
-    METRICS.with(|state| state.set(metrics));
+    let metrics = Metrics::for_viewport(screen_width(), screen_height(), ZOOM.with(|zoom| zoom.get()));
+    METRICS.with(|state| {
+        if state.get_untracked() != metrics {
+            state.set(metrics);
+        }
+    });
 }
 
 pub fn zoom() -> ReadSignal<f32> {
@@ -44,7 +47,7 @@ pub fn zoom() -> ReadSignal<f32> {
 
 pub fn cycle_zoom() {
     ZOOM.with(|zoom| {
-        const LEVELS: [f32; 5] = [0.5, 0.75, 1., 1.25, 1.5];
+        const LEVELS: [f32; 6] = [0.75, 0.875, 1., 1.125, 1.25, 1.5];
         zoom.update(|value| {
             let index = LEVELS
                 .iter()
@@ -77,7 +80,7 @@ pub fn compact() -> ReadSignal<bool> {
 pub fn root_font() -> Prop<FontSize> {
     METRICS.with(|state| {
         state
-            .map(|metrics| FontSize::Px(32. * metrics.scale))
+            .map(|metrics| FontSize::Px(16. * metrics.scale))
             .into()
     })
 }
@@ -92,7 +95,7 @@ pub fn ui(value: impl Into<Prop<f32>>) -> Prop<Size> {
     })
 }
 
-/// A font size relative to the responsive 32-unit root, not to the immediate parent.
+/// A font size relative to the responsive 16-unit root, not to the immediate parent.
 pub fn font(value: impl Into<Prop<f32>>) -> Prop<FontSize> {
-    value.into().map(|value| FontSize::Rem(value / 32.))
+    value.into().map(|value| FontSize::Rem(value / 16.))
 }

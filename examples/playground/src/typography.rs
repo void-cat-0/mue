@@ -97,7 +97,7 @@ fn layout_card() -> Node {
                     text-underline: {underline};
                     text-strikethrough: {strike};
                     font-weight: {bold.select(Weight::BOLD, Weight::NORMAL)};
-                    font-size: {size.map(|size| mue_macroquad::style::FontSize::Rem(size / 32.))};
+                    font-size: {size.map(|size| mue_macroquad::style::FontSize::Rem(size / 16.))};
                     line-height: 1.45;
                     letter-spacing: {super::responsive::ui(spacing.select(2., 0.))};
                     paragraph-spacing: {super::responsive::ui(paragraphs.select(14., 0.))};
