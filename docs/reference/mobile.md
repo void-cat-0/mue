@@ -99,8 +99,10 @@ row closes it.
 ## Soft keyboard
 
 On Android, iOS, and the web the platform reports the soft keyboard's
-frame. `use_keyboard()` returns its `visible`, `inset`, and `frame` signals,
-and scroll areas keep the focused field visible above it. `use_safe_area()`
+frame. The window does not shrink when the keyboard opens, so layouts and
+anything sized from the window stay put; the keyboard covers the bottom of
+the window. `use_keyboard()` returns its `visible`, `inset`, and `frame`
+signals, and scroll areas keep the focused field visible above it. `use_safe_area()`
 returns the insets for notches and system bars. See [text input and
 IME][text-input-reference] for input methods.
 

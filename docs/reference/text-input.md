@@ -77,8 +77,10 @@ with `defineExpose`: bind it with `.handle(handle)`, then call `focus`,
   lines of different lengths.
 - **Pointer:** click places the caret, drag selects, double-click selects a
   word, triple-click a paragraph. Shift+click extends the selection.
-- **Touch:** a tap places the caret; a long press selects a word; a drag
-  that starts as a scroll does not move the caret.
+- **Touch:** a tap places the caret; a long press or a double tap selects a
+  word and, on Android, opens the system's floating text toolbar (Cut, Copy,
+  Paste, Select all) over the selection. The next touch or edit closes it. A
+  drag that starts as a scroll does not move the caret.
 - **Display:** the selection, the composition underline, and a blinking
   caret are drawn with the text. A single-line field scrolls horizontally to
   keep the caret visible; a multiline field grows with its content and
@@ -115,7 +117,13 @@ attaches to the platform with `text_input::attach(config)` and receives a
   back after local edits. Offsets cross that boundary in UTF-16.
 - The field reports its caret rectangle (`text_input::caret_rect()`) so
   candidate windows appear next to the caret.
-- The platform reports the soft keyboard's frame:
+- `TextInputConnection::show_text_menu(rect)` opens the floating text
+  toolbar over a selection; its actions edit the mirror and arrive as
+  ordinary state changes. Custom editors call it after a touch selection.
+- Each session has an id, so edits the platform reports late for a field
+  that lost focus never reach the next field.
+- The platform reports the soft keyboard's frame. The window keeps its size
+  while the keyboard is open; the keyboard covers its bottom instead:
   `keyboard_frame()`, `keyboard_inset()`, and `keyboard_visible()` are
   signals, and `use_keyboard()` in `mue-components` bundles them.
   `scroll_area` scrolls the focused field above the keyboard, and Tab focus

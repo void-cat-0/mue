@@ -119,6 +119,9 @@ pub(crate) trait Backend {
     fn set_state(&self, value: &TextEditingValue);
     /// Caret rectangle in logical window pixels.
     fn set_caret_rect(&self, rect: Rect);
+    /// Show the floating text toolbar above `rect` (logical window pixels).
+    fn show_text_menu(&self, rect: Rect);
+    fn hide_text_menu(&self);
 }
 
 /// Forwards to miniquad once a host window exists (an [`App`](crate::App));
@@ -186,6 +189,19 @@ impl Backend for Miniquad {
             rect.w.max(1.) * dpi,
             rect.h.max(1.) * dpi,
         );
+    }
+
+    fn show_text_menu(&self, rect: Rect) {
+        if host() {
+            let dpi = miniquad::window::dpi_scale();
+            miniquad::window::show_text_menu(rect.x * dpi, rect.y * dpi, rect.w * dpi, rect.h * dpi);
+        }
+    }
+
+    fn hide_text_menu(&self) {
+        if host() {
+            miniquad::window::hide_text_menu();
+        }
     }
 }
 
@@ -336,6 +352,23 @@ impl TextInputConnection {
         }
         self.platform.caret.set(Some(rect));
         self.platform.backend.set_caret_rect(rect);
+    }
+
+    /// Show the platform's floating text toolbar (Cut, Copy, Paste, Select
+    /// all) above `rect`, the selection's bounds in logical window pixels.
+    /// Its actions edit the platform mirror and arrive as
+    /// [`ImeEvent::State`]. Android only; elsewhere it does nothing.
+    pub fn show_text_menu(&self, rect: Rect) {
+        if self.platform.is_attached(self.id) {
+            self.platform.backend.show_text_menu(rect);
+        }
+    }
+
+    /// Hide the toolbar opened by [`show_text_menu`](Self::show_text_menu).
+    pub fn hide_text_menu(&self) {
+        if self.platform.is_attached(self.id) {
+            self.platform.backend.hide_text_menu();
+        }
     }
 
     /// Whether this connection is still the platform's client (another

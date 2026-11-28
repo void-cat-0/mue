@@ -376,6 +376,18 @@ struct State {
     shaped: Option<(String, String)>,
     /// The value before the current composition started; undo returns here.
     pre_compose: Option<TextEditingValue>,
+    /// A touch selected text (long press, double tap): show the platform's
+    /// text toolbar over the selection until the next touch or edit.
+    menu: TextMenu,
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum TextMenu {
+    #[default]
+    Hidden,
+    Requested,
+    /// Shown over this rectangle (logical window pixels).
+    Shown(Rect),
 }
 
 /// Shared field state reachable from hooks, IME sinks, and handles.
@@ -502,6 +514,9 @@ impl Field {
             signal.set(value.clone());
         }
         let text_changed = value.text != old.text;
+        if text_changed {
+            self.hide_text_menu();
+        }
         if text_changed
             && !value.is_composing()
             && let Some(signal) = self.value_signal
@@ -514,6 +529,21 @@ impl Field {
             for handler in &self.on_change {
                 handler(&value.text);
             }
+        }
+    }
+
+    fn request_text_menu(&self) {
+        self.state.borrow_mut().menu = TextMenu::Requested;
+        self.revision
+            .update(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    fn hide_text_menu(&self) {
+        let mut state = self.state.borrow_mut();
+        if std::mem::take(&mut state.menu) != TextMenu::Hidden
+            && let Some(connection) = &state.connection
+        {
+            connection.hide_text_menu();
         }
     }
 
@@ -853,6 +883,7 @@ impl BuildNode for TextEditBuilder {
                     blink_epoch: 0.,
                     shaped: None,
                     pre_compose: None,
+                    menu: TextMenu::Hidden,
                 }),
                 buffer: RefCell::new(Runtime::with_fonts_mut(|fonts| {
                     Buffer::new(fonts.font_system(), metrics.get_untracked())
@@ -1155,6 +1186,34 @@ impl BuildNode for TextEditBuilder {
                             ));
                         }
 
+                        // The text toolbar sits over the selection's bounds.
+                        let menu = field.state.borrow().menu;
+                        if focused && menu != TextMenu::Hidden {
+                            let start = value.selection.start();
+                            let end = value.selection.end();
+                            let a = Field::caret_rect(&buffer, &display, start, line);
+                            let b = Field::caret_rect(&buffer, &display, end, line);
+                            let (left, right) = if a.y == b.y {
+                                (a.x.min(b.x), a.x.max(b.x))
+                            } else {
+                                (0., content.w + scroll.x)
+                            };
+                            let local = Rect::new(
+                                origin.x + left,
+                                origin.y + a.y.min(b.y),
+                                (right - left).max(1.),
+                                (b.y + b.h).max(a.y + a.h) - a.y.min(b.y),
+                            );
+                            let rect = crate::paint::transform_rect(current_transform(), local);
+                            if menu != TextMenu::Shown(rect) {
+                                let mut state = field.state.borrow_mut();
+                                state.menu = TextMenu::Shown(rect);
+                                if let Some(connection) = &state.connection {
+                                    connection.show_text_menu(rect);
+                                }
+                            }
+                        }
+
                         let selection_brush = selection_color.get_clone();
                         let text_brush = color.get_clone();
                         let caret_brush = caret_color.get_clone();
@@ -1347,6 +1406,7 @@ fn focus_changed(field: &Rc<Field>, focused: bool, select_all: bool) {
             let mut state = field.state.borrow_mut();
             state.focused = false;
             state.press = None;
+            state.menu = TextMenu::Hidden;
             state.connection = None;
             state.value = state.value.finish_composing();
             state.history.seal();
@@ -1646,6 +1706,7 @@ fn pointer(field: &Rc<Field>, event: &PointerEvent) {
             };
             let text = field.state.borrow().value.text.clone();
             let anchor = select_granular(&text, offset, granularity, field.multiline);
+            field.hide_text_menu();
             field.state.borrow_mut().press = Some(Press {
                 pointer: event.pointer_id(),
                 touch,
@@ -1720,6 +1781,9 @@ fn pointer(field: &Rc<Field>, event: &PointerEvent) {
                 let text = field.state.borrow().value.text.clone();
                 let range = select_granular(&text, offset, press.granularity, field.multiline);
                 field.set_selection(TextSelection::new(range.start, range.end));
+                if press.granularity != Granularity::Grapheme {
+                    field.request_text_menu();
+                }
             }
         }
         PointerAction::Cancel => {
@@ -1755,5 +1819,6 @@ fn long_press_tick(field: &Rc<Field>) {
             press.anchor = range.clone();
         }
         field.set_selection(TextSelection::new(range.start, range.end));
+        field.request_text_menu();
     }
 }
