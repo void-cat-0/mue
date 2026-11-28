@@ -11,6 +11,12 @@ resolver = "2"
 [profile.release]
 debug = true
 
+# Optimize the libraries (mue, macroquad, cosmic-text, lyon, ...) in debug
+# builds too: unoptimized they keep interfaces far below the display rate,
+# while the examples themselves still compile quickly and debug normally.
+[profile.dev.package."*"]
+opt-level = 2
+
 [dependencies]
 cosmic-text = "0.18.2"
 macroquad = { git = "https://github.com/void-cat-0/macroquad", branch = "text-input", default-features = false }
