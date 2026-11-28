@@ -33,30 +33,30 @@ use mue_macroquad::{
         BuildNode, IntoChildren, IntoNode, Node, NodeContext, TextEditBuilder, TextEditHandle,
         flexbox::use_container, text_edit,
     },
+    input::pointer::PointerAction,
+    motion::transition::Transition,
     paint::color::Color,
     paint::shader::Brush,
     style::{Size, Style, Styleable, StyleableExt},
 };
 
-/// Field size: padding, font size, and minimum height.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum InputSize {
-    Sm,
-    #[default]
-    Md,
-    Lg,
-}
+use crate::system::{self, ControlSize, Palette, white_alpha};
 
-/// Field appearance.
+/// Field size: height, padding, and font size, in `rem` (Chakra's sizes).
+pub type InputSize = ControlSize;
+
+/// Field appearance (Chakra's input variants).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InputVariant {
     /// A bordered box.
     #[default]
     Outline,
-    /// A filled box without a visible border until focused.
+    /// A filled box; the border appears on focus.
     Filled,
-    /// Only a bottom border.
+    /// Only a bottom border, no padding at the sides.
     Flushed,
+    /// No box at all: just the text.
+    Unstyled,
 }
 
 type TextHandler = Rc<dyn Fn(&str)>;
@@ -84,7 +84,9 @@ pub struct InputBuilder {
 ///
 /// Uncontrolled by default (it keeps its own text); bind a model with
 /// [`InputBuilder::model`] or [`InputBuilder::model_parsed`]. The field shows
-/// a blue border while focused and a red one while [`InputBuilder::invalid`];
+/// a blue border (and ring) while focused and a red one while
+/// [`InputBuilder::invalid`]; sizes are in `rem` and colors follow the color
+/// mode;
 /// a parsed model that cannot parse the text also marks the field invalid.
 pub fn input() -> InputBuilder {
     InputBuilder {
@@ -276,12 +278,54 @@ impl Styleable for InputBuilder {
     }
 }
 
-fn metrics(size: InputSize) -> (f32, f32, f32, f32) {
-    // padding x, padding y, font size, line height
-    match size {
-        InputSize::Sm => (10., 5., 14., 20.),
-        InputSize::Md => (12., 9., 16., 22.),
-        InputSize::Lg => (16., 12., 18., 24.),
+/// Padding x, font size, line height, and height of a field.
+fn metrics(size: ControlSize) -> (Size, Size, Size) {
+    (size.field_padding(), size.line_height(), size.height())
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct FieldColors {
+    background: Color,
+    border: Color,
+}
+
+/// Chakra's input recipe for one variant, mode, and state.
+fn field_colors(variant: InputVariant, dark: bool, hover: bool, focus: bool, invalid: bool) -> FieldColors {
+    let gray = |shade| Palette::Gray.shade(shade);
+    let focus_color = if dark { Palette::Blue.shade(300) } else { Palette::Blue.shade(500) };
+    let error = if dark { Palette::Red.shade(300) } else { Palette::Red.shade(500) };
+    let accent = if invalid { Some(error) } else if focus { Some(focus_color) } else { None };
+    match variant {
+        InputVariant::Outline => FieldColors {
+            background: Color::TRANSPARENT,
+            border: accent.unwrap_or(match (dark, hover) {
+                (false, false) => gray(200),
+                (false, true) => gray(300),
+                (true, false) => white_alpha(0.24),
+                (true, true) => white_alpha(0.4),
+            }),
+        },
+        InputVariant::Filled => FieldColors {
+            background: if focus {
+                Color::TRANSPARENT
+            } else {
+                match (dark, hover) {
+                    (false, false) => gray(100),
+                    (false, true) => gray(200),
+                    (true, false) => white_alpha(0.06),
+                    (true, true) => white_alpha(0.1),
+                }
+            },
+            border: accent.unwrap_or(Color::TRANSPARENT),
+        },
+        InputVariant::Flushed => FieldColors {
+            background: Color::TRANSPARENT,
+            border: accent.unwrap_or(if dark { white_alpha(0.24) } else { gray(200) }),
+        },
+        InputVariant::Unstyled => FieldColors {
+            background: Color::TRANSPARENT,
+            border: Color::TRANSPARENT,
+        },
     }
 }
 
@@ -331,42 +375,45 @@ impl BuildNode for InputBuilder {
             field.on_change(notify)
         };
         let invalid = computed(move |_| invalid.get() || parse_invalid.get());
-        let (pad_x, pad_y, font_size, line_height) = metrics(size);
-        let border_color = move |focused: bool| -> Brush {
-            let color = if invalid.get() {
-                Color::from_rgba(240, 96, 96, 255)
-            } else if focused {
-                Color::from_rgba(90, 150, 255, 255)
-            } else {
-                match variant {
-                    InputVariant::Filled => Color::TRANSPARENT,
-                    _ => Color::from_rgba(70, 82, 108, 255),
-                }
-            };
-            Brush::Solid(color)
-        };
-        let background = match variant {
-            InputVariant::Outline => Color::from_rgba(24, 30, 44, 255),
-            InputVariant::Filled => Color::from_rgba(38, 46, 66, 255),
-            InputVariant::Flushed => Color::TRANSPARENT,
-        };
-        let opacity = disabled.map(|disabled| if disabled { 0.5 } else { 1. });
+        let (pad_x, line_height, height) = metrics(size);
+        let dark = system::is_dark();
+        let hovered = signal(false);
+        let opacity = disabled.map(|disabled| if disabled { 0.4 } else { 1. });
         let mut defaults = Style::new()
-            .padding_x(Size::Px(pad_x))
-            .padding_y(Size::Px(pad_y))
-            .font_size(font_size)
-            .line_height(Size::Px(line_height))
-            .color(Color::from_rgba(230, 235, 245, 255))
-            .background(background)
+            .padding_x(pad_x)
+            .font_size(size.font_size())
+            .line_height(line_height)
+            .color(system::fg())
             .opacity(opacity)
-            .min_width(Size::Px(0.));
-        defaults = if variant == InputVariant::Flushed {
-            defaults.border_bottom(Size::Px(1.)).padding_x(Size::Px(0.))
+            .transition(Transition::ease_out(0.15))
+            .min_width(Size::Px(0.))
+            .on_hover_event(move |event| match event.action() {
+                PointerAction::Down => hovered.set(true),
+                PointerAction::Up => hovered.set(false),
+                _ => {}
+            });
+        if multiline {
+            // Chakra's textarea: 0.5rem above and below the text.
+            defaults = defaults.padding_y(Size::Rem(0.5)).min_height(height);
         } else {
-            defaults.border((Size::Px(1.),)).radius(Size::Px(8.))
+            defaults = defaults.min_height(height).padding_y(Size::Px(0.));
+        }
+        defaults = match variant {
+            InputVariant::Outline => defaults.border((Size::Px(1.),)).radius(size.radius()),
+            InputVariant::Filled => defaults.border((Size::Px(2.),)).radius(size.radius()),
+            InputVariant::Flushed => defaults
+                .border_bottom(Size::Px(1.))
+                .radius(Size::Px(0.))
+                .padding_x(Size::Px(0.)),
+            InputVariant::Unstyled => defaults.padding_x(Size::Px(0.)).min_height(Size::Px(0.)),
         };
         defaults = defaults.with_focus(|style, focus| {
-            style.border_color(computed(move |_| border_color(focus.focused.get())))
+            let colors = computed(move |_| {
+                field_colors(variant, dark.get(), hovered.get(), focus.focused.get(), invalid.get())
+            });
+            style
+                .background(colors.map(|colors| Brush::Solid(colors.background)))
+                .border_color(colors.map(|colors| Brush::Solid(colors.border)))
         });
         // Caller styles win over the defaults.
         field.style(defaults).style(style).build(ctx)
@@ -444,22 +491,25 @@ impl BuildNode for InputGroupBuilder {
             right_element,
             style,
         } = self;
-        let (pad_x, _, font_size, line_height) = metrics(input.size);
+        let size = input.size;
+        let (pad_x, line_height, height) = metrics(size);
+        let font_size = size.font_size();
+        let radius = size.radius();
         let addon = |content: Node, left: bool| {
             let mut style = Style::new()
                 .flex_row()
                 .items_center()
-                .padding_x(Size::Px(pad_x))
+                .padding_x(pad_x)
                 .font_size(font_size)
-                .line_height(Size::Px(line_height))
-                .background(Color::from_rgba(38, 46, 66, 255))
+                .line_height(line_height)
+                .background(system::bg_subtle())
                 .border((Size::Px(1.),))
-                .border_color(Color::from_rgba(70, 82, 108, 255))
-                .color(Color::from_rgba(170, 180, 200, 255));
+                .border_color(system::border())
+                .color(system::fg_muted());
             style = if left {
-                style.radius_left(Size::Px(8.)).border_right(Size::Px(0.))
+                style.radius_left(radius).border_right(Size::Px(0.))
             } else {
-                style.radius_right(Size::Px(8.)).border_left(Size::Px(0.))
+                style.radius_right(radius).border_left(Size::Px(0.))
             };
             mue_macroquad::node::flexbox()
                 .style(style)
@@ -474,10 +524,10 @@ impl BuildNode for InputGroupBuilder {
                 .flex_row()
                 .items_center()
                 .justify_center()
-                .min_width(Size::Px(36.))
+                .min_width(height)
                 .font_size(font_size)
-                .line_height(Size::Px(line_height))
-                .color(Color::from_rgba(150, 160, 180, 255))
+                .line_height(line_height)
+                .color(system::fg_muted())
                 .z_index(1);
             style = if left {
                 style.inset_left(Size::Px(0.))
@@ -498,10 +548,10 @@ impl BuildNode for InputGroupBuilder {
             field_style = field_style.radius_right(Size::Px(0.));
         }
         if left_element.is_some() {
-            field_style = field_style.padding_left(Size::Px(36.));
+            field_style = field_style.padding_left(height);
         }
         if right_element.is_some() {
-            field_style = field_style.padding_right(Size::Px(36.));
+            field_style = field_style.padding_right(height);
         }
         input.style.provide_defaults(field_style);
         let mut children: Vec<Node> = Vec::new();

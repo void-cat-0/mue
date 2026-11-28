@@ -20,8 +20,10 @@
 | `textarea()` | A multiline field; `.rows(n)` sets the minimum height in lines |
 | `input_group(input)` | A field with `.left_addon` / `.right_addon` (attached boxes) or `.left_element` / `.right_element` (inside the border) |
 
-Fields take `.placeholder`, `.size(InputSize::Sm | Md | Lg)`,
-`.variant(InputVariant::Outline | Filled | Flushed)`, `.invalid(prop)`,
+Fields follow Chakra UI's input: 1.5 to 3 rem tall for the four sizes, with
+colors for the light and dark modes. They take `.placeholder`,
+`.size(ControlSize::Xs | Sm | Md | Lg)` (`InputSize` is the same type),
+`.variant(InputVariant::Outline | Filled | Flushed | Unstyled)`, `.invalid(prop)`,
 `.disabled(prop)`, `.read_only(prop)`, `.max_length(n)`,
 `.select_all_on_focus(bool)`, and `.formatter(..)`. The keyboard hints
 `.kind(TextInputKind)`, `.action(TextInputAction)`, `.capitalization(..)`,
