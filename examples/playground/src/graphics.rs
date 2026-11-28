@@ -4,6 +4,8 @@ use mue_components::*;
 use mue_core::prelude::*;
 use mue_macroquad::{
     BoxShadow, BoxShadows,
+    app::runtime::set_timeout,
+    motion::transition::{Transition, animated},
     math::{Rect, Vector, vec2},
     paint::color::Color,
     paint::offscreen::{Filter, offscreen},
@@ -21,7 +23,7 @@ const CLOCK: &str = r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 </svg>"##;
 
 /// A demo with its caption underneath.
-fn swatch(label: &'static str, content: impl IntoNode + 'static) -> Node {
+fn swatch(label: impl Into<Prop<Rc<str>>>, content: impl IntoNode + 'static) -> Node {
     stack()
         .style(mue_macroquad::style! {
             flex: none;
@@ -486,6 +488,132 @@ fn stripes_card() -> Node {
     )
 }
 
+/// The shape nodes, with their parameters on sliders and a stroke drawn on
+/// with `trim`.
+fn shapes_card() -> Node {
+    use std::f32::consts::{FRAC_PI_2, TAU};
+    let sides = signal(6_f32);
+    let points = signal(5_f32);
+    let ratio = signal(0.45_f32);
+    let sweep = signal(270_f32);
+    let sides_n = sides.map(|sides| sides.round() as u32);
+    let points_n = points.map(|points| points.round() as u32);
+    let sweep_rad = sweep.map(|degrees| degrees.to_radians());
+    // Draw-on: the visible part of each outline runs from 0 to `drawn`.
+    let shown = signal(true);
+    let drawn = animated(
+        shown.map(|shown| if shown { 1_f32 } else { 0. }),
+        shown.map(|shown| if shown { Transition::ease_in_out(1.4) } else { Transition::Instant }),
+    );
+    let draw = move || {
+        shown.set(false);
+        set_timeout(0.05, move || shown.set(true));
+    };
+    let blue = || Palette::Blue.shade(400);
+    let teal = || Palette::Teal.shade(400);
+    let orange = || Palette::Orange.shade(300);
+    let purple = || Palette::Purple.shade(400);
+    let size = || mue_macroquad::style! { width: {u(64.)}; height: {u(64.)}; };
+    let label = |value: ReadSignal<String>| -> Prop<Rc<str>> { value.map(|text| Rc::<str>::from(text.as_str())).into() };
+    let stroke = |width: f32| StrokeStyle::round(width);
+    let slider_field = |name: &'static str, value: Signal<f32>, min: f32, max: f32, step: f32| {
+        field(name, slider().value(value).range(min, max).step(step).size(ControlSize::Sm))
+    };
+    card(
+        "Shapes",
+        (
+            slider_field("Sides", sides, 3., 12., 1.),
+            slider_field("Points", points, 3., 12., 1.),
+            slider_field("Inner ratio", ratio, 0.1, 0.9, 0.05),
+            slider_field("Sweep", sweep, 0., 360., 5.),
+            row((
+                swatch("ellipse", ellipse().fill(blue()).style(mue_macroquad::style! { width: {u(96.)}; height: {u(64.)}; })),
+                swatch("circle", circle().fill(teal()).style(size())),
+                swatch("rectangle(12)", rectangle(12.).fill(orange()).style(size())),
+                swatch(
+                    label(sides_n.map(|n| format!("regular_polygon({n})"))),
+                    regular_polygon(sides_n).fill(purple()).style(size()),
+                ),
+                swatch(
+                    label(computed(move |_| format!("star({}, {:.2})", points_n.get(), ratio.get()))),
+                    star(points_n, ratio).fill(Palette::Yellow.shade(400)).style(size()),
+                ),
+                swatch(
+                    label(sweep.map(|degrees| format!("arc({degrees:.0}°)"))),
+                    arc(-FRAC_PI_2, sweep_rad)
+                        .stroke(blue())
+                        .stroke_style(stroke(6.))
+                        .style(size()),
+                ),
+                swatch(
+                    label(sweep.map(|degrees| format!("sector({degrees:.0}°)"))),
+                    sector(-FRAC_PI_2, sweep_rad, 0.).fill(teal()).style(size()),
+                ),
+                swatch(
+                    label(computed(move |_| format!("sector(.., {:.2})", ratio.get()))),
+                    sector(-FRAC_PI_2, sweep_rad, ratio).fill(orange()).style(size()),
+                ),
+                swatch(
+                    "line",
+                    line((0.1, 0.9), (0.9, 0.1)).stroke_style(stroke(3.)).style(size()).style(mue_macroquad::style! { color: {foreground()}; }),
+                ),
+                swatch(
+                    "polyline",
+                    polyline([(0., 0.8), (0.25, 0.3), (0.5, 0.6), (0.75, 0.15), (1., 0.5)])
+                        .stroke_style(stroke(3.))
+                        .style(size())
+                        .style(mue_macroquad::style! { color: {foreground()}; }),
+                ),
+                swatch(
+                    "polygon",
+                    polygon([(0.5, 0.), (1., 0.4), (0.8, 1.), (0.2, 1.), (0., 0.4)]).fill(purple()).style(size()),
+                ),
+            )),
+            row((
+                button("Draw outlines").size(ControlSize::Sm).on_activate(draw),
+                mono(drawn.clone().map(|drawn| Rc::<str>::from(format!("trim(0, {drawn:.2})")))),
+            )),
+            row((
+                swatch(
+                    "star",
+                    star(points_n, ratio)
+                        .stroke(blue())
+                        .stroke_style(stroke(3.))
+                        .trim(0., drawn.clone())
+                        .style(size()),
+                ),
+                swatch(
+                    "regular_polygon",
+                    regular_polygon(sides_n)
+                        .stroke(teal())
+                        .stroke_style(stroke(3.))
+                        .trim(0., drawn.clone())
+                        .style(size()),
+                ),
+                swatch(
+                    "circle",
+                    circle()
+                        .stroke(orange())
+                        .stroke_style(stroke(3.))
+                        .trim(0., drawn.clone())
+                        .style(size()),
+                ),
+                swatch(
+                    "polyline",
+                    polyline((0..=24).map(|i| {
+                        let t = i as f32 / 24.;
+                        (t, 0.5 - 0.4 * (t * TAU * 1.5).sin() * (1. - t * 0.5))
+                    }))
+                    .stroke(purple())
+                    .stroke_style(stroke(3.))
+                    .trim(0., drawn)
+                    .style(mue_macroquad::style! { width: {u(120.)}; height: {u(64.)}; }),
+                ),
+            )),
+        ),
+    )
+}
+
 pub fn page() -> Node {
     page_body(
         (
@@ -494,6 +622,7 @@ pub fn page() -> Node {
             corner_card(),
             shadow_card(),
             vector_card(),
+            shapes_card(),
             effects_card(),
             stripes_card(),
             checklist(
@@ -504,6 +633,8 @@ pub fn page() -> Node {
                     "Shadows are soft with no bright halo",
                     "Group opacity shows no darker overlap",
                     "Blur and grayscale apply to the whole group",
+                    "Shapes follow the Sides, Points, Inner ratio, and Sweep sliders",
+                    "Draw outlines traces each outline from its start",
                     "The halftone shader animates smoothly",
                     "Stripes follow every slider, and speed 0 stops them",
                 ],
