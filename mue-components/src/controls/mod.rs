@@ -1,3 +1,4 @@
+mod alert;
 mod badge;
 mod button;
 mod checkbox;
@@ -12,6 +13,7 @@ mod tabs;
 mod tag;
 mod tooltip;
 
+pub use alert::*;
 pub use badge::*;
 pub use button::*;
 pub use checkbox::*;
