@@ -475,14 +475,26 @@ impl NodeRef {
                 // The tree's root font: what `rem` lengths resolve against.
                 crate::style::units::set_root_font_size(size);
             }
-            // A transparent wrapper leaves the `rem` root to its first child.
-            let root = if transparent && root.is_none() {
+            // A transparent wrapper (the App's layer host) leaves the `rem`
+            // root to its first child, the content; later children (layer
+            // surfaces with teleported overlays) share that root instead of
+            // becoming roots of their own.
+            let mut root = if transparent && root.is_none() {
                 None
             } else {
                 Some(root.unwrap_or(size))
             };
             for child in children.get_clone().iter() {
                 changed |= visit(*child, size, root);
+                if root.is_none() {
+                    root = Runtime::with(|rt| {
+                        rt.nodes
+                            .borrow()
+                            .get(child.id)
+                            .filter(|node| !node.font_root_transparent)
+                            .map(|node| node.computed_font_size.get_untracked())
+                    });
+                }
             }
             changed
         }
