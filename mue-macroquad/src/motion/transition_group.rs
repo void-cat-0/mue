@@ -34,7 +34,12 @@
 //! # });
 //! ```
 
-use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    hash::Hash,
+    rc::Rc,
+};
 
 use mue_core::{
     Disposable as _,
@@ -125,16 +130,21 @@ struct Item {
     node: Node,
     /// Owns the item's resources; dropped after the node.
     _owner: Option<OwnedScope>,
-    handle: NodeHandle,
     phase: Phase,
     /// 0 hidden .. 1 shown.
     progress: Signal<f32>,
     /// Absolute placement while leaving (relative to the group).
     pinned: Signal<Option<Rect>>,
-    /// FLIP offset and its animation.
+    /// FLIP offset, measured by the item's own layout hook.
+    flip: Rc<RefCell<Flip>>,
     shift: Signal<Vector>,
-    shift_from: Vector,
-    shift_time: f32,
+}
+
+#[derive(Default)]
+struct Flip {
+    /// Offset the move started from and its progress (0..1).
+    from: Vector,
+    time: f32,
     /// Last layout position relative to the group.
     last: Option<Rect>,
 }
@@ -172,10 +182,15 @@ where
                 initialized: false,
             }));
             let refs: Signal<Rc<[NodeRef]>> = signal(Rc::from([]));
+            // The group's bounds, for item hooks that measure moves. Layout
+            // publishes a parent before its children, so items read it fresh.
+            let group_rect: Rc<RefCell<Option<mue_core::signal::ReadSignal<Rect>>>> =
+                Rc::new(RefCell::new(None));
 
             // Reconcile the list: create entering items, mark leaving ones.
             {
                 let state = state.clone();
+                let group_rect = group_rect.clone();
                 watch_effect(move || {
                     let values = list.get_clone();
                     untracked(|| {
@@ -199,6 +214,8 @@ where
                                         node_fn(value),
                                         animation,
                                         if initial { 1. } else { 0. },
+                                        group_rect.clone(),
+                                        move_transition,
                                     )
                                 });
                                 Item {
@@ -232,7 +249,8 @@ where
                                 };
                                 item.phase = Phase::Leaving(t);
                                 // Pin it where it was so the others can move in.
-                                item.pinned.set(item.last.or(Some(Rect::default())));
+                                let last = item.flip.borrow().last;
+                                item.pinned.set(last.or(Some(Rect::default())));
                                 if !state.leaving.contains(&key) {
                                     state.leaving.push(key);
                                 }
@@ -246,39 +264,7 @@ where
             }
             set_children(computed(move |_| refs.get_clone()).owned());
             use_container(style);
-            let group_rect = crate::node::use_rect();
-
-            // FLIP: after layout, start moves for items whose place changed.
-            style.on_layout.append({
-                let state = state.clone();
-                move |_| {
-                    let origin = group_rect.get_untracked();
-                    let mut state = state.borrow_mut();
-                    for item in state.items.values_mut() {
-                        if matches!(item.phase, Phase::Leaving(_)) {
-                            continue;
-                        }
-                        let Some(rect) = item.handle.rect() else {
-                            continue;
-                        };
-                        let relative =
-                            Rect::new(rect.x - origin.x, rect.y - origin.y, rect.w, rect.h);
-                        if let Some(last) = item.last
-                            && (last.x != relative.x || last.y != relative.y)
-                            && move_transition.duration() > 0.
-                            && item.phase == Phase::Present
-                        {
-                            // Start from where it is drawn now (mid-move included).
-                            let current = item.shift.get_untracked();
-                            item.shift_from =
-                                Vector::new(last.x - relative.x, last.y - relative.y) + current;
-                            item.shift_time = 0.;
-                            item.shift.set(item.shift_from);
-                        }
-                        item.last = Some(relative);
-                    }
-                }
-            });
+            group_rect.replace(Some(crate::node::use_rect()));
 
             // Advance enter, leave, and move animations.
             style.on_update.append({
@@ -310,13 +296,14 @@ where
                                 }
                                 Phase::Present => {}
                             }
-                            if item.shift_from != Vector::ZERO {
+                            let mut flip = item.flip.borrow_mut();
+                            if flip.from != Vector::ZERO {
                                 let move_duration = move_transition.duration().max(0.001);
-                                item.shift_time = (item.shift_time + dt / move_duration).min(1.);
-                                let remaining = 1. - move_transition.sample(item.shift_time);
-                                item.shift.set(item.shift_from * remaining);
-                                if item.shift_time >= 1. {
-                                    item.shift_from = Vector::ZERO;
+                                flip.time = (flip.time + dt / move_duration).min(1.);
+                                let remaining = 1. - move_transition.sample(flip.time);
+                                item.shift.set(flip.from * remaining);
+                                if flip.time >= 1. {
+                                    flip.from = Vector::ZERO;
                                     item.shift.set(Vector::ZERO);
                                 }
                             }
@@ -353,15 +340,20 @@ fn collect_refs<K: Hash + Eq>(state: &State<K>) -> Rc<[NodeRef]> {
         .collect()
 }
 
-fn build_item(content: Node, animation: PresenceAnimation, initial: f32) -> Item {
+fn build_item(
+    content: Node,
+    animation: PresenceAnimation,
+    initial: f32,
+    group_rect: Rc<RefCell<Option<mue_core::signal::ReadSignal<Rect>>>>,
+    move_transition: Transition,
+) -> Item {
     let progress = signal(initial);
     let pinned: Signal<Option<Rect>> = signal(None);
     let shift = signal(Vector::ZERO);
-    let handle = NodeHandle::new();
+    let flip = Rc::new(RefCell::new(Flip::default()));
     // A column so the item fills the wrapper's width, as it would unwrapped.
     let mut wrapper = flexbox()
         .flex_column()
-        .node_handle(handle)
         .position(pinned.map(|pinned| {
             if pinned.is_some() {
                 Position::Absolute
@@ -389,17 +381,51 @@ fn build_item(content: Node, animation: PresenceAnimation, initial: f32) -> Item
     if animation.fade {
         wrapper = wrapper.opacity(computed(move |_| progress.get().clamp(0., 1.)));
     }
+    // FLIP: this hook runs once the item's new place is published and before
+    // anything is drawn, so a moved item starts its slide from where it was
+    // drawn last frame instead of flashing at the new place for a frame.
+    let handle = NodeHandle::new();
+    wrapper = wrapper.node_handle(handle);
+    let measure = {
+        let flip = flip.clone();
+        move |rect: Rect| {
+            if pinned.get_untracked().is_some() {
+                return;
+            }
+            let Some(origin) = group_rect.borrow().map(|rect| rect.get_untracked()) else {
+                return;
+            };
+            let relative = Rect::new(rect.x - origin.x, rect.y - origin.y, rect.w, rect.h);
+            let mut flip = flip.borrow_mut();
+            if let Some(last) = flip.last
+                && (last.x != relative.x || last.y != relative.y)
+                && move_transition.duration() > 0.
+            {
+                // Start from where it is drawn now (mid-move included).
+                flip.from = Vector::new(last.x - relative.x, last.y - relative.y)
+                    + shift.get_untracked();
+                flip.time = 0.;
+                shift.set(flip.from);
+            }
+            flip.last = Some(relative);
+        }
+    };
+    // FLIP: this hook runs once the item's new place is published and before
+    // anything is drawn, so a moved item starts its slide from where it was
+    // drawn last frame instead of flashing at the new place for a frame.
+    wrapper.style_mut().on_layout.append(move |_| {
+        if let Some(rect) = handle.rect() {
+            measure(rect);
+        }
+    });
     let node = wrapper.children(content.into_children()).into_node();
     Item {
         node,
         _owner: None,
-        handle,
         phase: Phase::Present,
         progress,
         pinned,
+        flip,
         shift,
-        shift_from: Vector::ZERO,
-        shift_time: 0.,
-        last: None,
     }
 }
