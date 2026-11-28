@@ -15,6 +15,7 @@
 [i18n-guide]: mod@crate::guide::learn::localization
 [release-checklist-guide]: mod@crate::guide::example_app
 [components-reference]: mod@crate::guide::reference::view_authoring
+[controls-reference]: mod@crate::guide::reference::controls
 [state-reference]: mod@crate::guide::reference::reactive_runtime
 [paint-reference]: mod@crate::guide::reference::rendering
 [style-reference]: mod@crate::guide::reference::style_syntax

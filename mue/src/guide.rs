@@ -46,6 +46,7 @@ pub mod reference {
         "../../docs/reference/paint-mask-and-textures.md",
         illustrated
     );
+    guide!(controls, "../../docs/reference/controls.md");
     guide!(style_syntax, "../../docs/reference/style.md");
     guide!(focus_keyboard, "../../docs/reference/focus-and-keyboard.md");
     guide!(text_input, "../../docs/reference/text-input.md");

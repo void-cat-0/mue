@@ -14,7 +14,8 @@ The component crate owns reusable behavior.
 
 - layout: `stack`, `wrap`, `center`, `container`, `grid`, `simple_grid`, `safe_area`, `scroll_area`, and `pages`;
 - application-level push/pop flows use [Scenes][scenes-guide]; the former navigation stack has been removed.
-- controls: `button`;
+- controls (see [controls][controls-reference]): `button`, `icon_button`, `button_group`, `input`, `textarea`, `input_group`, `checkbox`, `radio_group`, `switch`, `slider`, `spinner`, `progress`, `circular_progress`, `alert`, `skeleton`, `badge`, `tag`, `avatar`, `tabs`, `tooltip`, and `menu`;
+- graphics effects: `stripes`;
 - overlay: `overlay_host`;
 - graphics: `image`, `icon`/`icon_named`, and the renderer's `path`, `svg`, `shader_box`, and `shape` nodes;
 - motion and overlays: `presence`, `transition_group`, and `anchored` (in `mue_components::motion` and `mue_components::overlay`), plus `teleport` and `offscreen` re-exported from the renderer;
@@ -183,3 +184,4 @@ overlay_host(
 [guide-reference]: index.md
 [layers-reference]: layers-and-overlays.md
 [conventions-reference]: component-conventions.md
+[controls-reference]: controls.md

@@ -136,15 +136,15 @@ attaches to the platform with `text_input::attach(config)` and receives a
 ## Platform support
 
 The input bridge lives in the `text-input` branches of the miniquad and
-macroquad forks, which the workspace patches in by path.
+macroquad forks, which mue depends on by git branch.
 
 | Platform | Mechanism | Status |
 | --- | --- | --- |
 | Windows | IMM32: composition string, candidate window placed with `CFS_EXCLUDE` at the caret, surrogate pairs joined | Tested with Microsoft Pinyin |
 | macOS | `NSTextInputClient` (marked text, `firstRectForCharacterRange`) | Compiles; not run |
-| Linux X11 | XIM with preedit callbacks and spot location | Compiles; not run |
+| Linux X11 | XIM with preedit callbacks and spot location; shortcuts such as Ctrl+A send no text | Tested |
 | Linux Wayland | `text-input-unstable-v3` (preedit, commit, cursor rectangle) | Compiles; not run |
-| Android | Hidden `EditText` with an `InputConnection`; keyboard insets from `WindowInsets` | Java and Rust compile; not run on a device |
+| Android | Hidden `EditText` with an `InputConnection`, tagged with the session id; keyboard insets from `WindowInsets` reported over a window that keeps its size; floating text toolbar | Tested on a phone; the session ids, keyboard overlay, and toolbar are newer and not yet retested |
 | iOS | Hidden `UITextView` mirror; keyboard frame notifications | Compiles; not run |
 | Web | Hidden `<input>` / `<textarea>` mirror with composition events | Compiles; not run |
 

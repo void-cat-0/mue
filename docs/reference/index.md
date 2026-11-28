@@ -5,6 +5,7 @@ Look up supported syntax, type contracts, and scheduling rules from any chapter.
 | Page | Look up |
 | --- | --- |
 | [View and node authoring][components-reference] | Builder parameters, generated builders, node hooks, and modal controls. |
+| [Controls and the design system][controls-reference] | Buttons, form controls, feedback, data display, tabs, tooltips, menus, the stripes effect, and the shared palette, colors, and sizes. |
 | [Reactive runtime and ownership][state-reference] | Signals and props, keyed children, ownership, and scope boundaries. |
 | [Rendering and resources][paint-reference] | Background, border, and outline geometry, shadows, vector paths and SVG, offscreen layers and backdrop blur, custom shaders, render state, and texture lifetimes. |
 | [Component conventions][conventions-reference] | Naming, controlled values, compound parts, slots and events, composables, directives, icons, and the safe area. |
@@ -20,6 +21,7 @@ Look up supported syntax, type contracts, and scheduling rules from any chapter.
 | [Workspace examples][examples-guide] | Runnable programs in the workspace. |
 
 [components-reference]: components-and-node.md
+[controls-reference]: controls.md
 [state-reference]: state-children-and-scope.md
 [paint-reference]: paint-mask-and-textures.md
 [style-reference]: style.md
