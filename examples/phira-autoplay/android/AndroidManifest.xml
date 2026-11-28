@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.mue.phiraautoplay"
-    android:versionCode="5"
-    android:versionName="0.1.4">
+    android:versionCode="9"
+    android:versionName="0.1.8">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
 
@@ -12,7 +12,7 @@
     <!-- Try Vulkan when available; use GLES when the device rejects its requirements. -->
     <uses-feature
         android:name="android.hardware.vulkan.version"
-        android:version="0x00402000"
+        android:version="0x00401000"
         android:required="false" />
 
     <application

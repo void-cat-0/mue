@@ -11,7 +11,7 @@ mod effects;
 mod flow;
 mod gameplay;
 mod menu;
-#[cfg(not(feature = "phira-autoplay-vulkan-only"))]
+#[cfg(any(not(feature = "phira-autoplay-vulkan-only"), target_os = "android"))]
 #[path = "../../shared/render_backend.rs"]
 mod render_backend;
 mod skin;
@@ -26,6 +26,7 @@ use std::{
 use std::io;
 
 use macroquad::prelude::{Conf, next_frame};
+use miniquad::{Backend, conf::RenderingBackend};
 use mue_macroquad::{App, font};
 
 pub(crate) struct Options {
@@ -80,15 +81,39 @@ pub(crate) fn app_log(level: &str, message: &str) {
     }
 }
 
-pub(crate) async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
-    let renderer = unsafe { macroquad::window::get_internal_gl() }
-        .quad_context
-        .info()
-        .backend;
-    if renderer != miniquad::Backend::Vulkan {
-        miniquad::warn!("Phira Autoplay is using the GLES fallback renderer.");
-    }
+pub(crate) async fn run(
+    options: Options,
+    requested: RenderingBackend,
+    #[cfg(target_os = "android")] activity: &jni::objects::GlobalRef,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = {
+        let ctx = unsafe { macroquad::window::get_internal_gl() }.quad_context;
+        let info = ctx.info();
+        #[cfg(target_os = "android")]
+        if let Err(error) = report_android_graphics_api(activity, ctx, &info.gl_version_string) {
+            app_log(
+                "WARN",
+                &format!("Cannot update graphics API label: {error}"),
+            );
+        }
+        info.backend
+    };
     miniquad::info!("Phira Autoplay renderer: {:?}", renderer);
+    let renderer_notice = match (requested, renderer) {
+        (RenderingBackend::VulkanPreferred, Backend::OpenGl) => {
+            Some(if cfg!(target_os = "android") {
+                "Vulkan 启动失败，已回退到 GLES。设备 API 信息见右上角「导出启动日志」。"
+            } else {
+                "Vulkan 启动失败，已回退到 OpenGL。设备 API 信息见终端日志。"
+            })
+        }
+        (RenderingBackend::Vulkan | RenderingBackend::VulkanPreferred, _)
+            if !cfg!(target_os = "android") =>
+        {
+            Some("Vulkan 启动失败时，终端会输出可读取的设备 Vulkan API 信息。")
+        }
+        _ => None,
+    };
     let mut fonts = font::fontdb::Database::new();
     fonts.load_font_data(
         include_bytes!("../../playground/assets/fonts/NotoSans-Regular.ttf").to_vec(),
@@ -114,6 +139,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Box<dyn std::error::Erro
         options.paths,
         options.media_dirs,
         options.silent,
+        renderer_notice,
         toasts,
     ));
     app.set_overlay_root(toast_root);
@@ -134,7 +160,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Box<dyn std::error::Erro
 pub(crate) fn window_config() -> Conf {
     #[cfg(all(feature = "phira-autoplay-vulkan-only", not(target_os = "android")))]
     let platform = miniquad::conf::Platform {
-        rendering_backend: miniquad::conf::RenderingBackend::Vulkan,
+        rendering_backend: RenderingBackend::Vulkan,
         ..Default::default()
     };
     #[cfg(any(not(feature = "phira-autoplay-vulkan-only"), target_os = "android"))]
@@ -186,20 +212,73 @@ fn android_main() {
     };
     let mut config = window_config();
     if FORCE_GLES.load(Relaxed) {
-        config.platform.rendering_backend = miniquad::conf::RenderingBackend::OpenGl;
+        config.platform.rendering_backend = RenderingBackend::OpenGl;
         app_log(
             "WARN",
             "GLES mode was selected from the diagnostic controls.",
         );
     }
+    let requested = config.platform.rendering_backend;
     macroquad::Window::from_config(config, async move {
-        if let Err(error) = run(options).await {
+        if let Err(error) = run(options, requested, &activity).await {
             miniquad::error!("Phira Autoplay: {}", error);
         }
         if let Err(error) = request_finish(&activity) {
             miniquad::error!("Cannot finish the Phira Autoplay activity: {}", error);
         }
     });
+}
+
+#[cfg(target_os = "android")]
+fn report_android_graphics_api(
+    activity: &jni::objects::GlobalRef,
+    ctx: &mut dyn miniquad::RenderingBackend,
+    gl_version: &str,
+) -> jni::errors::Result<()> {
+    use ash::vk::{api_version_major, api_version_minor, api_version_patch};
+    use miniquad::graphics::vulkan::VulkanRenderingMode;
+
+    let label = if let Some(vulkan) = ctx.vulkan_context() {
+        let api = vulkan.api_version();
+        let device_api = vulkan.physical_device_api_version();
+        let mode = match vulkan.rendering_mode() {
+            VulkanRenderingMode::Legacy => "传统 render pass",
+            VulkanRenderingMode::DynamicKhr => "KHR 动态渲染",
+            VulkanRenderingMode::DynamicCore => "核心动态渲染",
+        };
+        format!(
+            "Vulkan {}.{} · {mode}\nGPU 报告 Vulkan {}.{}.{}",
+            api_version_major(api),
+            api_version_minor(api),
+            api_version_major(device_api),
+            api_version_minor(device_api),
+            api_version_patch(device_api),
+        )
+    } else {
+        app_log("INFO", &format!("GL_VERSION: {gl_version}"));
+        match gl_version
+            .strip_prefix("OpenGL ES ")
+            .and_then(|s| s.split_whitespace().next())
+        {
+            Some(version) => format!("OpenGL ES {version}"),
+            None => "OpenGL ES（版本未知）".into(),
+        }
+    };
+    app_log(
+        "INFO",
+        &format!("Active graphics API: {}", label.replace('\n', "; ")),
+    );
+
+    let vm = unsafe { jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())? };
+    let mut env = vm.attach_current_thread()?;
+    let text = env.new_string(label)?;
+    env.call_method(
+        activity.as_obj(),
+        "setGraphicsApi",
+        "(Ljava/lang/String;)V",
+        &[jni::objects::JValue::Object(&text)],
+    )?;
+    Ok(())
 }
 
 #[cfg(target_os = "android")]

@@ -12,8 +12,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let exit = Rc::new(Cell::new(None));
     let output = exit.clone();
-    macroquad::Window::from_config(demo::window_config(), async move {
-        output.set(Some(demo::run(options).await));
+    let config = demo::window_config();
+    let requested = config.platform.rendering_backend;
+    macroquad::Window::from_config(config, async move {
+        output.set(Some(demo::run(options, requested).await));
     });
     exit.take().unwrap_or(Ok(()))
 }

@@ -156,6 +156,7 @@ struct CatalogResult {
 
 pub struct Library {
     header: Node,
+    renderer_notice: Option<Node>,
     cards: Option<Cards>,
     slot: Rc<Cell<Option<LibraryAction>>>,
     task: Option<Task<CatalogResult>>,
@@ -172,11 +173,12 @@ impl Library {
         paths: Vec<PathBuf>,
         media_dirs: Vec<PathBuf>,
         silent: bool,
+        renderer_notice: Option<&'static str>,
         toasts: ToastSender,
     ) -> Self {
         let owner = OwnedScope::new();
         let slot = Rc::new(Cell::new(None));
-        let (header, status) = owner.run(|| {
+        let (header, status, renderer_notice) = owner.run(|| {
             let status = signal(Rc::<str>::from("正在读取本地 PEZ 的清单和封面…"));
             let header = ui::column((
                 flexbox()
@@ -196,7 +198,8 @@ impl Library {
                 .color(ACCENT),
                 ui::caption(status),
             ));
-            (header, status)
+            let renderer_notice = renderer_notice.map(ui::caption);
+            (header, status, renderer_notice)
         });
         let task = spawn(async move {
             spawn_blocking(move || {
@@ -219,6 +222,7 @@ impl Library {
         });
         Self {
             header,
+            renderer_notice,
             cards: None,
             slot,
             task: Some(task),
@@ -348,8 +352,20 @@ impl Scene for Library {
         let width = (v.w - 42.).max(1.);
         let x = v.x + 21.;
         roots.push(SceneRoot::new(*self.header, Rect::new(x, v.y + 18., width, 156.)).input(input));
+        let mut cards_top = 177.;
+        if let Some(notice) = &self.renderer_notice {
+            const NOTICE_HEIGHT: f32 = 44.; // Allow two lines on narrow windows.
+            roots.push(
+                SceneRoot::new(
+                    **notice,
+                    Rect::new(x, v.y + cards_top, width, NOTICE_HEIGHT),
+                )
+                .input(RootInput::None),
+            );
+            cards_top += NOTICE_HEIGHT;
+        }
         if let Some(cards) = &self.cards {
-            let bounds = Rect::new(x, v.y + 177., width, (v.h - 193.).max(1.));
+            let bounds = Rect::new(x, v.y + cards_top, width, (v.h - cards_top - 16.).max(1.));
             cards.clip.set(bounds);
             roots.push(SceneRoot::new(*cards.root, bounds).input(input));
         }
@@ -360,6 +376,9 @@ impl Scene for Library {
         let v = render.frame.viewport;
         draw_rectangle(v.x, v.y, v.w, v.h, BACK.into());
         render.draw(*self.header)?;
+        if let Some(notice) = &self.renderer_notice {
+            render.draw(**notice)?;
+        }
         if let Some(cards) = &mut self.cards {
             render.draw(*cards.root)?;
             if !render.is_transition_source() {

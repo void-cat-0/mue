@@ -22,7 +22,13 @@ use super::{
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
-pub const DEFAULT_FILES: [&str; 1] = ["ManaBlast.pez"];
+pub const DEFAULT_FILES: [&str; 2] = [
+    "ManaBlast.pez",
+    #[cfg(not(target_os = "android"))]
+    "ExoplanetaryMirage.かめりあ-AT.pez",
+    #[cfg(target_os = "android")]
+    "ExoplanetaryMirage-AT.pez",
+];
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,31 +264,46 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires a local ManaBlast.pez"]
-    fn manablast_decodes_at_the_expected_timing() {
-        let path = defaults(&desktop_directories()).into_iter().next().unwrap();
-        let preview = preview(path.clone()).unwrap();
-        assert!(preview.illustration.width() > 0);
-        let loaded = load(&path, &AtomicBool::default()).unwrap();
-        let chart = loaded.chart;
-        assert_eq!(chart.lines.len(), 24);
-        assert_eq!(chart.hits.len(), 1440);
-        assert!((chart.offset + 0.240).abs() < 1e-6);
-        assert!((chart.hits[0].time - 13.2).abs() < 1e-6);
-        assert!((chart.last_time - 154.).abs() < 0.5);
-        assert!(loaded.audio.length() > chart.last_time + chart.offset);
-        super::super::app_log(
-            "INFO",
-            &format!(
-                "{}: {} · {:.1} BPM · {} Hz · {:.2}s · {} autoplay notes",
-                preview.info.name,
-                chart.format,
-                chart.bpm,
-                loaded.audio.sample_rate(),
-                loaded.audio.length(),
-                chart.hits.len(),
-            ),
-        );
+    #[ignore = "requires the local ManaBlast and Exoplanetary Mirage PEZ files"]
+    fn supplied_charts_decode_at_the_expected_timing() {
+        let paths = defaults(&desktop_directories());
+        for (path, (title, format, bpm, lines, notes, offset, first, last)) in
+            paths.into_iter().zip([
+                ("ManaBlast", "RPE 113", 150., 24, 1440, -0.240, 13.2, 154.),
+                (
+                    "Exoplanetary Mirage",
+                    "PGR v3",
+                    192.,
+                    47,
+                    2077,
+                    0.,
+                    12.5,
+                    171.09375,
+                ),
+            ])
+        {
+            let preview = preview(path.clone()).unwrap();
+            assert_eq!(preview.info.name, title);
+            assert!(preview.illustration.width() > 0);
+            let loaded = load(&path, &AtomicBool::default()).unwrap();
+            let chart = loaded.chart;
+            assert_eq!(chart.format.to_string(), format);
+            assert_eq!(chart.bpm, bpm);
+            assert_eq!(chart.lines.len(), lines);
+            assert_eq!(chart.hits.len(), notes);
+            assert!((chart.offset - offset).abs() < 1e-6);
+            assert!((chart.hits[0].time - first).abs() < 1e-6);
+            assert!((chart.last_time - last).abs() < 0.5);
+            assert!(loaded.audio.length() > chart.last_time + chart.offset);
+            super::super::app_log(
+                "INFO",
+                &format!(
+                    "{title}: {format} · {bpm:.1} BPM · {} Hz · {:.2}s · {notes} autoplay notes",
+                    loaded.audio.sample_rate(),
+                    loaded.audio.length(),
+                ),
+            );
+        }
     }
 
     #[test]

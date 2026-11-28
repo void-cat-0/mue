@@ -18,7 +18,8 @@ ANDROID_ELF_PAGE_SIZE（4096 / 16384 / 65536，默认 16384）、JAVA_HOME
 CARGO_TARGET_DIR（默认工作目录里的 target）、
 PHIRA_ANDROID_SO / PHIRA_ANDROID_APK（等同于 --so / --output）、
 ANDROID_DEBUG_KEYSTORE（可选自备标准 debug 密钥库，默认在工作目录生成并复用）。
-将 charts/ManaBlast.pez 打入 APK。仓库根目录的本地 note 材质和打击音效是可选的。
+将 charts/ 下的 ManaBlast.pez 和 ExoplanetaryMirage.かめりあ-AT.pez 打入 APK。
+charts/ 或仓库根目录的本地 note 材质和打击音效是可选的。
 HELP
 }
 
@@ -96,8 +97,10 @@ else
     d8=("$build_tools/d8")
 fi
 
-mana_source="$script_dir/charts/ManaBlast.pez"
-for input in "$mana_source" "$miniquad/java/"{MainActivity,QuadNative}.java; do
+chart_dir="$script_dir/charts"
+mana_source="$chart_dir/ManaBlast.pez"
+mirage_source="$chart_dir/ExoplanetaryMirage.かめりあ-AT.pez"
+for input in "$mana_source" "$mirage_source" "$miniquad/java/"{MainActivity,QuadNative}.java; do
     [[ -f "$input" ]] || fail "找不到输入：$input"
 done
 
@@ -138,25 +141,32 @@ check_native_library() {
 check_native_library "$native_so"
 dynamic="$("$llvm_bin/llvm-readelf" -d "$native_so")"
 exports="$("$llvm_bin/llvm-nm" --dynamic --defined-only --just-symbol-name "$native_so")"
-        for symbol in JNI_OnLoad quad_main Java_quad_1native_QuadNative_{initializeContext,setChartDirectory,setDiagnosticLogPath,setForceGles,setHostPaused,activityOnCreate}; do
+for symbol in JNI_OnLoad quad_main Java_quad_1native_QuadNative_{initializeContext,setChartDirectory,setDiagnosticLogPath,setForceGles,setHostPaused,activityOnCreate}; do
     grep -Fxq "$symbol" <<< "$exports" || fail "原生库缺少导出：$symbol"
 done
 
 mkdir -p "$stage"/{assets/licenses,classes,dex,java,lib/arm64-v8a}
-cp -- "$mana_source" "$stage/assets/ManaBlast.pez"
-media=(ManaBlast.pez)
+media=(ManaBlast.pez ExoplanetaryMirage-AT.pez)
+cp -- "$mana_source" "$stage/assets/${media[0]}"
+# AAPT2 requires ASCII asset paths; the unchanged PEZ supplies its own title and filenames.
+cp -- "$mirage_source" "$stage/assets/${media[1]}"
 for sound in click.ogg drag.ogg flick.ogg; do
-    if [[ -f "$repo/$sound" ]]; then
-        cp -- "$repo/$sound" "$stage/assets/$sound"
-        media+=("$sound")
-    fi
+    for directory in "$chart_dir" "$repo"; do
+        if [[ -f "$directory/$sound" ]]; then
+            cp -- "$directory/$sound" "$stage/assets/$sound"
+            media+=("$sound")
+            break
+        fi
+    done
 done
-for skin in 'live 测试5.zip' live-skin.zip; do
-    if [[ -f "$repo/$skin" ]]; then
-        cp -- "$repo/$skin" "$stage/assets/live-skin.zip"
-        media+=(live-skin.zip)
-        break
-    fi
+for directory in "$chart_dir" "$repo"; do
+    for skin in 'live 测试5.zip' live-skin.zip; do
+        if [[ -f "$directory/$skin" ]]; then
+            cp -- "$directory/$skin" "$stage/assets/live-skin.zip"
+            media+=(live-skin.zip)
+            break 2
+        fi
+    done
 done
 cp -- "$repo/LICENSE" "$stage/assets/licenses/Mue-MIT.txt"
 cp -- "$miniquad/LICENSE-MIT" "$stage/assets/licenses/Miniquad-MIT.txt"
@@ -218,6 +228,7 @@ activity = inject(activity, '    private QuadSurface view;', '''    private Quad
     private static final String DIAGNOSTIC_PREFS = "phira-autoplay-renderer";
     private boolean forceGles;
     private boolean restartRequested;
+    private TextView graphicsApi;
 
     private int dp(float value) {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value,
@@ -232,6 +243,14 @@ activity = inject(activity, '    private QuadSurface view;', '''    private Quad
         controls.setPadding(dp(5), dp(5), dp(5), dp(5));
         controls.setBackgroundColor(Color.argb(224, 18, 26, 38));
 
+        graphicsApi = new TextView(this);
+        graphicsApi.setText("图形 API：初始化中…");
+        graphicsApi.setTextColor(Color.WHITE);
+        graphicsApi.setTextSize(13);
+        graphicsApi.setMaxWidth(dp(244));
+        graphicsApi.setPadding(dp(14), dp(6), dp(14), dp(4));
+        controls.addView(graphicsApi, new LinearLayout.LayoutParams(-2, -2));
+
         TextView export = new TextView(this);
         export.setText("导出启动日志");
         export.setTextColor(Color.WHITE);
@@ -241,6 +260,14 @@ activity = inject(activity, '    private QuadSurface view;', '''    private Quad
         export.setFocusable(true);
         export.setOnClickListener(view -> exportDiagnosticLog());
         controls.addView(export, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView notice = new TextView(this);
+        notice.setText("Vulkan 启动失败时，日志会记录可读取的设备 Vulkan API 信息。");
+        notice.setTextColor(Color.LTGRAY);
+        notice.setTextSize(12);
+        notice.setMaxWidth(dp(220));
+        notice.setPadding(dp(14), 0, dp(14), dp(6));
+        controls.addView(notice, new LinearLayout.LayoutParams(-2, -2));
 
         TextView renderer = new TextView(this);
         renderer.setText(forceGles ? "自动模式重启" : "GLES 重启");
@@ -258,6 +285,10 @@ activity = inject(activity, '    private QuadSurface view;', '''    private Quad
         layout.addView(controls, params);
         layout.bringChildToFront(controls);
         controls.setTranslationZ(dp(24));
+    }
+
+    public void setGraphicsApi(String status) {
+        runOnUiThread(() -> graphicsApi.setText("图形 API：" + status));
     }
 
     private void exportDiagnosticLog() {
