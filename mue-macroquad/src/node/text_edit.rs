@@ -609,6 +609,12 @@ impl Field {
                 if !self.editable() {
                     return;
                 }
+                // An empty preedit only cancels a composition. Without one it
+                // must not replace the selection (Ctrl+A then a stray cancel
+                // would clear the field).
+                if text.is_empty() && !self.state.borrow().value.is_composing() {
+                    return;
+                }
                 let next = self.state.borrow().value.compose(&text, cursor);
                 // Compositions bypass history and length limits until committed.
                 self.set_composing(next);
