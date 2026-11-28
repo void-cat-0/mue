@@ -196,13 +196,15 @@ node transform applies to the sector shape. Hit-testing follows the hard
 angular boundary; feather only affects drawing. Import `Sector` from
 `mue_macroquad`.
 
-`button(label)` defaults to the secondary variant. Use `primary(true)` or
-`variant(ButtonVariant::Ghost)` for other weights, `disabled(...)` and
-`loading(...)` with reactive values, and `on_activate(...)` for the action.
-`overlay_host` draws in the `Modal` layer and fades in and out; priority
-between several open overlays and back-button handling are not implemented
-yet. IconButton is also pending. Button colors are fixed for now; replacing them with application tokens
-is a follow-up.
+`button(label)` is a solid gray button. `variant(...)` picks solid, subtle,
+outline, ghost, or link; `palette(Palette::Teal)` the accent color;
+`size(ControlSize::Sm)` the size; `primary(true)` is shorthand for solid
+blue. `left_icon`, `right_icon`, `loading(...)` (a spinner, with optional
+`loading_text`), `disabled(...)`, and `full_width` complete it;
+`icon_button(icon)` and `button_group(...)` cover square and grouped
+buttons. Colors follow the color mode and sizes are in `rem` (see
+`mue_components::system`). `overlay_host` draws in the `Modal` layer; its
+backdrop fades while the content rises and scales.
 
 ## Vector paths and SVG
 
