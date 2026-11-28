@@ -40,6 +40,8 @@ fn install_handlers() {
     });
     // Play the built-in sample and show the cue in the log.
     set_sound_handler(|cue| {
+        // The built-in samples need the sound feature, which the web lacks.
+        #[cfg(not(target_arch = "wasm32"))]
         mue_macroquad::input::feedback::play_sound(cue);
         log_event(format!("sound {cue:?}"));
     });
@@ -78,12 +80,25 @@ fn sounds_card() -> Node {
         ("Success", SoundCue::Success),
         ("Error", SoundCue::Error),
     ];
+    // The web plays no built-in samples, so it has no volume either.
+    #[cfg(target_arch = "wasm32")]
+    let volume: Vec<Node> = Vec::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    let volume: Vec<Node> = vec![field(
+        "Volume",
+        slider()
+            .value(signal(100_f32))
+            .on_change(|level: &f32| mue_macroquad::input::feedback::set_sound_volume(*level / 100.)),
+    )];
     card(
         "Sound cues",
-        row(cues
-            .into_iter()
-            .map(|(label, cue)| button(label).on_activate(move || sound(cue)).into_node())
-            .collect::<Vec<_>>()),
+        (
+            row(cues
+                .into_iter()
+                .map(|(label, cue)| button(label).on_activate(move || sound(cue)).into_node())
+                .collect::<Vec<_>>()),
+            volume,
+        ),
     )
 }
 
@@ -195,6 +210,7 @@ pub fn page() -> Node {
                 &[
                     "Phones vibrate for each style, and not with Vibrate off",
                     "Every sound cue plays and appears in the log",
+                    "Volume scales the cues, and 0 silences them",
                     "Holding + or − repeats faster, a tap steps once",
                     "The save keys count only while the box is focused",
                     "ClickOutside counts only presses outside the box",
