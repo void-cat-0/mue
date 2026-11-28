@@ -90,7 +90,7 @@ flipping, the `arrow` offset of the anchor's center along the content's edge,
 and the `anchor` rectangle.
 
 ```rust
-use mue::{prelude::*, components::{overlay::anchor::{Placement, anchored}, overlay::layer::{Layer, teleport}}};
+use mue::{prelude::*, components::overlay::anchor::{Placement, anchored}, renderer::overlay::layer::{Layer, teleport}};
 
 let open = signal(false);
 let trigger = NodeHandle::new();
