@@ -506,8 +506,20 @@ impl Contours {
                     current.clear();
                     current.push(vec2(at.x, at.y));
                 }
-                PathEvent::Line { to, .. } => current.push(vec2(to.x, to.y)),
+                PathEvent::Line { to, .. } => {
+                    // Zero-length segments have no normal; their fringe
+                    // would spike (an ellipse repeats its start point).
+                    let point = vec2(to.x, to.y);
+                    if current.last().is_none_or(|last| last.distance_squared(point) > 1e-8) {
+                        current.push(point);
+                    }
+                }
                 PathEvent::End { .. } => {
+                    while current.len() > 1
+                        && current[0].distance_squared(*current.last().unwrap()) <= 1e-8
+                    {
+                        current.pop();
+                    }
                     if current.len() >= 3 {
                         points.push(std::mem::take(&mut current));
                     } else {
